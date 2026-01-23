@@ -1,0 +1,90 @@
+{
+  "name": "klubz-webapp",
+  "version": "2.0.0",
+  "description": "Enterprise-grade carpooling platform with POPIA/GDPR compliance",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "dev:cloudflare": "wrangler pages dev dist --ip 0.0.0.0 --port 3000",
+    "build": "vite build",
+    "build:prod": "NODE_ENV=production vite build",
+    "preview": "wrangler pages dev dist",
+    "deploy": "npm run build && wrangler pages deploy dist",
+    "deploy:prod": "npm run build:prod && wrangler pages deploy dist --project-name klubz-production",
+    "deploy:staging": "npm run build && wrangler pages deploy dist --project-name klubz-staging",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "lint": "echo 'Linting...'",
+    "test": "node tests/test-runner.js",
+    "test:unit": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "test:load": "node tests/performance-test.js",
+    "test:security": "node tests/security-audit.js",
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:security && npm run test:load",
+    "clean": "rm -rf dist .wrangler",
+    "type-check": "tsc --noEmit",
+    "start": "pm2 start ecosystem.config.cjs",
+    "stop": "pm2 stop all",
+    "restart": "pm2 restart all",
+    "logs": "pm2 logs --nostream",
+    "db:migrate": "wrangler d1 migrations apply klubz-db-prod",
+    "db:migrate:local": "wrangler d1 migrations apply klubz-db-prod --local",
+    "db:seed": "wrangler d1 execute klubz-db-prod --file=./migrations/0002_sample_data.sql",
+    "db:reset": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed"
+  },
+  "dependencies": {
+    "hono": "^4.11.5",
+    "jose": "^5.2.0",
+    "zod": "^3.22.4",
+    "bcryptjs": "^2.4.3",
+    "crypto-js": "^4.2.0",
+    "qrcode": "^1.5.3",
+    "speakeasy": "^2.0.0",
+    "twilio": "^4.23.0",
+    "stripe": "^14.18.0",
+    "winston": "^3.11.0",
+    "dayjs": "^1.11.10",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@hono/vite-build": "^1.2.0",
+    "@hono/vite-dev-server": "^0.18.2",
+    "vite": "^6.3.5",
+    "wrangler": "^4.4.0",
+    "typescript": "^5.3.3",
+    "@types/node": "^20.11.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/crypto-js": "^4.2.1",
+    "@types/qrcode": "^1.5.5",
+    "@types/speakeasy": "^2.0.10",
+    "@types/uuid": "^9.0.7",
+    "vitest": "^1.2.0",
+    "@playwright/test": "^1.40.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0"
+  },
+  "keywords": [
+    "carpooling",
+    "ridesharing",
+    "cloudflare",
+    "hono",
+    "poopia",
+    "gdpr",
+    "enterprise"
+  ],
+  "author": "Klubz Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zekka-tech/Klubz.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zekka-tech/Klubz/issues"
+  },
+  "homepage": "https://klubz-production.pages.dev"
+}

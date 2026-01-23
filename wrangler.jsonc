@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "klubz-production",
+  "compatibility_date": "2026-01-22",
+  "pages_build_output_dir": "./dist",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "ENVIRONMENT": "production",
+    "VERSION": "2.0.0"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "klubz-cache-prod",
+      "preview_id": "klubz-cache-preview"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "STORAGE",
+      "bucket_name": "klubz-storage-prod"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "klubz-db-prod",
+      "database_id": "klubz-database-id"
+    }
+  ]
+}
