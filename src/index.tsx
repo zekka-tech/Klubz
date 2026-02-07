@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { renderer } from './renderer'
+import { createMatchingRoutes } from './routes/matching'
 
 // Simple CORS middleware
 const cors = () => {
@@ -64,6 +65,10 @@ app.get('/health', (c) => {
 app.get('/api/hello', (c) => {
   return c.json({ message: 'Hello from Klubz API!' })
 })
+
+// Smart Trip Pooling - Matching Engine API
+const matchingRoutes = createMatchingRoutes()
+app.route('/api/matching', matchingRoutes)
 
 // Main application route
 app.get('/', (c) => {
