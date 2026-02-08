@@ -1,15 +1,17 @@
 -- Sample data for testing and development
 -- This data is encrypted and compliant with POPIA/GDPR
+-- Password for all users: "Test123!" (bcrypt, 12 rounds)
+-- Email hashes generated with: SHA-256("klubz-lookup-salt:" + lowercase(email))
 
--- Sample users (passwords are "Test123!" hashed)
+-- Sample users
 INSERT OR IGNORE INTO users (
   email, email_hash, password_hash, first_name_encrypted, last_name_encrypted, 
   phone_encrypted, role, is_active, email_verified, mfa_enabled
 ) VALUES 
-('admin@klubz.com', 'sha256:' || lower(hex(randomblob(32))), '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Admin', 'User', '+1234567890', 'admin', TRUE, TRUE, TRUE),
-('john@example.com', 'sha256:' || lower(hex(randomblob(32))), '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'John', 'Doe', '+1234567891', 'user', TRUE, TRUE, FALSE),
-('jane@example.com', 'sha256:' || lower(hex(randomblob(32))), '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Jane', 'Smith', '+1234567892', 'user', TRUE, TRUE, FALSE),
-('bob@example.com', 'sha256:' || lower(hex(randomblob(32))), '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Bob', 'Johnson', '+1234567893', 'user', TRUE, TRUE, FALSE);
+('admin@klubz.com', 'd367419f379379f8927ee11d51491b8b0c26993f3c0c5038875298f8402c8677', '$2a$12$iOUbbEwJy0s.pqKk45MMZukDGUMLmFlVawtPVhQSNp6wLdhNSXku.', 'Admin', 'User', '+1234567890', 'admin', TRUE, TRUE, TRUE),
+('john@example.com', 'cef20f1d389bb82fcc90304ba3df65d2a879366db6bf5b3a79b82b2e9c6904c2', '$2a$12$iOUbbEwJy0s.pqKk45MMZukDGUMLmFlVawtPVhQSNp6wLdhNSXku.', 'John', 'Doe', '+1234567891', 'user', TRUE, TRUE, FALSE),
+('jane@example.com', 'a48461bd6646f6828fa457ff5203eb748dabfd3528af97658e6f1f198b8069ac', '$2a$12$iOUbbEwJy0s.pqKk45MMZukDGUMLmFlVawtPVhQSNp6wLdhNSXku.', 'Jane', 'Smith', '+1234567892', 'user', TRUE, TRUE, FALSE),
+('bob@example.com', '4698a6b1eac91905b89101322d43c082a9fb767009d5524c83d691ab0e2050be', '$2a$12$iOUbbEwJy0s.pqKk45MMZukDGUMLmFlVawtPVhQSNp6wLdhNSXku.', 'Bob', 'Johnson', '+1234567893', 'user', TRUE, TRUE, FALSE);
 
 -- Sample trips
 INSERT OR IGNORE INTO trips (
@@ -19,19 +21,19 @@ INSERT OR IGNORE INTO trips (
 ) VALUES 
 ('Morning Commute - Downtown to Airport', 'Daily commute route with flexible timing', 
  'Downtown Business District', 'International Airport', 'downtown_hash', 'airport_hash',
- datetime('now', '+1 day', '08:00:00'), 3, 4, 15.00, 'USD', 'scheduled', 'sedan', 2),
+ datetime('now', '+1 day', '08:00:00'), 3, 4, 15.00, 'ZAR', 'scheduled', 'sedan', 2),
 
 ('Evening Return - Airport to Downtown', 'Return trip after work', 
  'International Airport', 'Downtown Business District', 'airport_hash', 'downtown_hash',
- datetime('now', '+1 day', '18:00:00'), 2, 4, 15.00, 'USD', 'scheduled', 'sedan', 2),
+ datetime('now', '+1 day', '18:00:00'), 2, 4, 15.00, 'ZAR', 'scheduled', 'sedan', 2),
 
 ('Weekend Trip - City to Beach', 'Weekend beach getaway', 
  'City Center', 'Beach Resort', 'city_hash', 'beach_hash',
- datetime('now', '+2 days', '09:00:00'), 4, 6, 25.00, 'USD', 'scheduled', 'suv', 3),
+ datetime('now', '+2 days', '09:00:00'), 4, 6, 25.00, 'ZAR', 'scheduled', 'suv', 3),
 
 ('Business Trip - Office to Client', 'Business meeting transportation', 
  'Corporate Office', 'Client Location', 'office_hash', 'client_hash',
- datetime('now', '+3 days', '14:00:00'), 1, 2, 20.00, 'USD', 'scheduled', 'sedan', 4);
+ datetime('now', '+3 days', '14:00:00'), 1, 2, 20.00, 'ZAR', 'scheduled', 'sedan', 4);
 
 -- Sample trip participants
 INSERT OR IGNORE INTO trip_participants (
@@ -55,7 +57,7 @@ INSERT OR IGNORE INTO audit_logs (
   user_id, action, entity_type, entity_id, old_values_encrypted, new_values_encrypted,
   ip_address, user_agent, session_id
 ) VALUES 
-(1, 'USER_LOGIN', 'user', 1, NULL, '{"last_login_at": "2026-01-23T12:00:00Z"}', '192.168.1.100', 'Mozilla/5.0...', 'session_123'),
-(2, 'TRIP_CREATED', 'trip', 1, NULL, '{"title": "Morning Commute", "status": "scheduled"}', '192.168.1.101', 'Mozilla/5.0...', 'session_124'),
-(3, 'PARTICIPANT_REQUESTED', 'trip_participant', 2, NULL, '{"trip_id": 1, "user_id": 3, "status": "requested"}', '192.168.1.102', 'Mozilla/5.0...', 'session_125'),
-(4, 'USER_UPDATED', 'user', 4, '{"phone": "+1234567890"}', '{"phone": "+1234567899"}', '192.168.1.103', 'Mozilla/5.0...', 'session_126');
+(1, 'USER_LOGIN', 'user', 1, NULL, '{"last_login_at": "2026-01-23T12:00:00Z"}', '192.168.1.100', 'Mozilla/5.0', 'session_123'),
+(2, 'TRIP_CREATED', 'trip', 1, NULL, '{"title": "Morning Commute", "status": "scheduled"}', '192.168.1.101', 'Mozilla/5.0', 'session_124'),
+(3, 'PARTICIPANT_REQUESTED', 'trip_participant', 2, NULL, '{"trip_id": 1, "user_id": 3, "status": "requested"}', '192.168.1.102', 'Mozilla/5.0', 'session_125'),
+(4, 'USER_UPDATED', 'user', 4, '{"phone": "+1234567890"}', '{"phone": "+1234567899"}', '192.168.1.103', 'Mozilla/5.0', 'session_126');

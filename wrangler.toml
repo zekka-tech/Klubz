@@ -1,0 +1,65 @@
+name = "klubz-webapp"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "./dist"
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "klubz-production"
+database_id = "YOUR_D1_DATABASE_ID"
+
+# KV Namespaces
+[[kv_namespaces]]
+binding = "CACHE"
+id = "YOUR_KV_CACHE_ID"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "YOUR_KV_RATE_LIMIT_ID"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "YOUR_KV_SESSIONS_ID"
+
+# Environment variables
+[vars]
+ENVIRONMENT = "production"
+APP_URL = "https://klubz-production.pages.dev"
+API_VERSION = "3.0.0"
+
+# Secrets (set via: wrangler secret put SECRET_NAME)
+# JWT_SECRET
+# ENCRYPTION_KEY
+# STRIPE_SECRET_KEY
+# STRIPE_WEBHOOK_SECRET
+# TWILIO_ACCOUNT_SID
+# TWILIO_AUTH_TOKEN
+# TWILIO_PHONE_NUMBER
+# SENDGRID_API_KEY
+# MAPBOX_ACCESS_TOKEN
+
+# Staging environment
+[env.staging]
+name = "klubz-staging"
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+APP_URL = "https://klubz-staging.pages.dev"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "klubz-staging"
+database_id = "YOUR_STAGING_D1_ID"
+
+[[env.staging.kv_namespaces]]
+binding = "CACHE"
+id = "YOUR_STAGING_KV_CACHE_ID"
+
+# Development environment
+[env.development]
+name = "klubz-dev"
+
+[env.development.vars]
+ENVIRONMENT = "development"
+APP_URL = "http://localhost:3001"

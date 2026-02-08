@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Klubz - Offline</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#3B82F6">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:system-ui,-apple-system,sans-serif;background:#0F172A;color:#F8FAFC;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem}
+    .container{text-align:center;max-width:400px}
+    .icon{font-size:4rem;margin-bottom:1.5rem}
+    h1{font-size:1.5rem;font-weight:700;margin-bottom:.5rem}
+    p{color:#94A3B8;margin-bottom:1.5rem;line-height:1.6}
+    .btn{display:inline-block;padding:.75rem 1.5rem;background:#3B82F6;color:#fff;border:none;border-radius:12px;font-size:1rem;font-weight:600;cursor:pointer;transition:all .2s}
+    .btn:hover{background:#2563EB;transform:translateY(-1px)}
+    .cached{margin-top:2rem;padding:1rem;background:rgba(59,130,246,.1);border-radius:12px;border:1px solid rgba(59,130,246,.2)}
+    .cached h3{font-size:.875rem;font-weight:600;margin-bottom:.5rem;color:#60A5FA}
+    .cached p{font-size:.8rem;color:#94A3B8;margin:0}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">&#128268;</div>
+    <h1>You're Offline</h1>
+    <p>It looks like you've lost your internet connection. Don't worry, your trip data is safely cached.</p>
+    <button class="btn" onclick="window.location.reload()">Try Again</button>
+    <div class="cached">
+      <h3>Available Offline</h3>
+      <p>Your upcoming trips, saved routes, and recent activity are still accessible from cache.</p>
+    </div>
+  </div>
+</body>
+</html>

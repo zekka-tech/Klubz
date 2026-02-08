@@ -1,13 +1,19 @@
-import { Context, Next } from 'hono'
-import { Bindings } from '../index'
-import crypto from 'crypto'
+/**
+ * Klubz - Audit Logger Middleware
+ *
+ * Logs audit events to D1 when available, falls back to console.
+ * Uses AppEnv type from shared types.
+ */
+
+import type { Context, Next } from 'hono';
+import type { AppEnv } from '../types';
 
 export interface AuditLog {
   id: string
-  userId: string
+  userId: string | number
   action: string
   resourceType: string
-  resourceId: string
+  resourceId: string | number
   timestamp: string
   ipAddress: string
   userAgent: string
@@ -17,69 +23,62 @@ export interface AuditLog {
 }
 
 export const auditLogger = () => {
-  return async (c: Context<{ Bindings: Bindings }>, next: Next) => {
+  return async (c: Context<AppEnv>, next: Next) => {
     const startTime = Date.now()
-    const requestId = crypto.randomUUID()
-    
-    // Add request ID to headers
+    const requestId = c.req.header('X-Request-ID') || crypto.randomUUID()
+
     c.header('X-Request-ID', requestId)
-    
-    // Log incoming request
-    console.log({
-      type: 'request',
-      requestId,
-      method: c.req.method,
-      url: c.req.url,
-      headers: Object.fromEntries(c.req.headers.entries()),
-      timestamp: new Date().toISOString()
-    })
-    
+
     try {
       await next()
-      
-      const duration = Date.now() - startTime
-      
-      // Log successful response
-      console.log({
-        type: 'response',
-        requestId,
-        status: c.res.status,
-        duration,
-        timestamp: new Date().toISOString()
-      })
-      
     } catch (error: any) {
-      const duration = Date.now() - startTime
-      
-      // Log error response
-      console.error({
-        type: 'error',
-        requestId,
-        error: error.message,
-        stack: error.stack,
-        duration,
-        timestamp: new Date().toISOString()
-      })
-      
       throw error
     }
   }
 }
 
+/**
+ * Log an audit event. Writes to D1 if available, else console.
+ */
 export const logAuditEvent = async (
-  c: Context<{ Bindings: Bindings }>,
-  event: Omit<AuditLog, 'id' | 'timestamp' | 'ipAddress' | 'userAgent'>
-) => {
-  const auditLog: AuditLog = {
-    id: crypto.randomUUID(),
-    ...event,
-    timestamp: new Date().toISOString(),
-    ipAddress: c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown',
-    userAgent: c.req.header('user-agent') || 'unknown'
+  c: Context<AppEnv>,
+  event: {
+    userId: string | number
+    action: string
+    resourceType: string
+    resourceId: string | number
+    success: boolean
+    error?: string
+    metadata?: Record<string, any>
   }
-  
-  // In production, this would be stored in a database
-  console.log('AUDIT:', auditLog)
-  
-  return auditLog
+) => {
+  const ip = c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown'
+  const ua = (c.req.header('user-agent') || 'unknown').slice(0, 255)
+
+  // Try D1 first
+  const db = c.env?.DB
+  if (db) {
+    try {
+      await db
+        .prepare(
+          `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(event.userId, event.action, event.resourceType, event.resourceId, ip, ua)
+        .run()
+      return
+    } catch {
+      // Fall through to console
+    }
+  }
+
+  // Fallback: structured console log
+  console.log(JSON.stringify({
+    level: 'info',
+    type: 'audit',
+    ...event,
+    ipAddress: ip,
+    userAgent: ua,
+    timestamp: new Date().toISOString(),
+  }))
 }
