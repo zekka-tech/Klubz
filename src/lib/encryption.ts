@@ -1,246 +1,364 @@
-import crypto from 'crypto'
+/**
+ * Klubz - Web Crypto API Encryption + bcryptjs Password Hashing
+ *
+ * Production-grade encryption for Cloudflare Workers.
+ * Uses Web Crypto API (crypto.subtle) — no deprecated Node.js crypto APIs.
+ *
+ * AES-256-GCM for PII encryption with proper IV and AAD.
+ * bcryptjs for password hashing (pure JS, Workers-compatible, industry standard).
+ */
+
+import bcrypt from 'bcryptjs';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface EncryptedData {
-  encrypted: string
-  iv: string
-  tag: string
+  /** Base64-encoded ciphertext */
+  ct: string;
+  /** Base64-encoded initialization vector (12 bytes) */
+  iv: string;
+  /** Algorithm version for future key rotation */
+  v: number;
 }
 
-export interface EncryptionConfig {
-  algorithm: string
-  keyLength: number
-  ivLength: number
-  tagLength: number
-}
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
-const DEFAULT_CONFIG: EncryptionConfig = {
-  algorithm: 'aes-256-gcm',
-  keyLength: 32, // 256 bits
-  ivLength: 16,  // 128 bits
-  tagLength: 16   // 128 bits
-}
+const ALGORITHM = 'AES-GCM';
+const KEY_LENGTH = 256;
+const IV_LENGTH = 12; // 96 bits recommended for AES-GCM
+const ENCRYPTION_VERSION = 1;
+const PBKDF2_ITERATIONS = 100_000;
+const SALT_LENGTH = 16;
 
-/**
- * Encrypt sensitive data using AES-256-GCM
- * @param data - Data to encrypt
- * @param key - Encryption key (must be 32 bytes for AES-256)
- * @param config - Optional encryption configuration
- * @returns Encrypted data with IV and authentication tag
- */
-export function encryptData(
-  data: string | object,
-  key: string | Buffer,
-  config: Partial<EncryptionConfig> = {}
-): EncryptedData {
-  const finalConfig = { ...DEFAULT_CONFIG, ...config }
-  
-  // Ensure key is proper length
-  let keyBuffer: Buffer
-  if (typeof key === 'string') {
-    keyBuffer = Buffer.from(key, 'hex')
-    if (keyBuffer.length !== finalConfig.keyLength) {
-      throw new Error(`Key must be ${finalConfig.keyLength} bytes for AES-256-GCM`)
-    }
-  } else {
-    keyBuffer = key
-  }
-  
-  // Generate random IV
-  const iv = crypto.randomBytes(finalConfig.ivLength)
-  
-  // Create cipher
-  const cipher = crypto.createCipher(finalConfig.algorithm, keyBuffer)
-  cipher.setAAD(Buffer.from('klubz-aad')) // Additional authenticated data
-  
-  // Encrypt data
-  const dataStr = typeof data === 'string' ? data : JSON.stringify(data)
-  let encrypted = cipher.update(dataStr, 'utf8', 'hex')
-  encrypted += cipher.final('hex')
-  
-  // Get authentication tag
-  const tag = cipher.getAuthTag()
-  
-  return {
-    encrypted,
-    iv: iv.toString('hex'),
-    tag: tag.toString('hex')
-  }
-}
+// ---------------------------------------------------------------------------
+// Key Derivation
+// ---------------------------------------------------------------------------
 
 /**
- * Decrypt data encrypted with AES-256-GCM
- * @param encryptedData - Encrypted data with IV and tag
- * @param key - Decryption key (must be 32 bytes for AES-256)
- * @param config - Optional encryption configuration
- * @returns Decrypted data
+ * Import a hex-encoded key string into a CryptoKey for AES-GCM.
  */
-export function decryptData(
-  encryptedData: EncryptedData,
-  key: string | Buffer,
-  config: Partial<EncryptionConfig> = {}
-): string {
-  const finalConfig = { ...DEFAULT_CONFIG, ...config }
-  
-  // Ensure key is proper length
-  let keyBuffer: Buffer
-  if (typeof key === 'string') {
-    keyBuffer = Buffer.from(key, 'hex')
-    if (keyBuffer.length !== finalConfig.keyLength) {
-      throw new Error(`Key must be ${finalConfig.keyLength} bytes for AES-256-GCM`)
-    }
-  } else {
-    keyBuffer = key
+async function importKey(hexKey: string): Promise<CryptoKey> {
+  const keyBytes = hexToBytes(hexKey);
+  if (keyBytes.length !== 32) {
+    throw new Error(`Encryption key must be 32 bytes (got ${keyBytes.length})`);
   }
-  
-  // Create decipher
-  const decipher = crypto.createDecipher(finalConfig.algorithm, keyBuffer)
-  decipher.setAAD(Buffer.from('klubz-aad'))
-  decipher.setAuthTag(Buffer.from(encryptedData.tag, 'hex'))
-  
-  // Decrypt data
-  let decrypted = decipher.update(encryptedData.encrypted, 'hex', 'utf8')
-  decrypted += decipher.final('utf8')
-  
-  return decrypted
+  return crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: ALGORITHM, length: KEY_LENGTH },
+    false,
+    ['encrypt', 'decrypt'],
+  );
 }
 
+// ---------------------------------------------------------------------------
+// AES-256-GCM Encryption / Decryption
+// ---------------------------------------------------------------------------
+
 /**
- * Encrypt PII (Personally Identifiable Information) with additional security measures
- * @param data - PII data to encrypt
- * @param key - Encryption key
- * @param userId - User ID for audit logging
- * @returns Encrypted PII data
+ * Encrypt data using AES-256-GCM with random IV.
+ *
+ * @param data - String data to encrypt
+ * @param hexKey - 64-char hex-encoded 256-bit key
+ * @param aad - Optional additional authenticated data (e.g. userId)
  */
-export function encryptPII(
+export async function encrypt(
   data: string,
-  key: string,
-  userId: string
-): EncryptedData {
-  // Add timestamp and user context to prevent replay attacks
-  const dataWithContext = {
-    data,
-    userId,
-    timestamp: Date.now(),
-    purpose: 'pii_encryption'
+  hexKey: string,
+  aad?: string,
+): Promise<EncryptedData> {
+  const key = await importKey(hexKey);
+  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+  const encoded = new TextEncoder().encode(data);
+
+  const params: AesGcmParams = { name: ALGORITHM, iv };
+  if (aad) {
+    params.additionalData = new TextEncoder().encode(aad);
   }
-  
-  return encryptData(dataWithContext, key)
+
+  const ciphertext = await crypto.subtle.encrypt(params, key, encoded);
+
+  return {
+    ct: bytesToBase64(new Uint8Array(ciphertext)),
+    iv: bytesToBase64(iv),
+    v: ENCRYPTION_VERSION,
+  };
 }
 
 /**
- * Decrypt PII with validation and audit logging
- * @param encryptedData - Encrypted PII data
- * @param key - Decryption key
- * @param userId - User ID for audit logging
- * @returns Decrypted PII data
+ * Decrypt data encrypted with AES-256-GCM.
+ *
+ * @param encrypted - Encrypted payload
+ * @param hexKey - 64-char hex-encoded 256-bit key
+ * @param aad - Optional AAD (must match what was used during encryption)
  */
-export function decryptPII(
-  encryptedData: EncryptedData,
-  key: string,
-  userId: string
-): string {
-  try {
-    const decrypted = decryptData(encryptedData, key)
-    const parsed = JSON.parse(decrypted)
-    
-    // Validate the decrypted data
-    if (!parsed.data || parsed.purpose !== 'pii_encryption') {
-      throw new Error('Invalid PII data structure')
-    }
-    
-    // Check for replay attacks (data should be less than 1 hour old)
-    const maxAge = 60 * 60 * 1000 // 1 hour
-    if (Date.now() - parsed.timestamp > maxAge) {
-      throw new Error('PII data has expired')
-    }
-    
-    // In a real implementation, log PII access for audit purposes
-    console.log(`PII access logged for user ${userId} at ${new Date().toISOString()}`)
-    
-    return parsed.data
-  } catch (error) {
-    throw new Error('Failed to decrypt PII data: ' + (error as Error).message)
+export async function decrypt(
+  encrypted: EncryptedData,
+  hexKey: string,
+  aad?: string,
+): Promise<string> {
+  const key = await importKey(hexKey);
+  const iv = base64ToBytes(encrypted.iv);
+  const ciphertext = base64ToBytes(encrypted.ct);
+
+  const params: AesGcmParams = { name: ALGORITHM, iv };
+  if (aad) {
+    params.additionalData = new TextEncoder().encode(aad);
   }
+
+  const plaintext = await crypto.subtle.decrypt(params, key, ciphertext);
+  return new TextDecoder().decode(plaintext);
 }
 
 /**
- * Generate a secure random key for encryption
- * @param length - Key length in bytes (default: 32 for AES-256)
- * @returns Hex-encoded key
+ * Encrypt a JSON-serializable object.
  */
-export function generateEncryptionKey(length = 32): string {
-  return crypto.randomBytes(length).toString('hex')
+export async function encryptJSON(
+  data: unknown,
+  hexKey: string,
+  aad?: string,
+): Promise<string> {
+  const encrypted = await encrypt(JSON.stringify(data), hexKey, aad);
+  return JSON.stringify(encrypted);
 }
 
 /**
- * Hash data using SHA-256 (for non-reversible operations)
- * @param data - Data to hash
- * @param salt - Optional salt
- * @returns Hex-encoded hash
+ * Decrypt a JSON string that was encrypted with encryptJSON.
  */
-export function hashData(data: string, salt?: string): string {
-  const hash = crypto.createHash('sha256')
-  hash.update(data)
-  if (salt) {
-    hash.update(salt)
+export async function decryptJSON<T = unknown>(
+  encryptedStr: string,
+  hexKey: string,
+  aad?: string,
+): Promise<T> {
+  const encrypted: EncryptedData = JSON.parse(encryptedStr);
+  const decrypted = await decrypt(encrypted, hexKey, aad);
+  return JSON.parse(decrypted) as T;
+}
+
+// ---------------------------------------------------------------------------
+// Password Hashing (bcryptjs — industry standard, Workers-compatible)
+// ---------------------------------------------------------------------------
+
+const BCRYPT_ROUNDS = 12; // Good balance of security vs. performance
+
+/**
+ * Hash a password using bcrypt with auto-generated salt.
+ * Returns a standard bcrypt hash string: `$2a$12$...`
+ *
+ * bcryptjs is pure JS with no native dependencies, fully Workers-compatible.
+ * Cost factor 12 provides ~250ms hash time, resistant to brute-force.
+ */
+export async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hashSync(password, BCRYPT_ROUNDS);
+}
+
+/**
+ * Verify a password against a stored hash.
+ * Supports both bcrypt hashes ($2a$/$2b$) and legacy PBKDF2 ($pbkdf2$) formats.
+ * Legacy PBKDF2 hashes are verified but should be re-hashed on next login.
+ */
+export async function verifyPassword(
+  password: string,
+  stored: string,
+): Promise<boolean> {
+  // Handle legacy PBKDF2 hashes from previous implementation
+  if (stored.startsWith('$pbkdf2$')) {
+    return verifyPasswordPBKDF2(password, stored);
   }
-  return hash.digest('hex')
+
+  // Standard bcrypt verification
+  return bcrypt.compareSync(password, stored);
 }
 
 /**
- * Hash PII for lookup purposes (with organization-specific salt)
- * @param data - PII data to hash
- * @param organizationId - Organization ID for salt generation
- * @returns Hashed data
+ * Legacy PBKDF2 password verification for migration compatibility.
+ * Passwords verified with this should be re-hashed with bcrypt on next login.
  */
-export function hashPII(data: string, organizationId: string): string {
-  const salt = hashData(organizationId + 'klubz-pii-salt')
-  return hashData(data, salt)
-}
-
-/**
- * Mask sensitive data for logging purposes
- * @param data - Sensitive data to mask
- * @param visibleChars - Number of characters to keep visible at the end
- * @param maskChar - Character to use for masking
- * @returns Masked data
- */
-export function maskData(data: string, visibleChars = 4, maskChar = '*'): string {
-  if (data.length <= visibleChars) {
-    return maskChar.repeat(data.length)
+async function verifyPasswordPBKDF2(
+  password: string,
+  stored: string,
+): Promise<boolean> {
+  const parts = stored.split('$');
+  // Format: $pbkdf2$iterations$salt$hash
+  if (parts.length !== 5 || parts[1] !== 'pbkdf2') {
+    return false;
   }
-  
-  const maskedLength = data.length - visibleChars
-  return maskChar.repeat(maskedLength) + data.slice(-visibleChars)
+
+  const iterations = parseInt(parts[2], 10);
+  const salt = base64ToBytes(parts[3]);
+  const storedHash = base64ToBytes(parts[4]);
+
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  );
+
+  const computedHash = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    256,
+  );
+
+  return timingSafeEqual(new Uint8Array(computedHash), storedHash);
 }
 
 /**
- * Validate encryption key format
- * @param key - Key to validate
- * @returns Whether the key is valid
+ * Check whether a stored hash is in the legacy PBKDF2 format.
+ * Used to trigger re-hashing on successful login.
  */
-export function isValidEncryptionKey(key: string): boolean {
-  try {
-    const keyBuffer = Buffer.from(key, 'hex')
-    return keyBuffer.length === 32
-  } catch {
-    return false
+export function isLegacyHash(stored: string): boolean {
+  return stored.startsWith('$pbkdf2$');
+}
+
+// ---------------------------------------------------------------------------
+// SHA-256 Hashing (for non-reversible lookups)
+// ---------------------------------------------------------------------------
+
+/**
+ * SHA-256 hash of a string, returned as hex.
+ */
+export async function sha256(data: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(data),
+  );
+  return bytesToHex(new Uint8Array(digest));
+}
+
+/**
+ * Hash PII for database lookup columns (e.g. email_hash).
+ * Uses an application-specific salt prefix.
+ */
+export async function hashForLookup(
+  data: string,
+  salt: string = 'klubz-lookup-salt',
+): Promise<string> {
+  return sha256(salt + ':' + data.toLowerCase().trim());
+}
+
+// ---------------------------------------------------------------------------
+// PII Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Encrypt PII with user-scoped AAD.
+ */
+export async function encryptPII(
+  data: string,
+  encryptionKey: string,
+  userId: number | string,
+): Promise<string> {
+  const encrypted = await encrypt(data, encryptionKey, `user:${userId}`);
+  return JSON.stringify(encrypted);
+}
+
+/**
+ * Decrypt PII with user-scoped AAD.
+ */
+export async function decryptPII(
+  encryptedStr: string,
+  encryptionKey: string,
+  userId: number | string,
+): Promise<string> {
+  const encrypted: EncryptedData = JSON.parse(encryptedStr);
+  return decrypt(encrypted, encryptionKey, `user:${userId}`);
+}
+
+/**
+ * Mask sensitive data for display/logging.
+ */
+export function maskData(data: string, visibleEnd: number = 4): string {
+  if (data.length <= visibleEnd) return '*'.repeat(data.length);
+  return '*'.repeat(data.length - visibleEnd) + data.slice(-visibleEnd);
+}
+
+/**
+ * Mask an email address for display.
+ */
+export function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!domain) return maskData(email);
+  const maskedLocal = local.length <= 2
+    ? '*'.repeat(local.length)
+    : local[0] + '*'.repeat(local.length - 2) + local[local.length - 1];
+  return `${maskedLocal}@${domain}`;
+}
+
+// ---------------------------------------------------------------------------
+// Key Generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a random 256-bit encryption key as a hex string.
+ */
+export function generateEncryptionKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return bytesToHex(bytes);
+}
+
+/**
+ * Generate a random JWT secret (64 bytes / 512 bits).
+ */
+export function generateJWTSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(64));
+  return bytesToHex(bytes);
+}
+
+// ---------------------------------------------------------------------------
+// Utility Functions
+// ---------------------------------------------------------------------------
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
   }
+  return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 /**
- * Rotate encryption key (for key rotation policies)
- * @param oldKey - Current encryption key
- * @returns New encryption key
+ * Constant-time comparison to prevent timing attacks.
  */
-export function rotateEncryptionKey(oldKey?: string): string {
-  // Generate new key
-  const newKey = generateEncryptionKey()
-  
-  // In a real implementation, you would:
-  // 1. Re-encrypt all data with the new key
-  // 2. Update key management system
-  // 3. Archive the old key securely
-  
-  return newKey
+function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a[i] ^ b[i];
+  }
+  return result === 0;
 }

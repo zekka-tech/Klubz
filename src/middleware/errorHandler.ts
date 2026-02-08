@@ -1,8 +1,15 @@
-import { Context, Next } from 'hono'
-import { Bindings } from '../index'
+/**
+ * Klubz - Error Handler Middleware
+ *
+ * Consistent error classes and error handling middleware.
+ * Uses AppEnv type from shared types.
+ */
+
+import type { Context, Next } from 'hono';
+import type { AppEnv } from '../types';
 
 export const errorHandler = () => {
-  return async (c: Context<{ Bindings: Bindings }>, next: Next) => {
+  return async (c: Context<AppEnv>, next: Next) => {
     try {
       await next()
     } catch (err: any) {

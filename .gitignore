@@ -78,7 +78,7 @@ dist
 
 # Gatsby files
 .cache/
-public
+# public  # Keeping public directory tracked for PWA assets
 
 # Storybook build outputs
 .out
@@ -102,4 +102,4 @@ logs
 .wrangler/
 
 # Large files
-workerd
+workerdpackage-lock.json
