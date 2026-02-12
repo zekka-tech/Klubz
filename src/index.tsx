@@ -6,7 +6,10 @@ import { userRoutes } from './routes/users'
 import { tripRoutes } from './routes/trips'
 import { adminRoutes } from './routes/admin'
 import { monitoringRoutes } from './routes/monitoring'
+import { paymentRoutes } from './routes/payments'
 import { eventBus } from './lib/eventBus'
+import { logger } from './lib/logger'
+import { anonymizeIP } from './lib/privacy'
 import type { AppEnv } from './types'
 
 const app = new Hono<AppEnv>()
@@ -29,12 +32,16 @@ app.use('*', async (c, next) => {
 
 // ═══ Security Headers Middleware ═══
 app.use('*', async (c, next) => {
+  // Generate nonce for CSP
+  const nonce = crypto.randomUUID();
+  c.set('cspNonce', nonce);
+
   await next()
 
   c.header('Content-Security-Policy', [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net",
-    "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com https://fonts.googleapis.com https://cdn.jsdelivr.net",
+    `script-src 'self' 'nonce-${nonce}' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net`,
+    `style-src 'self' 'nonce-${nonce}' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com https://fonts.googleapis.com https://cdn.jsdelivr.net`,
     "font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com",
     "img-src 'self' data: blob: https:",
     "connect-src 'self' https://api.klubz.com wss:",
@@ -58,8 +65,13 @@ app.use('*', async (c, next) => {
   const origin = c.req.header('Origin') || ''
   const allowed = ['https://klubz-production.pages.dev', 'https://klubz-staging.pages.dev', 'http://localhost:3000', 'http://localhost:3001']
 
-  if (allowed.includes(origin) || origin === '') {
-    c.header('Access-Control-Allow-Origin', origin || '*')
+  if (allowed.includes(origin)) {
+    // Only allow whitelisted origins
+    c.header('Access-Control-Allow-Origin', origin)
+    c.header('Access-Control-Allow-Credentials', 'true')
+  } else if (origin) {
+    // Log suspicious requests from unauthorized origins
+    logger.warn('Rejected CORS request from unauthorized origin', { origin, path: c.req.path })
   }
   c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
   c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID, X-CSRF-Token')
@@ -75,13 +87,14 @@ app.use('*', async (c, next) => {
   const requestId = c.req.header('X-Request-ID') || crypto.randomUUID()
   c.header('X-Request-ID', requestId)
 
+  const rawIP = c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown';
   console.log(JSON.stringify({
     level: 'info',
     type: 'request',
     requestId,
     method: c.req.method,
     path: new URL(c.req.url).pathname,
-    ip: c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown',
+    ip: anonymizeIP(rawIP),
     ua: c.req.header('user-agent')?.slice(0, 100),
     ts: new Date().toISOString(),
   }))
@@ -214,6 +227,9 @@ app.route('/api/admin', adminRoutes)
 
 // Monitoring routes: /api/monitoring/metrics, /api/monitoring/sla, etc.
 app.route('/api/monitoring', monitoringRoutes)
+
+// Payment routes: /api/payments/intent, /api/payments/webhook
+app.route('/api/payments', paymentRoutes)
 
 // Smart Trip Pooling - Matching Engine API
 const matchingRoutes = createMatchingRoutes()

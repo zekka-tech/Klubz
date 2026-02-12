@@ -7,6 +7,7 @@
 
 import type { Context, Next } from 'hono';
 import type { AppEnv } from '../types';
+import { anonymizeIP } from '../lib/privacy';
 
 export interface AuditLog {
   id: string
@@ -52,8 +53,9 @@ export const logAuditEvent = async (
     metadata?: Record<string, any>
   }
 ) => {
-  const ip = c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown'
-  const ua = (c.req.header('user-agent') || 'unknown').slice(0, 255)
+  const rawIP = c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown';
+  const ip = anonymizeIP(rawIP);
+  const ua = (c.req.header('user-agent') || 'unknown').slice(0, 255);
 
   // Try D1 first
   const db = c.env?.DB

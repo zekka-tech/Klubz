@@ -8,10 +8,10 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
+import { getDB, getDBOptional } from '../lib/db';
+import { getIP, getUserAgent } from '../lib/http';
 
 export const monitoringRoutes = new Hono<AppEnv>();
-
-function getDB(c: any) { return c.env?.DB ?? null; }
 
 const APP_START_TIME = Date.now();
 
@@ -51,31 +51,49 @@ monitoringRoutes.get('/health', async (c) => {
 // GET /metrics - Admin (real DB stats)
 // ---------------------------------------------------------------------------
 
-monitoringRoutes.get('/metrics', async (c) => {
-  // Skip auth in dev (no JWT_SECRET)
-  if (c.env?.JWT_SECRET) {
-    try {
-      await authMiddleware(['admin', 'super_admin'])(c, async () => {});
-    } catch {
-      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Admin access required' } }, 403);
-    }
-  }
-
+monitoringRoutes.get('/metrics', authMiddleware(['admin', 'super_admin']), async (c) => {
   const db = getDB(c);
-  let appMetrics: any = { requests: { total: 0 }, responseTime: { avg: 0 } };
-  let businessMetrics: any = { activeTrips: 0, totalUsers: 0 };
+  const appMetrics: any = { requests: { total: 0, last1h: 0, last24h: 0 }, errors: { total: 0, rate: 0 }, responseTime: { avg: 0 } };
+  const businessMetrics: any = { activeTrips: 0, totalUsers: 0, completedTrips: 0, totalBookings: 0 };
 
   if (db) {
     try {
-      const [tripsActive, usersTotal, logsTotal] = await db.batch([
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+      const [
+        tripsActive,
+        tripsCompleted,
+        usersTotal,
+        logsTotal,
+        logsLast1h,
+        logsLast24h,
+        errorsTotal,
+        bookingsTotal,
+      ] = await db.batch([
         db.prepare("SELECT COUNT(*) as count FROM trips WHERE status = 'scheduled'"),
+        db.prepare("SELECT COUNT(*) as count FROM trips WHERE status = 'completed'"),
         db.prepare('SELECT COUNT(*) as count FROM users WHERE deleted_at IS NULL'),
         db.prepare('SELECT COUNT(*) as count FROM audit_logs'),
+        db.prepare('SELECT COUNT(*) as count FROM audit_logs WHERE created_at > ?').bind(oneHourAgo),
+        db.prepare('SELECT COUNT(*) as count FROM audit_logs WHERE created_at > ?').bind(oneDayAgo),
+        db.prepare("SELECT COUNT(*) as count FROM audit_logs WHERE action LIKE '%ERROR%' OR action LIKE '%FAILED%'"),
+        db.prepare("SELECT COUNT(*) as count FROM trip_participants WHERE status = 'accepted'"),
       ]);
 
       businessMetrics.activeTrips = tripsActive.results?.[0]?.count ?? 0;
+      businessMetrics.completedTrips = tripsCompleted.results?.[0]?.count ?? 0;
       businessMetrics.totalUsers = usersTotal.results?.[0]?.count ?? 0;
-      appMetrics.requests.total = logsTotal.results?.[0]?.count ?? 0;
+      businessMetrics.totalBookings = bookingsTotal.results?.[0]?.count ?? 0;
+
+      const totalReqs = logsTotal.results?.[0]?.count ?? 0;
+      const totalErrs = errorsTotal.results?.[0]?.count ?? 0;
+
+      appMetrics.requests.total = totalReqs;
+      appMetrics.requests.last1h = logsLast1h.results?.[0]?.count ?? 0;
+      appMetrics.requests.last24h = logsLast24h.results?.[0]?.count ?? 0;
+      appMetrics.errors.total = totalErrs;
+      appMetrics.errors.rate = totalReqs > 0 ? ((totalErrs / totalReqs) * 100).toFixed(2) : 0;
     } catch (err: any) {
       logger.error('Metrics DB error', err);
     }
@@ -109,15 +127,46 @@ monitoringRoutes.get('/sla', async (c) => {
 // ---------------------------------------------------------------------------
 
 monitoringRoutes.get('/performance', async (c) => {
+  const db = getDB(c);
+  const timeframe = c.req.query('timeframe') || '1h';
+  let endpoints: any[] = [];
+
+  if (db) {
+    try {
+      // Calculate timeframe cutoff
+      const cutoffMs = timeframe === '1h' ? 60 * 60 * 1000 :
+                       timeframe === '24h' ? 24 * 60 * 60 * 1000 :
+                       7 * 24 * 60 * 60 * 1000; // default to 7d
+      const cutoff = new Date(Date.now() - cutoffMs).toISOString();
+
+      // Get request counts by action (rough proxy for endpoint)
+      const { results } = await db.prepare(`
+        SELECT
+          action,
+          COUNT(*) as request_count,
+          SUM(CASE WHEN action LIKE '%ERROR%' OR action LIKE '%FAILED%' THEN 1 ELSE 0 END) as error_count
+        FROM audit_logs
+        WHERE created_at > ?
+        GROUP BY action
+        ORDER BY request_count DESC
+        LIMIT 10
+      `).bind(cutoff).all();
+
+      endpoints = (results || []).map((r: any) => ({
+        action: r.action,
+        requests: r.request_count ?? 0,
+        errorRate: r.request_count > 0
+          ? ((r.error_count / r.request_count) * 100).toFixed(2)
+          : 0,
+      }));
+    } catch (err: any) {
+      logger.error('Performance metrics error', err);
+    }
+  }
+
   return c.json({
-    timeframe: c.req.query('timeframe') || '1h',
-    api: {
-      endpoints: [
-        { path: '/api/auth/login', avgResponseTime: 245, requests: 0, errorRate: 0 },
-        { path: '/api/users/profile', avgResponseTime: 120, requests: 0, errorRate: 0 },
-        { path: '/api/matching/find', avgResponseTime: 50, requests: 0, errorRate: 0 },
-      ],
-    },
+    timeframe,
+    api: { endpoints },
     timestamp: new Date().toISOString(),
   });
 });
@@ -130,19 +179,53 @@ monitoringRoutes.get('/security', async (c) => {
   const db = getDB(c);
   let failedLogins = 0;
   let successfulLogins = 0;
+  let mfaEnabled = 0;
+  let mfaDisabled = 0;
+  let suspiciousIPs = 0;
 
   if (db) {
     try {
-      const failed = await db.prepare("SELECT COUNT(*) as count FROM audit_logs WHERE action = 'USER_LOGIN_FAILED'").first();
-      failedLogins = (failed as any)?.count ?? 0;
-      const success = await db.prepare("SELECT COUNT(*) as count FROM audit_logs WHERE action = 'USER_LOGIN'").first();
-      successfulLogins = (success as any)?.count ?? 0;
-    } catch { /* best-effort */ }
+      const [failed, success, mfaEnabledRes, mfaDisabledRes, suspiciousRes] = await db.batch([
+        db.prepare("SELECT COUNT(*) as count FROM audit_logs WHERE action = 'USER_LOGIN_FAILED'"),
+        db.prepare("SELECT COUNT(*) as count FROM audit_logs WHERE action = 'USER_LOGIN'"),
+        db.prepare('SELECT COUNT(*) as count FROM users WHERE mfa_enabled = 1 AND deleted_at IS NULL'),
+        db.prepare('SELECT COUNT(*) as count FROM users WHERE mfa_enabled = 0 AND deleted_at IS NULL'),
+        db.prepare(`
+          SELECT COUNT(DISTINCT ip_address) as count
+          FROM audit_logs
+          WHERE action = 'USER_LOGIN_FAILED'
+          AND created_at > datetime('now', '-24 hours')
+          GROUP BY ip_address
+          HAVING COUNT(*) > 5
+        `),
+      ]);
+
+      failedLogins = (failed.results?.[0] as any)?.count ?? 0;
+      successfulLogins = (success.results?.[0] as any)?.count ?? 0;
+      mfaEnabled = (mfaEnabledRes.results?.[0] as any)?.count ?? 0;
+      mfaDisabled = (mfaDisabledRes.results?.[0] as any)?.count ?? 0;
+      suspiciousIPs = (suspiciousRes.results?.length ?? 0);
+    } catch (err: any) {
+      logger.error('Security metrics error', err);
+    }
   }
 
   return c.json({
-    threats: { blocked: 0, flagged: 0, resolved: 0, active: 0 },
-    authentication: { failedLogins, successfulLogins, mfaEnabled: 0, mfaDisabled: 0 },
+    threats: {
+      blocked: 0,
+      flagged: suspiciousIPs,
+      resolved: 0,
+      active: suspiciousIPs,
+    },
+    authentication: {
+      failedLogins,
+      successfulLogins,
+      mfaEnabled,
+      mfaDisabled,
+      successRate: successfulLogins + failedLogins > 0
+        ? ((successfulLogins / (successfulLogins + failedLogins)) * 100).toFixed(2)
+        : 100,
+    },
     encryption: { status: 'active', algorithm: 'AES-256-GCM' },
     compliance: { popia: { status: 'compliant' }, gdpr: { status: 'compliant' } },
     timestamp: new Date().toISOString(),

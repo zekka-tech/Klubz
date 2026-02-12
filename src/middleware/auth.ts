@@ -148,11 +148,11 @@ export function authMiddleware(roles?: string[]) {
     }
 
     const token = authHeader.substring(7);
-    const secret = c.env?.JWT_SECRET || 'klubz-dev-secret-change-in-production';
+    const secret = c.env?.JWT_SECRET;
 
-    // Warn in production if using fallback secret
-    if (!c.env?.JWT_SECRET && c.env?.ENVIRONMENT === 'production') {
-      logger.fatal('JWT_SECRET not configured in production! Using insecure fallback.');
+    if (!secret) {
+      logger.fatal('JWT_SECRET not configured - application cannot start securely');
+      throw new AuthError('JWT_SECRET environment variable is required', 500, 'CONFIGURATION_ERROR');
     }
 
     try {

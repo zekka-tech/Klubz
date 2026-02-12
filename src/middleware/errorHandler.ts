@@ -7,27 +7,50 @@
 
 import type { Context, Next } from 'hono';
 import type { AppEnv } from '../types';
+import { logger } from '../lib/logger';
+import { AppError } from '../lib/errors';
 
 export const errorHandler = () => {
   return async (c: Context<AppEnv>, next: Next) => {
     try {
       await next()
-    } catch (err: any) {
-      console.error('Error:', err)
-      
-      const status = err.status || 500
-      const message = err.message || 'Internal server error'
-      const code = err.code || 'INTERNAL_ERROR'
-      
+    } catch (err: unknown) {
+      // Log error with context
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorStack = err instanceof Error ? err.stack?.slice(0, 500) : undefined;
+
+      logger.error('Request error', {
+        error: errorMessage,
+        stack: errorStack,
+        requestId: c.get('requestId'),
+        path: c.req.path,
+        method: c.req.method,
+      });
+
+      // Handle AppError instances
+      if (err instanceof AppError) {
+        return c.json({
+          error: {
+            code: err.code,
+            message: err.message,
+            status: err.status,
+            details: err.details,
+            requestId: c.get('requestId'),
+            timestamp: new Date().toISOString(),
+          }
+        }, err.status as any);
+      }
+
+      // Handle unknown errors - don't expose internals
       return c.json({
         error: {
-          code,
-          message,
-          status,
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'An unexpected error occurred',
+          status: 500,
+          requestId: c.get('requestId'),
           timestamp: new Date().toISOString(),
-          requestId: c.req.header('x-request-id') || crypto.randomUUID()
         }
-      }, status)
+      }, 500);
     }
   }
 }

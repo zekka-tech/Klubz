@@ -9,12 +9,18 @@ import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { eventBus } from '../lib/eventBus';
+import { getDB, getDBOptional } from '../lib/db';
+import { getIP, getUserAgent } from '../lib/http';
+import { MatchingEngine } from '../lib/matching/engine';
+import { MatchingRepository } from '../lib/matching/repository';
+import { ValidationError } from '../lib/errors';
+import { NotificationService } from '../integrations/notifications';
+import { decrypt } from '../lib/encryption';
+import { getCacheService } from '../lib/cache';
 
 export const tripRoutes = new Hono<AppEnv>();
 
 tripRoutes.use('*', authMiddleware());
-
-function getDB(c: any) { return c.env?.DB ?? null; }
 
 // ---------------------------------------------------------------------------
 // GET /available - search for trips
@@ -22,69 +28,105 @@ function getDB(c: any) { return c.env?.DB ?? null; }
 
 tripRoutes.get('/available', async (c) => {
   const user = c.get('user') as AuthUser;
-  const { pickupLat, pickupLng, dropoffLat, dropoffLng, date, time, radius = '5' } = c.req.query();
+  const { pickupLat, pickupLng, dropoffLat, dropoffLng, date, time, maxDetour = '15' } = c.req.query();
 
+  // Validate required coordinates
   if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Pickup and dropoff coordinates are required' } }, 400);
+    throw new ValidationError('Pickup and dropoff coordinates are required');
   }
 
   const db = getDB(c);
-  if (db) {
-    try {
-      const { results } = await db
-        .prepare(
-          `SELECT t.id, t.title, t.origin, t.destination, t.departure_time, t.available_seats,
-                  t.total_seats, t.price_per_seat, t.currency, t.status, t.vehicle_type,
-                  u.first_name_encrypted as driver_first, u.last_name_encrypted as driver_last
-           FROM trips t
-           JOIN users u ON t.driver_id = u.id
-           WHERE t.status = 'scheduled'
-             AND t.available_seats > 0
-             AND t.departure_time > datetime('now')
-           ORDER BY t.departure_time ASC
-           LIMIT 20`
-        )
-        .all();
+  const cache = getCacheService(c);
 
-      const trips = (results || []).map((r: any) => ({
-        id: r.id,
-        driverName: [r.driver_first, r.driver_last].filter(Boolean).join(' ') || 'Driver',
-        driverRating: 4.5,
-        pickupLocation: { address: r.origin },
-        dropoffLocation: { address: r.destination },
-        scheduledTime: r.departure_time,
-        price: r.price_per_seat,
-        currency: r.currency || 'ZAR',
-        availableSeats: r.available_seats,
-        vehicleType: r.vehicle_type,
-        carbonSaved: 2.1,
-        routeMatchScore: 0.85,
-      }));
+  // Generate cache key from search parameters
+  const cacheKey = `trips:search:${pickupLat}:${pickupLng}:${dropoffLat}:${dropoffLng}:${date || 'today'}:${time || 'now'}:${maxDetour}`;
 
-      return c.json({
-        trips,
-        searchCriteria: {
-          pickupLocation: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
-          dropoffLocation: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
-          radius: parseFloat(radius), date, time,
-        },
-        totalResults: trips.length,
-      });
-    } catch (err: any) {
-      logger.error('Available trips error', err);
+  // Try cache first
+  if (cache) {
+    const cached = await cache.get<any>(cacheKey);
+    if (cached) {
+      logger.debug('Trip search cache hit', { cacheKey });
+      return c.json(cached);
     }
   }
 
-  // ── Fallback ──
-  return c.json({
-    trips: [],
-    searchCriteria: {
-      pickupLocation: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
-      dropoffLocation: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
-      radius: parseFloat(radius), date, time,
-    },
-    totalResults: 0,
-  });
+  try {
+    // Use smart matching engine for better results
+    const repo = new MatchingRepository(db);
+    const engine = new MatchingEngine(repo);
+
+    const departureTime = date && time ? new Date(`${date}T${time}`) : new Date();
+
+    const matches = await engine.findMatches({
+      riderId: user.id,
+      pickup: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
+      dropoff: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
+      departureTime,
+      maxDetourMinutes: parseInt(maxDetour),
+      maxWalkingDistanceKm: 0.5,
+      seatsNeeded: 1,
+      preferences: {}, // Load from user preferences if needed
+    });
+
+    const trips = matches.map(match => ({
+      id: match.driverTrip.id,
+      title: `Trip to ${match.driverTrip.destination.lat.toFixed(4)}, ${match.driverTrip.destination.lng.toFixed(4)}`,
+      driverName: `Driver ${match.driverTrip.driverId}`,
+      driverRating: match.driverTrip.driverRating || 4.5,
+      pickupLocation: {
+        lat: match.driverTrip.departure.lat,
+        lng: match.driverTrip.departure.lng,
+      },
+      dropoffLocation: {
+        lat: match.driverTrip.destination.lat,
+        lng: match.driverTrip.destination.lng,
+      },
+      scheduledTime: new Date(match.driverTrip.departureTime).toISOString(),
+      availableSeats: match.driverTrip.availableSeats,
+      vehicleType: match.driverTrip.vehicle?.type || 'sedan',
+      // Matching scores
+      matchScore: match.score,
+      explanation: match.explanation,
+      estimatedPickupTime: match.estimatedPickupTime ? new Date(match.estimatedPickupTime).toISOString() : null,
+      detourMinutes: match.detourMinutes || 0,
+      walkingDistanceKm: match.walkingDistanceKm || 0,
+      carbonSavedKg: match.carbonSavedKg || 0,
+    }));
+
+    logger.info('Trip search completed with matching engine', {
+      userId: user.id,
+      resultsCount: trips.length,
+      avgScore: trips.reduce((sum, t) => sum + t.matchScore, 0) / trips.length || 0,
+    });
+
+    const result = {
+      trips,
+      searchCriteria: {
+        pickupLocation: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
+        dropoffLocation: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
+        maxDetour: parseInt(maxDetour), date, time,
+      },
+      totalResults: trips.length,
+    };
+
+    // Cache results for 5 minutes
+    if (cache) {
+      await cache.set(cacheKey, result, 300);
+    }
+
+    return c.json(result);
+  } catch (err: any) {
+    logger.error('Available trips error', err);
+    return c.json({
+      trips: [],
+      searchCriteria: {
+        pickupLocation: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
+        dropoffLocation: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
+        maxDetour: parseInt(maxDetour), date, time,
+      },
+      totalResults: 0,
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -135,6 +177,56 @@ tripRoutes.post('/:tripId/book', async (c) => {
         passengerId: user.id,
         passengers,
       }, user.id);
+
+      // Send notification to driver
+      const notifications = new NotificationService(c.env);
+      if (notifications.emailAvailable) {
+        try {
+          const tripDetails = await db.prepare(`
+            SELECT t.title, t.origin, t.destination, t.departure_time, t.driver_id,
+                   u.email, u.first_name_encrypted, u.last_name_encrypted
+            FROM trips t
+            JOIN users u ON t.driver_id = u.id
+            WHERE t.id = ?
+          `).bind(tripId).first() as any;
+
+          if (tripDetails) {
+            const driverFirstName = tripDetails.first_name_encrypted
+              ? await decrypt(JSON.parse(tripDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, tripDetails.driver_id.toString())
+              : 'Driver';
+
+            const riderDetails = await db.prepare('SELECT first_name_encrypted, last_name_encrypted FROM users WHERE id = ?').bind(user.id).first() as any;
+            const riderFirstName = riderDetails?.first_name_encrypted
+              ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
+              : 'A rider';
+            const riderLastName = riderDetails?.last_name_encrypted
+              ? await decrypt(JSON.parse(riderDetails.last_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
+              : '';
+
+            await notifications.sendEmail(
+              tripDetails.email,
+              'New Booking Request - Klubz',
+              `
+                <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
+                  <h1 style="color:#3B82F6">New Booking Request</h1>
+                  <p>Hi ${driverFirstName}, you have a new booking request for your trip.</p>
+                  <div style="background:#F3F4F6;padding:16px;border-radius:8px;margin:16px 0">
+                    <p><strong>Trip:</strong> ${tripDetails.title || 'Your trip'}</p>
+                    <p><strong>Rider:</strong> ${riderFirstName} ${riderLastName}</p>
+                    <p><strong>Passengers:</strong> ${passengers}</p>
+                    <p><strong>Pickup:</strong> ${pickupLocation.address || 'Requested location'}</p>
+                    <p><strong>Dropoff:</strong> ${dropoffLocation.address || 'Requested location'}</p>
+                  </div>
+                  <p>Log in to Klubz to accept or reject this booking.</p>
+                </div>
+              `,
+              `New booking request from ${riderFirstName} ${riderLastName} for ${passengers} passenger(s).`
+            );
+          }
+        } catch (err) {
+          logger.warn('Failed to send booking notification', { error: err instanceof Error ? err.message : String(err) });
+        }
+      }
 
       return c.json({ message: 'Booking request submitted successfully', booking: { tripId, passengerId: user.id, status: 'requested', createdAt: new Date().toISOString() } });
     } catch (err: any) {
@@ -216,6 +308,12 @@ tripRoutes.post('/offer', async (c) => {
         scheduledTime,
       }, user.id);
 
+      // Invalidate trip search cache
+      const cache = getCacheService(c);
+      if (cache) {
+        await cache.invalidatePattern('trips:search:');
+      }
+
       return c.json({
         message: 'Trip offer created successfully',
         trip: { id: tripId, status: 'scheduled', driverId: user.id, availableSeats, createdAt: new Date().toISOString() },
@@ -254,6 +352,71 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
       // Emit real-time event
       eventBus.emit('booking:accepted', { bookingId, tripId, acceptedBy: user.id }, user.id);
 
+      // Send notification to rider
+      const notifications = new NotificationService(c.env);
+      if (notifications.emailAvailable || notifications.smsAvailable) {
+        try {
+          const bookingDetails = await db.prepare(`
+            SELECT tp.user_id, t.title, t.origin, t.destination, t.departure_time, t.price_per_seat,
+                   u.email, u.first_name_encrypted, u.last_name_encrypted, u.phone_encrypted,
+                   d.first_name_encrypted as driver_first_name
+            FROM trip_participants tp
+            JOIN trips t ON tp.trip_id = t.id
+            JOIN users u ON tp.user_id = u.id
+            JOIN users d ON t.driver_id = d.id
+            WHERE tp.id = ?
+          `).bind(bookingId).first() as any;
+
+          if (bookingDetails) {
+            const riderFirstName = bookingDetails.first_name_encrypted
+              ? await decrypt(JSON.parse(bookingDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, bookingDetails.user_id.toString())
+              : 'Rider';
+
+            const driverFirstName = bookingDetails.driver_first_name
+              ? await decrypt(JSON.parse(bookingDetails.driver_first_name).data, c.env.ENCRYPTION_KEY, user.id.toString())
+              : 'Your driver';
+
+            // Send email confirmation
+            if (notifications.emailAvailable) {
+              await notifications.sendEmail(
+                bookingDetails.email,
+                'Trip Booking Confirmed - Klubz',
+                `
+                  <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
+                    <h1 style="color:#3B82F6">Booking Confirmed!</h1>
+                    <p>Hi ${riderFirstName}, your trip has been confirmed:</p>
+                    <div style="background:#F3F4F6;padding:16px;border-radius:8px;margin:16px 0">
+                      <p><strong>Driver:</strong> ${driverFirstName}</p>
+                      <p><strong>From:</strong> ${bookingDetails.origin}</p>
+                      <p><strong>To:</strong> ${bookingDetails.destination}</p>
+                      <p><strong>Departure:</strong> ${new Date(bookingDetails.departure_time).toLocaleString()}</p>
+                      <p><strong>Price:</strong> R${bookingDetails.price_per_seat}</p>
+                    </div>
+                    <p style="color:#6B7280;font-size:0.875rem">You'll receive notifications as your trip approaches.</p>
+                  </div>
+                `,
+                `Your Klubz booking is confirmed! Trip with ${driverFirstName} on ${new Date(bookingDetails.departure_time).toLocaleString()}.`
+              );
+            }
+
+            // Send SMS confirmation if phone available
+            if (notifications.smsAvailable && bookingDetails.phone_encrypted) {
+              try {
+                const phone = await decrypt(JSON.parse(bookingDetails.phone_encrypted).data, c.env.ENCRYPTION_KEY, bookingDetails.user_id.toString());
+                await notifications.sendSMS(
+                  phone,
+                  `Klubz: Your booking is confirmed! Trip with ${driverFirstName} on ${new Date(bookingDetails.departure_time).toLocaleDateString()} at ${new Date(bookingDetails.departure_time).toLocaleTimeString()}. Check your email for details.`
+                );
+              } catch (err) {
+                logger.warn('Failed to send SMS confirmation', { error: err instanceof Error ? err.message : String(err) });
+              }
+            }
+          }
+        } catch (err) {
+          logger.warn('Failed to send booking confirmation', { error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
       return c.json({ message: 'Booking accepted successfully', booking: { id: bookingId, tripId, status: 'accepted', acceptedAt: new Date().toISOString() } });
     } catch (err: any) {
       logger.error('Accept booking error', err);
@@ -284,6 +447,48 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
 
       // Emit real-time event
       eventBus.emit('booking:rejected', { bookingId, tripId, rejectedBy: user.id }, user.id);
+
+      // Send notification to rider about rejection
+      const notifications = new NotificationService(c.env);
+      if (notifications.emailAvailable) {
+        try {
+          const riderDetails = await db.prepare(`
+            SELECT u.email, u.first_name_encrypted, tp.user_id, t.title, t.departure_time
+            FROM trip_participants tp
+            JOIN users u ON tp.user_id = u.id
+            JOIN trips t ON tp.trip_id = t.id
+            WHERE tp.id = ?
+          `).bind(bookingId).first() as any;
+
+          if (riderDetails) {
+            const riderFirstName = riderDetails.first_name_encrypted
+              ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, riderDetails.user_id.toString())
+              : 'Rider';
+
+            const reason = body.reason || 'The driver is unable to accommodate this booking';
+
+            await notifications.sendEmail(
+              riderDetails.email,
+              'Booking Request Update - Klubz',
+              `
+                <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
+                  <h1 style="color:#6B7280">Booking Not Accepted</h1>
+                  <p>Hi ${riderFirstName}, unfortunately your booking request was not accepted.</p>
+                  <div style="background:#FEF2F2;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #EF4444">
+                    <p><strong>Trip:</strong> ${riderDetails.title || 'Trip'}</p>
+                    <p><strong>Departure:</strong> ${new Date(riderDetails.departure_time).toLocaleString()}</p>
+                    <p><strong>Reason:</strong> ${reason}</p>
+                  </div>
+                  <p>Don't worry! You can search for other available trips on Klubz.</p>
+                </div>
+              `,
+              `Your Klubz booking request was not accepted. Search for other trips at klubz.com`
+            );
+          }
+        } catch (err) {
+          logger.warn('Failed to send rejection notification', { error: err instanceof Error ? err.message : String(err) });
+        }
+      }
     } catch (err: any) {
       logger.error('Reject booking error', err);
     }
@@ -312,6 +517,57 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
 
       // Emit real-time event
       eventBus.emit('trip:cancelled', { tripId, cancelledBy: user.id }, user.id);
+
+      // Notify all accepted participants about cancellation
+      const notifications = new NotificationService(c.env);
+      if (notifications.emailAvailable) {
+        try {
+          const participants = await db.prepare(`
+            SELECT u.email, u.first_name_encrypted, tp.user_id, t.title, t.departure_time, t.origin, t.destination
+            FROM trip_participants tp
+            JOIN users u ON tp.user_id = u.id
+            JOIN trips t ON tp.trip_id = t.id
+            WHERE tp.trip_id = ? AND tp.status = 'accepted' AND tp.role = 'rider'
+          `).bind(tripId).all();
+
+          const reason = body.reason || 'The driver had to cancel this trip';
+
+          for (const participant of participants.results as any[]) {
+            try {
+              const firstName = participant.first_name_encrypted
+                ? await decrypt(JSON.parse(participant.first_name_encrypted).data, c.env.ENCRYPTION_KEY, participant.user_id.toString())
+                : 'Rider';
+
+              await notifications.sendEmail(
+                participant.email,
+                'Trip Cancelled - Klubz',
+                `
+                  <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
+                    <h1 style="color:#EF4444">Trip Cancelled</h1>
+                    <p>Hi ${firstName}, unfortunately your upcoming trip has been cancelled.</p>
+                    <div style="background:#FEF2F2;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #EF4444">
+                      <p><strong>Trip:</strong> ${participant.title || 'Trip'}</p>
+                      <p><strong>From:</strong> ${participant.origin}</p>
+                      <p><strong>To:</strong> ${participant.destination}</p>
+                      <p><strong>Scheduled:</strong> ${new Date(participant.departure_time).toLocaleString()}</p>
+                      <p><strong>Reason:</strong> ${reason}</p>
+                    </div>
+                    <p>We're sorry for the inconvenience. Search for alternative trips on Klubz.</p>
+                  </div>
+                `,
+                `Your Klubz trip on ${new Date(participant.departure_time).toLocaleDateString()} has been cancelled. ${reason}`
+              );
+            } catch (err) {
+              logger.warn('Failed to send cancellation notification to participant', {
+                error: err instanceof Error ? err.message : String(err),
+                participantId: participant.user_id
+              });
+            }
+          }
+        } catch (err) {
+          logger.warn('Failed to send cancellation notifications', { error: err instanceof Error ? err.message : String(err) });
+        }
+      }
     } catch (err: any) {
       logger.error('Cancel trip error', err);
     }

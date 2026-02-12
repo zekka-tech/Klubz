@@ -8,21 +8,13 @@ import { Hono } from 'hono';
 import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
+import { getDB, getDBOptional } from '../lib/db';
+import { getIP, getUserAgent } from '../lib/http';
 
 export const adminRoutes = new Hono<AppEnv>();
 
-// Admin-only routes (skip auth check if no JWT_SECRET in dev)
-adminRoutes.use('*', async (c, next) => {
-  // In dev without JWT, skip auth; in production, enforce admin
-  const secret = c.env?.JWT_SECRET;
-  if (!secret) {
-    await next();
-    return;
-  }
-  return authMiddleware(['admin', 'super_admin'])(c, next);
-});
-
-function getDB(c: any) { return c.env?.DB ?? null; }
+// Admin-only routes - require authentication unconditionally
+adminRoutes.use('*', authMiddleware(['admin', 'super_admin']));
 
 // ---------------------------------------------------------------------------
 // GET /stats - Dashboard statistics from D1
@@ -110,7 +102,21 @@ adminRoutes.get('/users', async (c) => {
 
       const dataParams = [...params, limit, (page - 1) * limit];
       const { results } = await db
-        .prepare(`SELECT id, email, first_name_encrypted, last_name_encrypted, phone_encrypted, role, is_active, last_login_at, created_at FROM users ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+        .prepare(`
+          SELECT
+            u.id, u.email, u.first_name_encrypted, u.last_name_encrypted, u.phone_encrypted,
+            u.role, u.is_active, u.last_login_at, u.created_at,
+            COUNT(DISTINCT t.id) as trip_count,
+            COUNT(DISTINCT tp.id) as participation_count,
+            AVG(CASE WHEN tp.role = 'driver' THEN tp.rating END) as avg_driver_rating
+          FROM users u
+          LEFT JOIN trips t ON t.driver_id = u.id
+          LEFT JOIN trip_participants tp ON tp.user_id = u.id
+          ${where}
+          GROUP BY u.id
+          ORDER BY u.created_at DESC
+          LIMIT ? OFFSET ?
+        `)
         .bind(...dataParams)
         .all();
 
@@ -123,6 +129,11 @@ adminRoutes.get('/users', async (c) => {
         status: r.is_active ? 'active' : 'inactive',
         lastLoginAt: r.last_login_at,
         createdAt: r.created_at,
+        stats: {
+          tripCount: r.trip_count ?? 0,
+          participationCount: r.participation_count ?? 0,
+          avgRating: r.avg_driver_rating ? parseFloat(Number(r.avg_driver_rating).toFixed(1)) : 0,
+        }
       }));
 
       return c.json({

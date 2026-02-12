@@ -12,6 +12,9 @@ import type { AppEnv } from '../types';
 import { createToken, verifyToken, issueTokenPair, AuthError } from '../middleware/auth';
 import { hashPassword, verifyPassword, hashForLookup, isLegacyHash } from '../lib/encryption';
 import { logger } from '../lib/logger';
+import { getDB, getDBOptional } from '../lib/db';
+import { getIP, getUserAgent, getAnonymizedIP } from '../lib/http';
+import { ValidationError, AuthenticationError, ConflictError, ServiceUnavailableError } from '../lib/errors';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -38,12 +41,8 @@ const mfaSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Helper: get DB with fallback
+// Helpers
 // ---------------------------------------------------------------------------
-
-function getDB(c: any) {
-  return c.env?.DB ?? null;
-}
 
 /** Returns true if the error is a "table not found" D1 error — signals dev mode without migrations */
 function isTableMissing(err: any): boolean {
@@ -52,7 +51,12 @@ function isTableMissing(err: any): boolean {
 }
 
 function getJWTSecret(c: any): string {
-  return c.env?.JWT_SECRET || 'klubz-dev-secret-change-in-production';
+  const secret = c.env?.JWT_SECRET;
+  if (!secret) {
+    logger.fatal('JWT_SECRET not configured - application cannot start securely');
+    throw new Error('JWT_SECRET environment variable is required');
+  }
+  return secret;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,8 +148,8 @@ authRoutes.post('/login', async (c) => {
             'USER_LOGIN',
             'user',
             user.id,
-            c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown',
-            (c.req.header('user-agent') || 'unknown').slice(0, 255),
+            getAnonymizedIP(c),
+            getUserAgent(c),
           )
           .run();
       } catch { /* audit log is best-effort */ }
@@ -221,7 +225,7 @@ authRoutes.post('/register', async (c) => {
       const passwordHash = await hashPassword(password);
       const [firstName, ...lastParts] = name.split(' ');
       const lastName = lastParts.join(' ') || null;
-      const ip = c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown';
+      const ip = getAnonymizedIP(c);
 
       const result = await db
         .prepare(
@@ -267,25 +271,15 @@ authRoutes.post('/register', async (c) => {
 // ── MFA Verify ─────────────────────────────────────────────────────────────
 
 authRoutes.post('/mfa/verify', async (c) => {
-  let body: any;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON body' } }, 400);
-  }
-
-  const parsed = mfaSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid MFA input' } }, 400);
-  }
-
-  // In production, verify TOTP token against user's mfa_secret
-  // For now, accept '123456' as valid in dev
-  const isValid = parsed.data.token === '123456';
-
-  if (!isValid) {
-    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Invalid MFA token' } }, 401);
-  }
+  // MFA is not yet fully implemented. Use password authentication only.
+  // To implement: Use speakeasy.totp.verify() with user's mfa_secret_encrypted
+  return c.json({
+    error: {
+      code: 'NOT_IMPLEMENTED',
+      message: 'MFA verification is not yet implemented. Please use password authentication.',
+      status: 501
+    }
+  }, 501);
 
   return c.json({ verified: true, message: 'MFA verification successful' });
 });
@@ -354,8 +348,8 @@ authRoutes.post('/logout', async (c) => {
           'USER_LOGOUT',
           'user',
           payload.sub,
-          c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown',
-          (c.req.header('user-agent') || 'unknown').slice(0, 255),
+          getAnonymizedIP(c),
+          getUserAgent(c),
         )
         .run();
     } catch { /* best-effort */ }

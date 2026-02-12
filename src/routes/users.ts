@@ -9,17 +9,16 @@ import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { eventBus } from '../lib/eventBus';
+import { getDB, getDBOptional } from '../lib/db';
+import { getIP, getUserAgent } from '../lib/http';
+import { decrypt, hashForLookup } from '../lib/encryption';
+import { AppError, ValidationError } from '../lib/errors';
+import { getCacheService } from '../lib/cache';
 
 export const userRoutes = new Hono<AppEnv>();
 
 // All user routes require auth
 userRoutes.use('*', authMiddleware());
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function getDB(c: any) { return c.env?.DB ?? null; }
 
 // ---------------------------------------------------------------------------
 // GET /profile
@@ -28,6 +27,18 @@ function getDB(c: any) { return c.env?.DB ?? null; }
 userRoutes.get('/profile', async (c) => {
   const user = c.get('user') as AuthUser;
   const db = getDB(c);
+  const cache = getCacheService(c);
+
+  const cacheKey = `user:profile:${user.id}`;
+
+  // Try cache first
+  if (cache) {
+    const cached = await cache.get<any>(cacheKey);
+    if (cached) {
+      logger.debug('User profile cache hit', { userId: user.id });
+      return c.json(cached);
+    }
+  }
 
   if (db) {
     try {
@@ -48,7 +59,7 @@ userRoutes.get('/profile', async (c) => {
         return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
       }
 
-      return c.json({
+      const profile = {
         id: row.id,
         email: row.email,
         name: [row.first_name_encrypted, row.last_name_encrypted].filter(Boolean).join(' ') || user.name,
@@ -66,7 +77,14 @@ userRoutes.get('/profile', async (c) => {
         },
         createdAt: row.created_at,
         lastLoginAt: row.last_login_at,
-      });
+      };
+
+      // Cache for 10 minutes
+      if (cache) {
+        await cache.set(cacheKey, profile, 600);
+      }
+
+      return c.json(profile);
     } catch (err: any) {
       logger.error('Profile DB error', err);
     }
@@ -123,6 +141,12 @@ userRoutes.put('/profile', async (c) => {
 
       await db.prepare(`UPDATE users SET ${parts.join(', ')} WHERE id = ?`).bind(...values).run();
 
+      // Invalidate profile cache
+      const cache = getCacheService(c);
+      if (cache) {
+        await cache.delete(`user:profile:${user.id}`);
+      }
+
       return c.json({ message: 'Profile updated', updatedAt: new Date().toISOString() });
     } catch (err: any) {
       logger.error('Profile update error', err);
@@ -152,9 +176,13 @@ userRoutes.get('/trips', async (c) => {
                t.currency, t.status, t.vehicle_type, t.created_at,
                tp.role as participant_role, tp.status as participant_status,
                tp.pickup_location_encrypted, tp.dropoff_location_encrypted,
-               tp.rating
+               tp.rating,
+               u.first_name_encrypted as driver_first_name,
+               u.last_name_encrypted as driver_last_name,
+               u.avatar_url as driver_avatar
         FROM trip_participants tp
         JOIN trips t ON tp.trip_id = t.id
+        LEFT JOIN users u ON t.driver_id = u.id
         WHERE tp.user_id = ?`;
 
       const params: any[] = [user.id];
@@ -190,6 +218,10 @@ userRoutes.get('/trips', async (c) => {
         vehicleType: r.vehicle_type,
         rating: r.rating,
         carbonSaved: 2.1, // estimate per trip
+        driver: {
+          name: [r.driver_first_name, r.driver_last_name].filter(Boolean).join(' ') || 'Driver',
+          avatar: r.driver_avatar || null,
+        },
         createdAt: r.created_at,
       }));
 
@@ -323,6 +355,197 @@ userRoutes.put('/preferences', async (c) => {
     timezone: body.timezone || 'Africa/Johannesburg',
     currency: body.currency || 'ZAR',
   });
+});
+
+// ---------------------------------------------------------------------------
+// GET /export - GDPR Data Export (Article 15 - Right of Access)
+// ---------------------------------------------------------------------------
+
+userRoutes.get('/export', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const db = getDB(c);
+
+  try {
+    // Fetch all user data in parallel
+    const [userData, trips, auditLogs, participants] = await db.batch([
+      db.prepare('SELECT * FROM users WHERE id = ?').bind(user.id),
+      db.prepare(`
+        SELECT t.* FROM trips t
+        WHERE t.driver_id = ?
+        ORDER BY t.created_at DESC
+      `).bind(user.id),
+      db.prepare(`
+        SELECT * FROM audit_logs
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1000
+      `).bind(user.id),
+      db.prepare(`
+        SELECT tp.*, t.title, t.origin, t.destination
+        FROM trip_participants tp
+        JOIN trips t ON tp.trip_id = t.id
+        WHERE tp.user_id = ?
+        ORDER BY tp.created_at DESC
+      `).bind(user.id),
+    ]);
+
+    const userRecord = userData.results[0] as any;
+
+    if (!userRecord) {
+      throw new AppError('User not found', 'NOT_FOUND', 404);
+    }
+
+    // Decrypt PII for export
+    const encryptionKey = c.env?.ENCRYPTION_KEY;
+    if (!encryptionKey) {
+      throw new AppError('Encryption key not configured', 'CONFIGURATION_ERROR', 500);
+    }
+
+    const decryptedData = {
+      profile: {
+        id: userRecord.id,
+        email: userRecord.email,
+        firstName: userRecord.first_name_encrypted ?
+          await decrypt(JSON.parse(userRecord.first_name_encrypted), encryptionKey, user.id.toString()).catch(() => null) : null,
+        lastName: userRecord.last_name_encrypted ?
+          await decrypt(JSON.parse(userRecord.last_name_encrypted), encryptionKey, user.id.toString()).catch(() => null) : null,
+        phone: userRecord.phone_encrypted ?
+          await decrypt(JSON.parse(userRecord.phone_encrypted), encryptionKey, user.id.toString()).catch(() => null) : null,
+        role: userRecord.role,
+        emailVerified: userRecord.email_verified,
+        phoneVerified: userRecord.phone_verified,
+        mfaEnabled: userRecord.mfa_enabled,
+        createdAt: userRecord.created_at,
+        lastLoginAt: userRecord.last_login_at,
+        createdIP: userRecord.created_ip,
+      },
+      trips: {
+        asDriver: trips.results,
+        asPassenger: participants.results,
+      },
+      auditLogs: auditLogs.results,
+    };
+
+    // Log export request
+    try {
+      await db.prepare(`
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent, created_at)
+        VALUES (?, 'DATA_EXPORT', 'user', ?, ?, ?, CURRENT_TIMESTAMP)
+      `).bind(user.id, user.id, getIP(c), getUserAgent(c)).run();
+    } catch (err: unknown) {
+      logger.warn('Audit log insert failed (non-critical)', {
+        error: err instanceof Error ? err.message : String(err),
+        action: 'DATA_EXPORT',
+      });
+    }
+
+    logger.info('User data exported', { userId: user.id });
+
+    return c.json({
+      exportedAt: new Date().toISOString(),
+      userId: user.id,
+      data: decryptedData,
+      meta: {
+        tripsCount: trips.results.length,
+        participationsCount: participants.results.length,
+        auditLogsCount: auditLogs.results.length,
+      }
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError) throw err;
+    logger.error('Data export failed', {
+      error: err instanceof Error ? err.message : String(err),
+      userId: user.id
+    });
+    throw new AppError('Failed to export user data', 'EXPORT_FAILED', 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /account - GDPR Data Deletion (Article 17 - Right to be Forgotten)
+// ---------------------------------------------------------------------------
+
+userRoutes.delete('/account', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const db = getDB(c);
+
+  try {
+    // Check for active trips
+    const activeTrips = await db.prepare(`
+      SELECT COUNT(*) as count
+      FROM trip_participants
+      WHERE user_id = ?
+      AND status IN ('requested', 'accepted')
+    `).bind(user.id).first() as any;
+
+    if (activeTrips && activeTrips.count > 0) {
+      throw new ValidationError(
+        'Cannot delete account with active trips. Please cancel them first.',
+        { activeTripsCount: activeTrips.count }
+      );
+    }
+
+    // Soft delete with data anonymization
+    const deletedEmail = `deleted_${user.id}_${Date.now()}@klubz.deleted`;
+    const deletedEmailHash = await hashForLookup(deletedEmail);
+
+    await db.prepare(`
+      UPDATE users
+      SET
+        deleted_at = CURRENT_TIMESTAMP,
+        email = ?,
+        email_hash = ?,
+        first_name_encrypted = NULL,
+        last_name_encrypted = NULL,
+        phone_encrypted = NULL,
+        avatar_url = NULL,
+        mfa_secret_encrypted = NULL,
+        backup_codes_encrypted = NULL,
+        is_active = 0
+      WHERE id = ?
+    `).bind(deletedEmail, deletedEmailHash, user.id).run();
+
+    // Anonymize trip participant data
+    await db.prepare(`
+      UPDATE trip_participants
+      SET
+        pickup_location_encrypted = NULL,
+        dropoff_location_encrypted = NULL,
+        review_encrypted = NULL
+      WHERE user_id = ?
+    `).bind(user.id).run();
+
+    // Log deletion request
+    try {
+      await db.prepare(`
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent, created_at)
+        VALUES (?, 'ACCOUNT_DELETED', 'user', ?, ?, ?, CURRENT_TIMESTAMP)
+      `).bind(user.id, user.id, getIP(c), getUserAgent(c)).run();
+    } catch (err: unknown) {
+      logger.warn('Audit log insert failed (non-critical)', {
+        error: err instanceof Error ? err.message : String(err),
+        action: 'ACCOUNT_DELETED',
+      });
+    }
+
+    logger.info('User account deleted', { userId: user.id });
+
+    const deletedAt = new Date();
+    const permanentDeletionDate = new Date(deletedAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    return c.json({
+      message: 'Account deleted successfully. Personal data anonymized. Account will be permanently removed in 30 days as per GDPR/POPIA requirements.',
+      deletedAt: deletedAt.toISOString(),
+      permanentDeletionDate: permanentDeletionDate.toISOString(),
+    });
+  } catch (err: unknown) {
+    if (err instanceof ValidationError || err instanceof AppError) throw err;
+    logger.error('Account deletion failed', {
+      error: err instanceof Error ? err.message : String(err),
+      userId: user.id
+    });
+    throw new AppError('Failed to delete account', 'DELETION_FAILED', 500);
+  }
 });
 
 export default userRoutes;
