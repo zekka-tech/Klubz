@@ -11,8 +11,8 @@ import { logger } from '../lib/logger';
 import { eventBus } from '../lib/eventBus';
 import { getDB, getDBOptional } from '../lib/db';
 import { getIP, getUserAgent } from '../lib/http';
-import { MatchingEngine } from '../lib/matching/engine';
-import { MatchingRepository } from '../lib/matching/repository';
+import { matchRiderToDrivers } from '../lib/matching/engine';
+import type { RiderRequest, DriverTrip } from '../lib/matching/types';
 import { ValidationError } from '../lib/errors';
 import { NotificationService } from '../integrations/notifications';
 import { decrypt } from '../lib/encryption';
@@ -51,46 +51,77 @@ tripRoutes.get('/available', async (c) => {
   }
 
   try {
-    // Use smart matching engine for better results
-    const repo = new MatchingRepository(db);
-    const engine = new MatchingEngine(repo);
-
+    // Fetch available driver trips from database
     const departureTime = date && time ? new Date(`${date}T${time}`) : new Date();
+    const { results: driverTrips } = await db.prepare(`
+      SELECT t.id, t.origin, t.destination, t.departure_time, t.available_seats,
+             t.vehicle_type, t.price_per_seat, t.driver_id,
+             u.first_name_encrypted, u.last_name_encrypted
+      FROM trips t
+      JOIN users u ON t.driver_id = u.id
+      WHERE t.status = 'scheduled'
+        AND t.available_seats > 0
+        AND t.departure_time >= ?
+      ORDER BY t.departure_time ASC
+      LIMIT 50
+    `).bind(departureTime.toISOString()).all();
 
-    const matches = await engine.findMatches({
+    // Create rider request
+    const riderRequest: RiderRequest = {
       riderId: user.id,
-      pickup: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
-      dropoff: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
-      departureTime,
+      departure: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
+      destination: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
+      earliestDeparture: departureTime,
+      latestDeparture: new Date(departureTime.getTime() + 2 * 60 * 60 * 1000), // 2 hour window
+      seatsNeeded: 1,
       maxDetourMinutes: parseInt(maxDetour),
       maxWalkingDistanceKm: 0.5,
-      seatsNeeded: 1,
-      preferences: {}, // Load from user preferences if needed
+    };
+
+    // Convert DB results to DriverTrip format (simplified)
+    const drivers: DriverTrip[] = (driverTrips as any[]).map(t => {
+      // Parse coordinates from origin/destination strings (simplified)
+      const originCoords = t.origin.includes('{') ? JSON.parse(t.origin) : { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) };
+      const destCoords = t.destination.includes('{') ? JSON.parse(t.destination) : { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) };
+
+      return {
+        tripId: t.id,
+        driverId: t.driver_id,
+        departure: { lat: originCoords.lat || parseFloat(pickupLat), lng: originCoords.lng || parseFloat(pickupLng) },
+        destination: { lat: destCoords.lat || parseFloat(dropoffLat), lng: destCoords.lng || parseFloat(dropoffLng) },
+        departureTime: new Date(t.departure_time),
+        availableSeats: t.available_seats,
+        vehicle: { type: t.vehicle_type || 'sedan', make: '', model: '', year: 2020 },
+        pricePerSeat: t.price_per_seat,
+      };
     });
 
+    // Use matching algorithm
+    const matches = matchRiderToDrivers(riderRequest, drivers);
+
     const trips = matches.map(match => ({
-      id: match.driverTrip.id,
-      title: `Trip to ${match.driverTrip.destination.lat.toFixed(4)}, ${match.driverTrip.destination.lng.toFixed(4)}`,
-      driverName: `Driver ${match.driverTrip.driverId}`,
-      driverRating: match.driverTrip.driverRating || 4.5,
+      id: match.trip.tripId,
+      title: `Trip to ${match.trip.destination.lat.toFixed(4)}, ${match.trip.destination.lng.toFixed(4)}`,
+      driverName: `Driver ${match.trip.driverId}`,
+      driverRating: 4.5,
       pickupLocation: {
-        lat: match.driverTrip.departure.lat,
-        lng: match.driverTrip.departure.lng,
+        lat: match.trip.departure.lat,
+        lng: match.trip.departure.lng,
       },
       dropoffLocation: {
-        lat: match.driverTrip.destination.lat,
-        lng: match.driverTrip.destination.lng,
+        lat: match.trip.destination.lat,
+        lng: match.trip.destination.lng,
       },
-      scheduledTime: new Date(match.driverTrip.departureTime).toISOString(),
-      availableSeats: match.driverTrip.availableSeats,
-      vehicleType: match.driverTrip.vehicle?.type || 'sedan',
+      scheduledTime: match.trip.departureTime.toISOString(),
+      availableSeats: match.trip.availableSeats,
+      vehicleType: match.trip.vehicle?.type || 'sedan',
+      pricePerSeat: match.trip.pricePerSeat || 35,
       // Matching scores
       matchScore: match.score,
       explanation: match.explanation,
-      estimatedPickupTime: match.estimatedPickupTime ? new Date(match.estimatedPickupTime).toISOString() : null,
-      detourMinutes: match.detourMinutes || 0,
-      walkingDistanceKm: match.walkingDistanceKm || 0,
-      carbonSavedKg: match.carbonSavedKg || 0,
+      detourMinutes: match.breakdown?.detourMinutes || 0,
+      walkingDistanceKm: match.breakdown?.pickupDistanceKm || 0,
+      carbonSavedKg: match.breakdown?.carbonSavedKg || 0,
     }));
 
     logger.info('Trip search completed with matching engine', {
