@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:25:22 UTC  
+Last updated: 2026-02-17 17:25:48 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -117,6 +117,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:25 UTC` | codex | commit | `160a2ca` | guaranteed structured JSON error responses via global app handler and aligned integration assertions
+- `2026-02-17 17:25 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 17:25 UTC` | codex | action | error-handling-hardening | added global `app.onError` JSON response handler to guarantee structured API errors for thrown route exceptions
 - `2026-02-17 17:25 UTC` | codex | action | integration-hardening | tightened production webhook configuration assertion to validate `CONFIGURATION_ERROR` code and masked production message
 - `2026-02-17 17:25 UTC` | codex | action | quality-gates | re-ran full gates (`type-check`, `lint`, `test`, `build`) all passing with 30 tests
