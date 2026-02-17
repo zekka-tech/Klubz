@@ -58,6 +58,23 @@ async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boole
   return false;
 }
 
+function getRequiredMetadata(
+  paymentIntent: StripeWebhookEvent['data']['object'],
+  requiredKeys: Array<'tripId' | 'userId' | 'bookingId'>,
+): Record<'tripId' | 'userId' | 'bookingId', string> | null {
+  const metadata = paymentIntent.metadata ?? {};
+  const out = {
+    tripId: metadata.tripId || '',
+    userId: metadata.userId || '',
+    bookingId: metadata.bookingId || '',
+  };
+
+  for (const key of requiredKeys) {
+    if (!out[key]) return null;
+  }
+  return out;
+}
+
 /**
  * Get Stripe instance if configured
  */
@@ -208,7 +225,15 @@ paymentRoutes.post('/webhook', async (c) => {
   switch (event.type) {
     case 'payment_intent.succeeded': {
       const paymentIntent = event.data.object;
-      const { tripId, userId, bookingId } = paymentIntent.metadata;
+      const metadata = getRequiredMetadata(paymentIntent, ['tripId', 'userId', 'bookingId']);
+      if (!metadata) {
+        logger.warn('Ignoring Stripe success event with missing metadata', {
+          eventId: event.id,
+          paymentIntentId: paymentIntent.id,
+        });
+        return c.json({ received: true, ignored: true, reason: 'missing_metadata' });
+      }
+      const { tripId, userId, bookingId } = metadata;
 
       try {
         await db.prepare(`
@@ -243,7 +268,15 @@ paymentRoutes.post('/webhook', async (c) => {
 
     case 'payment_intent.payment_failed': {
       const paymentIntent = event.data.object;
-      const { bookingId } = paymentIntent.metadata;
+      const metadata = getRequiredMetadata(paymentIntent, ['bookingId']);
+      if (!metadata) {
+        logger.warn('Ignoring Stripe payment_failed event with missing metadata', {
+          eventId: event.id,
+          paymentIntentId: paymentIntent.id,
+        });
+        return c.json({ received: true, ignored: true, reason: 'missing_metadata' });
+      }
+      const { bookingId } = metadata;
 
       try {
         await db.prepare(`
@@ -274,7 +307,15 @@ paymentRoutes.post('/webhook', async (c) => {
 
     case 'payment_intent.canceled': {
       const paymentIntent = event.data.object;
-      const { bookingId } = paymentIntent.metadata;
+      const metadata = getRequiredMetadata(paymentIntent, ['bookingId']);
+      if (!metadata) {
+        logger.warn('Ignoring Stripe canceled event with missing metadata', {
+          eventId: event.id,
+          paymentIntentId: paymentIntent.id,
+        });
+        return c.json({ received: true, ignored: true, reason: 'missing_metadata' });
+      }
+      const { bookingId } = metadata;
 
       try {
         await db.prepare(`

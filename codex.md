@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:02:38 UTC  
+Last updated: 2026-02-17 17:04:20 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -117,6 +117,7 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:04 UTC` | codex | action | payment-hardening | added required Stripe metadata validation before booking/payment status mutations
 - `2026-02-17 17:02 UTC` | codex | action | security-hardening | implemented Stripe webhook replay protection via KV event-id cache
 - `2026-02-17 17:02 UTC` | codex | action | authz-hardening | enforced driver ownership checks for booking accept/reject/cancel and completed-trip rating guard
 - `2026-02-17 16:56 UTC` | codex | action | security-hardening | started critical fixes (registration role escalation + production webhook secret enforcement)
