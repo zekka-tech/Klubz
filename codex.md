@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 18:44:30 UTC  
+Last updated: 2026-02-17 18:47:21 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 18:47 UTC` | codex | commit | `29988f2` | added notification status lifecycle integration coverage (`status=read` filtering and read transition assertions)
+- `2026-02-17 18:47 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 18:44 UTC` | codex | action | integration-tests | expanded notification lifecycle coverage with status-filter tests and mark-read->query-read state transition assertions
 - `2026-02-17 18:44 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (44 tests)
 - `2026-02-17 18:36 UTC` | codex | commit | `0759a65` | added stateful user preferences persistence-contract integration test and updated quality status
