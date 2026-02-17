@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:46:59 UTC  
+Last updated: 2026-02-17 17:51:30 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (30/30)
+- `npm test`: PASS (34/34)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -118,6 +118,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:51 UTC` | codex | action | notification-api | added `/api/notifications` route with list, mark-read, and read-all endpoints
+- `2026-02-17 17:50 UTC` | codex | action | notification-persistence | added `src/lib/notificationStore.ts` and wired in-app persistence to trip booking/accept/reject/cancel plus payment succeeded/failed flows
+- `2026-02-17 17:50 UTC` | codex | action | integration-tests | added `tests/integration/notifications-routes.test.ts` with route-level authz/pagination/read-state coverage
+- `2026-02-17 17:50 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (34 tests)
 - `2026-02-17 17:46 UTC` | codex | commit | `98a044b` | added notifications schema migration and expanded migration smoke verification
 - `2026-02-17 17:46 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 17:46 UTC` | codex | action | migration-feature | added `0005_notifications.sql` with notifications table, constraints, and indexes (`idx_notifications_user_status`, `idx_notifications_type`, `idx_notifications_trip`)

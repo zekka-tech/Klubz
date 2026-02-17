@@ -17,6 +17,7 @@ import { ValidationError } from '../lib/errors';
 import { NotificationService } from '../integrations/notifications';
 import { decrypt } from '../lib/encryption';
 import { getCacheService } from '../lib/cache';
+import { createNotification } from '../lib/notificationStore';
 
 export const tripRoutes = new Hono<AppEnv>();
 
@@ -390,6 +391,21 @@ tripRoutes.post('/:tripId/book', async (c) => {
           `).bind(tripId).first<BookingTripDetailsRow>();
 
           if (tripDetails) {
+            try {
+              await createNotification(db, {
+                userId: tripDetails.driver_id,
+                tripId: Number.parseInt(tripId, 10),
+                notificationType: 'booking_request',
+                channel: 'in_app',
+                status: 'pending',
+                subject: 'New booking request',
+                message: `You received a new booking request for ${tripDetails.title || 'your trip'}.`,
+                metadata: { tripId, passengerId: user.id, passengers },
+              });
+            } catch (err) {
+              logger.warn('Failed to persist booking request notification', { error: err instanceof Error ? err.message : String(err) });
+            }
+
             const driverFirstName = tripDetails.first_name_encrypted
               ? await decrypt(JSON.parse(tripDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, tripDetails.driver_id.toString())
               : 'Driver';
@@ -587,6 +603,21 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
           `).bind(bookingId).first<AcceptBookingDetailsRow>();
 
           if (bookingDetails) {
+            try {
+              await createNotification(db, {
+                userId: bookingDetails.user_id,
+                tripId: Number.parseInt(tripId, 10),
+                notificationType: 'booking_accepted',
+                channel: 'in_app',
+                status: 'sent',
+                subject: 'Booking accepted',
+                message: `Your booking for ${bookingDetails.title || 'the trip'} was accepted.`,
+                metadata: { tripId, bookingId, acceptedBy: user.id },
+              });
+            } catch (err) {
+              logger.warn('Failed to persist booking accepted notification', { error: err instanceof Error ? err.message : String(err) });
+            }
+
             const riderFirstName = bookingDetails.first_name_encrypted
               ? await decrypt(JSON.parse(bookingDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, bookingDetails.user_id.toString())
               : 'Rider';
@@ -690,6 +721,21 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
           `).bind(bookingId).first<RejectRiderDetailsRow>();
 
           if (riderDetails) {
+            try {
+              await createNotification(db, {
+                userId: riderDetails.user_id,
+                tripId: Number.parseInt(tripId, 10),
+                notificationType: 'booking_rejected',
+                channel: 'in_app',
+                status: 'sent',
+                subject: 'Booking request rejected',
+                message: `Your booking request for ${riderDetails.title || 'the trip'} was not accepted.`,
+                metadata: { tripId, bookingId, rejectedBy: user.id },
+              });
+            } catch (err) {
+              logger.warn('Failed to persist booking rejected notification', { error: err instanceof Error ? err.message : String(err) });
+            }
+
             const riderFirstName = riderDetails.first_name_encrypted
               ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, riderDetails.user_id.toString())
               : 'Rider';
@@ -773,6 +819,21 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
 
           for (const participant of (participants.results ?? []) as CancelParticipantRow[]) {
             try {
+              try {
+                await createNotification(db, {
+                  userId: participant.user_id,
+                  tripId: Number.parseInt(tripId, 10),
+                  notificationType: 'trip_cancelled',
+                  channel: 'in_app',
+                  status: 'sent',
+                  subject: 'Trip cancelled',
+                  message: `Your upcoming trip ${participant.title || ''} was cancelled by the driver.`,
+                  metadata: { tripId, cancelledBy: user.id },
+                });
+              } catch (err) {
+                logger.warn('Failed to persist trip cancellation notification', { error: err instanceof Error ? err.message : String(err) });
+              }
+
               const firstName = participant.first_name_encrypted
                 ? await decrypt(JSON.parse(participant.first_name_encrypted).data, c.env.ENCRYPTION_KEY, participant.user_id.toString())
                 : 'Rider';

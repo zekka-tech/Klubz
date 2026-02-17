@@ -254,10 +254,10 @@ export interface PaymentIntent {
 // Notification Types
 // ---------------------------------------------------------------------------
 
-export type NotificationChannel = 'email' | 'sms' | 'push';
+export type NotificationChannel = 'in_app' | 'email' | 'sms' | 'push';
 
 export interface Notification {
-  id: string;
+  id: number;
   userId: number;
   channel: NotificationChannel;
   type: string;

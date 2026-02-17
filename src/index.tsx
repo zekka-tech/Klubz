@@ -6,6 +6,7 @@ import { tripRoutes } from './routes/trips'
 import { adminRoutes } from './routes/admin'
 import { monitoringRoutes } from './routes/monitoring'
 import { paymentRoutes } from './routes/payments'
+import { notificationRoutes } from './routes/notifications'
 import { eventBus } from './lib/eventBus'
 import { logger } from './lib/logger'
 import { anonymizeIP } from './lib/privacy'
@@ -250,6 +251,9 @@ app.route('/api/monitoring', monitoringRoutes)
 
 // Payment routes: /api/payments/intent, /api/payments/webhook
 app.route('/api/payments', paymentRoutes)
+
+// Notification routes: /api/notifications
+app.route('/api/notifications', notificationRoutes)
 
 // Smart Trip Pooling - Matching Engine API
 const matchingRoutes = createMatchingRoutes()
