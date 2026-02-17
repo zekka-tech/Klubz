@@ -292,4 +292,79 @@ describe('Notification route integration flows', () => {
     expect(body.data[0]?.id).toBe(7);
     expect(body.data[0]?.status).toBe('read');
   });
+
+  test('limit is clamped to max 100 and min 1', async () => {
+    const token = await authToken(15);
+    let capturedLimit: unknown = null;
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('COUNT(*) as total') && kind === 'first') return { total: 0 };
+      if (query.includes('FROM notifications') && kind === 'all') {
+        capturedLimit = params[params.length - 2];
+        return [];
+      }
+      return null;
+    });
+
+    const highRes = await app.request(
+      '/api/notifications?limit=9999&offset=0',
+      { headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+    expect(highRes.status).toBe(200);
+    expect(capturedLimit).toBe(100);
+
+    const lowRes = await app.request(
+      '/api/notifications?limit=0&offset=0',
+      { headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+    expect(lowRes.status).toBe(200);
+    expect(capturedLimit).toBe(1);
+  });
+
+  test('offset affects hasMore and page slice behavior', async () => {
+    const token = await authToken(16);
+    let capturedOffset: unknown = null;
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('COUNT(*) as total') && kind === 'first') return { total: 3 };
+      if (query.includes('FROM notifications') && kind === 'all') {
+        capturedOffset = params[params.length - 1];
+        return [{
+          id: 31,
+          user_id: 16,
+          trip_id: 9,
+          notification_type: 'booking_accepted',
+          channel: 'in_app',
+          status: 'sent',
+          subject: 'S',
+          message: 'M',
+          metadata: null,
+          sent_at: null,
+          delivered_at: null,
+          read_at: null,
+          created_at: '2026-02-17T10:00:00Z',
+        }];
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/notifications?limit=1&offset=2',
+      { headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(capturedOffset).toBe(2);
+    const body = (await res.json()) as {
+      data: Array<{ id: number }>;
+      pagination: { total: number; limit: number; offset: number; hasMore: boolean };
+    };
+    expect(body.data.length).toBe(1);
+    expect(body.data[0]?.id).toBe(31);
+    expect(body.pagination.total).toBe(3);
+    expect(body.pagination.limit).toBe(1);
+    expect(body.pagination.offset).toBe(2);
+    expect(body.pagination.hasMore).toBe(false);
+  });
 });
