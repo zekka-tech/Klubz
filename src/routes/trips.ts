@@ -5,6 +5,7 @@
  */
 
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
@@ -135,6 +136,23 @@ interface CancelParticipantRow {
 
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
+}
+
+function getIdempotencyKey(c: Context<AppEnv>, userId: number, scope: string): string | null {
+  const requestKey = c.req.header('Idempotency-Key') || c.req.header('idempotency-key');
+  if (!requestKey) return null;
+  return `idempotency:${scope}:${userId}:${requestKey}`;
+}
+
+async function isIdempotentReplay(c: Context<AppEnv>, key: string): Promise<boolean> {
+  const cache = c.env?.CACHE;
+  if (!cache) return false;
+
+  const existing = await cache.get(key, 'text');
+  if (existing) return true;
+
+  await cache.put(key, 'seen', { expirationTtl: 10 * 60 }); // 10 minutes
+  return false;
 }
 
 function parseMaybeJsonLocation(value: string, fallback: { lat: number; lng: number }): { lat: number; lng: number } {
@@ -314,6 +332,15 @@ tripRoutes.post('/:tripId/book', async (c) => {
   }
 
   const { pickupLocation, dropoffLocation, passengers = 1 } = (body as BookRequestBody);
+  const idempotencyKey = getIdempotencyKey(c, user.id, `trip-book:${tripId}`);
+  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
+    return c.json({
+      error: {
+        code: 'IDEMPOTENCY_REPLAY',
+        message: 'Duplicate booking request detected. Original request already processed.',
+      }
+    }, 409);
+  }
   if (!pickupLocation || !dropoffLocation) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Pickup and dropoff locations are required' } }, 400);
   }
@@ -425,6 +452,15 @@ tripRoutes.post('/offer', async (c) => {
   }
 
   const { pickupLocation, dropoffLocation, scheduledTime, availableSeats = 3, price, vehicleInfo, notes } = (body as OfferRequestBody);
+  const idempotencyKey = getIdempotencyKey(c, user.id, 'trip-offer');
+  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
+    return c.json({
+      error: {
+        code: 'IDEMPOTENCY_REPLAY',
+        message: 'Duplicate trip offer request detected. Original request already processed.',
+      }
+    }, 409);
+  }
 
   if (!pickupLocation || !dropoffLocation || !scheduledTime) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Pickup, dropoff, and scheduled time are required' } }, 400);
