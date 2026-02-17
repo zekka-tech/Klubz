@@ -15,6 +15,46 @@ type AppJsonInit = Parameters<Context<AppEnv>['json']>[1]
 
 const app = new Hono<AppEnv>()
 
+function buildErrorResponse(c: Context<AppEnv>, err: unknown) {
+  const requestId = c.req.header('X-Request-ID') || crypto.randomUUID()
+  const message = err instanceof Error ? err.message : 'Unknown error'
+  const stack = err instanceof Error ? err.stack?.slice(0, 500) : undefined
+  const status = typeof err === 'object' && err !== null && 'status' in err
+    ? Number((err as { status?: unknown }).status) || 500
+    : 500
+  const code = typeof err === 'object' && err !== null && 'code' in err
+    ? String((err as { code?: unknown }).code || 'INTERNAL_ERROR')
+    : 'INTERNAL_ERROR'
+  const isProd = c.env?.ENVIRONMENT === 'production'
+
+  console.error(JSON.stringify({
+    level: 'error',
+    type: 'unhandled',
+    requestId,
+    error: message,
+    stack,
+    ts: new Date().toISOString(),
+  }))
+
+  return {
+    status: status as AppJsonInit,
+    payload: {
+      error: {
+        code,
+        message: isProd && status === 500 ? 'Internal server error' : message,
+        status,
+        requestId,
+        timestamp: new Date().toISOString(),
+      }
+    }
+  }
+}
+
+app.onError((err, c) => {
+  const response = buildErrorResponse(c, err)
+  return c.json(response.payload, response.status)
+})
+
 // ═══ Early CORS: handle preflight before anything else ═══
 app.use('*', async (c, next) => {
   if (c.req.method === 'OPTIONS') {
@@ -118,36 +158,8 @@ app.use('*', async (c, next) => {
   try {
     await next()
   } catch (err: unknown) {
-    const requestId = c.req.header('X-Request-ID') || crypto.randomUUID()
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    const stack = err instanceof Error ? err.stack?.slice(0, 500) : undefined
-    const status = typeof err === 'object' && err !== null && 'status' in err
-      ? Number((err as { status?: unknown }).status) || 500
-      : 500
-    const code = typeof err === 'object' && err !== null && 'code' in err
-      ? String((err as { code?: unknown }).code || 'INTERNAL_ERROR')
-      : 'INTERNAL_ERROR'
-
-    console.error(JSON.stringify({
-      level: 'error',
-      type: 'unhandled',
-      requestId,
-      error: message,
-      stack,
-      ts: new Date().toISOString(),
-    }))
-
-    const isProd = c.env?.ENVIRONMENT === 'production'
-
-    return c.json({
-      error: {
-        code,
-        message: isProd && status === 500 ? 'Internal server error' : message,
-        status,
-        requestId,
-        timestamp: new Date().toISOString(),
-      }
-    }, status as AppJsonInit)
+    const response = buildErrorResponse(c, err)
+    return c.json(response.payload, response.status)
   }
 })
 

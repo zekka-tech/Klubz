@@ -285,8 +285,9 @@ describe('Security hardening integration flows', () => {
     );
 
     expect(res.status).toBe(500);
-    const bodyText = await res.text();
-    expect(bodyText).toContain('Internal Server Error');
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Internal server error');
   });
 
   test('webhook replay is ignored on second identical event', async () => {
