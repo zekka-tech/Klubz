@@ -157,4 +157,69 @@ describe('User preferences integration flows', () => {
     expect(body.notifications.tripUpdates).toBe(false);
     expect(body.notifications.smsNotifications).toBe(false);
   });
+
+  test('preferences persist across PUT then GET requests', async () => {
+    const token = await authToken(31);
+    let storedRow: {
+      notifications_json: string;
+      privacy_json: string;
+      accessibility_json: string;
+      language: string;
+      timezone: string;
+      currency: string;
+    } | null = null;
+
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('FROM user_preferences') && kind === 'first') {
+        return storedRow;
+      }
+      if (query.includes('INSERT INTO user_preferences') && kind === 'run') {
+        storedRow = {
+          notifications_json: String(params[1] || '{}'),
+          privacy_json: String(params[2] || '{}'),
+          accessibility_json: String(params[3] || '{}'),
+          language: String(params[4] || 'en'),
+          timezone: String(params[5] || 'Africa/Johannesburg'),
+          currency: String(params[6] || 'ZAR'),
+        };
+        return { success: true };
+      }
+      return null;
+    });
+
+    const putRes = await app.request(
+      '/api/users/preferences',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notifications: { tripUpdates: false, smsNotifications: false, tripReminders: true, marketingEmails: false },
+          language: 'fr',
+          timezone: 'Europe/Paris',
+          currency: 'EUR',
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+    expect(putRes.status).toBe(200);
+
+    const getRes = await app.request(
+      '/api/users/preferences',
+      { headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+    expect(getRes.status).toBe(200);
+
+    const getBody = (await getRes.json()) as {
+      notifications: { tripUpdates: boolean; smsNotifications: boolean };
+      language: string;
+      timezone: string;
+      currency: string;
+    };
+    expect(getBody.notifications.tripUpdates).toBe(false);
+    expect(getBody.notifications.smsNotifications).toBe(false);
+    expect(getBody.language).toBe('fr');
+    expect(getBody.timezone).toBe('Europe/Paris');
+    expect(getBody.currency).toBe('EUR');
+  });
 });
