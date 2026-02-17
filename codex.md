@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 16:56:25 UTC  
+Last updated: 2026-02-17 17:02:38 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -117,6 +117,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:02 UTC` | codex | action | security-hardening | implemented Stripe webhook replay protection via KV event-id cache
+- `2026-02-17 17:02 UTC` | codex | action | authz-hardening | enforced driver ownership checks for booking accept/reject/cancel and completed-trip rating guard
 - `2026-02-17 16:56 UTC` | codex | action | security-hardening | started critical fixes (registration role escalation + production webhook secret enforcement)
 - `2026-02-17 18:48 UTC` | codex | commit | `e2658f6` | unknown-based DB typing + explicit row models
 - `2026-02-17 18:49 UTC` | codex | push | `main -> origin/main` | success

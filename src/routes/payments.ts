@@ -24,7 +24,9 @@ interface BookingRow {
 }
 
 interface StripeWebhookEvent {
+  id: string;
   type: string;
+  created?: number;
   data: {
     object: {
       id: string;
@@ -41,6 +43,19 @@ interface StripeWebhookEvent {
 
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
+}
+
+async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boolean> {
+  const cache = c.env?.CACHE;
+  if (!cache) return false;
+
+  const key = `stripe:webhook:event:${eventId}`;
+  const existing = await cache.get(key, 'text');
+  if (existing) return true;
+
+  // Keep event IDs for 7 days to prevent replay processing.
+  await cache.put(key, 'processed', { expirationTtl: 7 * 24 * 60 * 60 });
+  return false;
 }
 
 /**
@@ -180,6 +195,14 @@ paymentRoutes.post('/webhook', async (c) => {
   }
 
   const db = getDB(c);
+
+  if (!event.id) {
+    throw new ValidationError('Missing event id');
+  }
+  if (await isReplayEvent(c, event.id)) {
+    logger.info('Ignoring replayed Stripe webhook event', { eventId: event.id, eventType: event.type });
+    return c.json({ received: true, replay: true });
+  }
 
   // Handle different event types
   switch (event.type) {

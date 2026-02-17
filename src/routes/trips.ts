@@ -53,6 +53,17 @@ interface TripSeatRow {
   available_seats: number;
 }
 
+interface TripOwnerRow {
+  id: number;
+  driver_id: number;
+}
+
+interface TripParticipantOwnerRow {
+  id: number;
+  user_id: number;
+  status: string;
+}
+
 interface BookRequestBody {
   pickupLocation?: LocationInput;
   dropoffLocation?: LocationInput;
@@ -504,6 +515,15 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
   const db = getDB(c);
   if (db) {
     try {
+      const trip = await db
+        .prepare('SELECT id, driver_id FROM trips WHERE id = ?')
+        .bind(tripId)
+        .first<TripOwnerRow>();
+      if (!trip) return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+      if (trip.driver_id !== user.id) {
+        return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can accept bookings' } }, 403);
+      }
+
       await db
         .prepare("UPDATE trip_participants SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP WHERE id = ? AND trip_id = ?")
         .bind(bookingId, tripId)
@@ -604,6 +624,15 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
   const db = getDB(c);
   if (db) {
     try {
+      const trip = await db
+        .prepare('SELECT id, driver_id FROM trips WHERE id = ?')
+        .bind(tripId)
+        .first<TripOwnerRow>();
+      if (!trip) return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+      if (trip.driver_id !== user.id) {
+        return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can reject bookings' } }, 403);
+      }
+
       await db
         .prepare("UPDATE trip_participants SET status = 'rejected' WHERE id = ? AND trip_id = ?")
         .bind(bookingId, tripId)
@@ -675,6 +704,15 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
   const db = getDB(c);
   if (db) {
     try {
+      const trip = await db
+        .prepare('SELECT id, driver_id FROM trips WHERE id = ?')
+        .bind(tripId)
+        .first<TripOwnerRow>();
+      if (!trip) return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+      if (trip.driver_id !== user.id) {
+        return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can cancel this trip' } }, 403);
+      }
+
       await db
         .prepare("UPDATE trips SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP WHERE id = ?")
         .bind(tripId)
@@ -765,6 +803,17 @@ tripRoutes.post('/:tripId/rate', async (c) => {
   const db = getDB(c);
   if (db) {
     try {
+      const participant = await db
+        .prepare('SELECT id, user_id, status FROM trip_participants WHERE trip_id = ? AND user_id = ?')
+        .bind(tripId, user.id)
+        .first<TripParticipantOwnerRow>();
+      if (!participant) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'Trip participation not found' } }, 404);
+      }
+      if (participant.status !== 'completed') {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'You can only rate completed trips' } }, 400);
+      }
+
       await db
         .prepare('UPDATE trip_participants SET rating = ?, review_encrypted = ? WHERE trip_id = ? AND user_id = ?')
         .bind(rating, comment || null, tripId, user.id)
