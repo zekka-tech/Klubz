@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:38:43 UTC  
+Last updated: 2026-02-17 17:40:33 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:40 UTC` | codex | commit | `fdc1026` | hardened migration determinism, added `db:smoke` script, and wired migration-smoke CI job
+- `2026-02-17 17:40 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 17:38 UTC` | codex | action | migration-hardening | fixed `0004_performance_indexes.sql` to avoid non-existent schema assumptions (`sessions.refresh_token_hash`, `notifications` indexes)
 - `2026-02-17 17:37 UTC` | codex | action | ci-migration-gates | added `db:smoke` script and `migrations-smoke` CI job in `.github/workflows/ci.yml`
 - `2026-02-17 17:36 UTC` | codex | action | validation | local `db:smoke` blocked by sandbox networking (`listen EPERM`), while type-check/lint/test/build passed
