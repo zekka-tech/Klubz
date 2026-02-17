@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:15:04 UTC  
+Last updated: 2026-02-17 17:23:25 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (22/22)
+- `npm test`: PASS (30/30)
 - `npm run build`: PASS
 
 Repository state:
@@ -117,6 +117,9 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:23 UTC` | codex | action | ci-gates | added `.github/workflows/ci.yml` to enforce `npm ci`, type-check, lint, test, and build on push/PR
+- `2026-02-17 17:22 UTC` | codex | action | integration-hardening | expanded security integration tests for reject/cancel ownership, completed-only rating, and production webhook config guard
+- `2026-02-17 17:22 UTC` | codex | action | quality-gates | re-ran full gates (`type-check`, `lint`, `test`, `build`) all passing with 30 tests
 - `2026-02-17 17:15 UTC` | codex | action | test-hardening | added integration security suite (`tests/integration/security-hardening.test.ts`) and included integration tests in Vitest run
 - `2026-02-17 17:08 UTC` | codex | action | input-hardening | made auth schemas strict and added numeric bounds validation for payment intent amount
 - `2026-02-17 17:06 UTC` | codex | action | reliability-hardening | added idempotency-key replay protection on trip booking/offer write endpoints using KV

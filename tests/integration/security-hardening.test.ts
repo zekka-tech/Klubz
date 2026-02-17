@@ -171,6 +171,124 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
   });
 
+  test('trip booking reject rejects non-owner driver', async () => {
+    const token = await authToken(10, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 99 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'No seats left' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('trip cancel rejects non-owner driver', async () => {
+    const token = await authToken(12, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 44 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Emergency' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('trip rating rejects non-completed participation', async () => {
+    const token = await authToken(20, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, user_id, status FROM trip_participants') && kind === 'first') {
+        return { id: 1, user_id: 20, status: 'accepted' };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/rate',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rating: 5, comment: 'Great trip' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+  });
+
+  test('trip rating succeeds for completed participation', async () => {
+    const token = await authToken(20, 'user');
+    let ratingUpdated = false;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, user_id, status FROM trip_participants') && kind === 'first') {
+        return { id: 1, user_id: 20, status: 'completed' };
+      }
+      if (query.includes('UPDATE trip_participants SET rating') && kind === 'run') {
+        ratingUpdated = true;
+        return { success: true };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/rate',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rating: 4, comment: 'Solid ride' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(ratingUpdated).toBe(true);
+  });
+
+  test('webhook returns configuration error in production without webhook secret', async () => {
+    const token = await authToken(44, 'user');
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id: 'evt_missing_secret', type: 'payment_intent.succeeded', data: { object: {} } }),
+      },
+      { ...baseEnv, ENVIRONMENT: 'production', DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const bodyText = await res.text();
+    expect(bodyText).toContain('Internal Server Error');
+  });
+
   test('webhook replay is ignored on second identical event', async () => {
     const token = await authToken(44, 'user');
     const db = new MockDB(() => null);
