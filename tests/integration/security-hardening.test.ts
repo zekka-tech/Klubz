@@ -1,0 +1,209 @@
+import { describe, expect, test } from 'vitest';
+import app from '../../src/index';
+import { createToken } from '../../src/middleware/auth';
+import type { JWTPayload } from '../../src/types';
+
+type ResolverKind = 'first' | 'all' | 'run';
+type Resolver = (query: string, params: unknown[], kind: ResolverKind) => unknown;
+
+class MockStmt {
+  private params: unknown[] = [];
+
+  constructor(
+    private query: string,
+    private resolver: Resolver,
+  ) {}
+
+  bind(...values: unknown[]) {
+    this.params = values;
+    return this;
+  }
+
+  async first<T = unknown>(): Promise<T | null> {
+    const result = this.resolver(this.query, this.params, 'first');
+    return (result ?? null) as T | null;
+  }
+
+  async all<T = unknown>(): Promise<{ success: boolean; results?: T[] }> {
+    const result = this.resolver(this.query, this.params, 'all');
+    return { success: true, results: (result as T[]) ?? [] };
+  }
+
+  async run(): Promise<{ success: boolean; meta?: Record<string, unknown> }> {
+    const result = this.resolver(this.query, this.params, 'run');
+    return { success: true, meta: (result as Record<string, unknown>) ?? { last_row_id: 1 } };
+  }
+}
+
+class MockDB {
+  constructor(private resolver: Resolver) {}
+
+  prepare(query: string) {
+    return new MockStmt(query, this.resolver);
+  }
+
+  async batch<T = unknown>(statements: Array<{ first?: () => Promise<T | null>; all?: () => Promise<{ results?: T[] }> }>) {
+    const out: Array<{ success: boolean; results?: T[] }> = [];
+    for (const stmt of statements) {
+      if (stmt.all) {
+        const all = await stmt.all();
+        out.push({ success: true, results: all.results ?? [] });
+      } else if (stmt.first) {
+        const first = await stmt.first();
+        out.push({ success: true, results: first ? [first] : [] });
+      } else {
+        out.push({ success: true, results: [] });
+      }
+    }
+    return out;
+  }
+}
+
+class MockKV {
+  private store = new Map<string, string>();
+
+  async get(key: string, type?: 'text' | 'json') {
+    const raw = this.store.get(key) ?? null;
+    if (!raw) return null;
+    if (type === 'json') return JSON.parse(raw) as unknown;
+    return raw;
+  }
+
+  async put(key: string, value: string) {
+    this.store.set(key, value);
+  }
+
+  async delete(key: string) {
+    this.store.delete(key);
+  }
+
+  async list() {
+    return {
+      keys: Array.from(this.store.keys()).map((name) => ({ name })),
+      list_complete: true,
+      cursor: '',
+    };
+  }
+}
+
+const baseEnv = {
+  JWT_SECRET: 'integration-secret',
+  ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  STRIPE_SECRET_KEY: 'sk_test_dummy',
+  STRIPE_WEBHOOK_SECRET: '',
+  TWILIO_ACCOUNT_SID: '',
+  TWILIO_AUTH_TOKEN: '',
+  TWILIO_PHONE_NUMBER: '',
+  SENDGRID_API_KEY: '',
+  MAPBOX_ACCESS_TOKEN: '',
+  ENVIRONMENT: 'development',
+  APP_URL: 'http://localhost:3000',
+  API_VERSION: 'v1',
+  SESSIONS: new MockKV(),
+  RATE_LIMIT_KV: new MockKV(),
+} as const;
+
+async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' = 'user') {
+  const now = Math.floor(Date.now() / 1000);
+  const payload: JWTPayload = {
+    sub: userId,
+    email: `user${userId}@example.com`,
+    name: `User ${userId}`,
+    role,
+    iat: now,
+    exp: now + 3600,
+    type: 'access',
+  };
+  return createToken(payload, baseEnv.JWT_SECRET);
+}
+
+describe('Security hardening integration flows', () => {
+  test('registration persists role=user server-side', async () => {
+    let insertedRole: unknown = null;
+
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('SELECT id FROM users') && kind === 'first') return null;
+      if (query.includes('INSERT INTO users') && kind === 'run') {
+        insertedRole = params[6];
+        return { last_row_id: 42 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/auth/register',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'new@example.com',
+          password: 'StrongPass123!',
+          name: 'New User',
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(insertedRole).toBe('user');
+  });
+
+  test('trip booking accept rejects non-owner driver', async () => {
+    const token = await authToken(10, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 99 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('webhook replay is ignored on second identical event', async () => {
+    const token = await authToken(44, 'user');
+    const db = new MockDB(() => null);
+    const cache = new MockKV();
+    const event = {
+      id: 'evt_replay_1',
+      type: 'payment_intent.canceled',
+      data: { object: { id: 'pi_1', amount: 1200, metadata: { bookingId: '77' } } },
+    };
+
+    const first = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(event),
+      },
+      { ...baseEnv, DB: db, CACHE: cache },
+    );
+    expect(first.status).toBe(200);
+
+    const second = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(event),
+      },
+      { ...baseEnv, DB: db, CACHE: cache },
+    );
+
+    expect(second.status).toBe(200);
+    const body = (await second.json()) as { replay?: boolean };
+    expect(body.replay).toBe(true);
+  });
+});
