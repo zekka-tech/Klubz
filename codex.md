@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:51:30 UTC  
+Last updated: 2026-02-17 17:52:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:51 UTC` | codex | commit | `c4c3e07` | implemented notifications API endpoints, in-app notification persistence hooks, and integration coverage
+- `2026-02-17 17:51 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 17:51 UTC` | codex | action | notification-api | added `/api/notifications` route with list, mark-read, and read-all endpoints
 - `2026-02-17 17:50 UTC` | codex | action | notification-persistence | added `src/lib/notificationStore.ts` and wired in-app persistence to trip booking/accept/reject/cancel plus payment succeeded/failed flows
 - `2026-02-17 17:50 UTC` | codex | action | integration-tests | added `tests/integration/notifications-routes.test.ts` with route-level authz/pagination/read-state coverage
