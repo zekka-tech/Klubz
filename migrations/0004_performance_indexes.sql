@@ -2,6 +2,11 @@
 -- Date: 2026-02-12
 -- Purpose: Add indexes to optimize common query patterns
 
+-- NOTE:
+-- This migration must be safe on a clean database created from 0001 + 0002 + 0003*.
+-- Some legacy environments may not have optional feature tables/columns yet.
+-- We only create indexes for schema that is guaranteed by prior migrations.
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Trip Indexes
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -66,8 +71,9 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires
 ON sessions(expires_at);
 
 -- Optimize refresh token lookups
+-- Current schema guarantees token_hash. refresh_token_hash may not exist on all DBs.
 CREATE INDEX IF NOT EXISTS idx_sessions_refresh_token
-ON sessions(refresh_token_hash);
+ON sessions(token_hash);
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Audit Log Indexes
@@ -109,13 +115,9 @@ ON rider_requests(rider_id, status);
 -- Notification Indexes
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- Optimize pending notifications queries
-CREATE INDEX IF NOT EXISTS idx_notifications_user_status
-ON notifications(user_id, status, created_at DESC);
-
--- Optimize notification type queries
-CREATE INDEX IF NOT EXISTS idx_notifications_type
-ON notifications(notification_type, status);
+-- Notification indexes intentionally omitted here because notifications table
+-- is not part of the base schema yet. Add in a dedicated migration when the
+-- notifications table is introduced.
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Data Retention Indexes

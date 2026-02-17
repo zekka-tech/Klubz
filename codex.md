@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:25:48 UTC  
+Last updated: 2026-02-17 17:38:43 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -24,6 +24,7 @@ Quality gate status (latest run):
 - `npm run lint`: PASS
 - `npm test`: PASS (30/30)
 - `npm run build`: PASS
+- `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
 - Working tree clean
@@ -117,6 +118,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:38 UTC` | codex | action | migration-hardening | fixed `0004_performance_indexes.sql` to avoid non-existent schema assumptions (`sessions.refresh_token_hash`, `notifications` indexes)
+- `2026-02-17 17:37 UTC` | codex | action | ci-migration-gates | added `db:smoke` script and `migrations-smoke` CI job in `.github/workflows/ci.yml`
+- `2026-02-17 17:36 UTC` | codex | action | validation | local `db:smoke` blocked by sandbox networking (`listen EPERM`), while type-check/lint/test/build passed
+- `2026-02-17 17:36 UTC` | codex | action | docs | updated `MIGRATION_GUIDE.md` with migration safety notes and smoke-check command
 - `2026-02-17 17:25 UTC` | codex | commit | `160a2ca` | guaranteed structured JSON error responses via global app handler and aligned integration assertions
 - `2026-02-17 17:25 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 17:25 UTC` | codex | action | error-handling-hardening | added global `app.onError` JSON response handler to guarantee structured API errors for thrown route exceptions

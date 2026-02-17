@@ -5,6 +5,13 @@
 1. **0003_add_payment_fields.sql** - Adds payment tracking to trip_participants
 2. **0004_performance_indexes.sql** - Adds 30+ performance indexes
 
+## Determinism and Safety Notes
+
+- `0004_performance_indexes.sql` now indexes only schema guaranteed by prior migrations.
+- Notification indexes were removed from `0004` until a dedicated notifications-table migration exists.
+- Session token index uses `sessions.token_hash` (present in base schema).
+- Legacy duplicate prefix (`0003_*`) is retained for backward compatibility with already-applied environments.
+
 ## Apply Migrations
 
 ### Option 1: Local Development Database
@@ -15,6 +22,9 @@ npx wrangler d1 create klubz-production --local
 
 # Apply all migrations locally
 npx wrangler d1 migrations apply klubz-production --local
+
+# Smoke test (apply + schema verification)
+npm run db:smoke
 
 # Verify migrations
 npx wrangler d1 execute klubz-production --local \
@@ -148,7 +158,7 @@ Migrations are applied in order:
 1. 0001_initial_schema.sql (existing)
 2. 0002_sample_data.sql (existing)
 3. 0003_smart_matching.sql (existing)
-4. **0003_add_payment_fields.sql (NEW)**
-5. **0004_performance_indexes.sql (NEW)**
+4. 0003_add_payment_fields.sql (existing)
+5. 0004_performance_indexes.sql (existing)
 
 Note: Multiple files numbered 0003 exist. Wrangler applies them alphabetically.
