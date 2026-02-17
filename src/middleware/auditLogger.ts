@@ -20,7 +20,7 @@ export interface AuditLog {
   userAgent: string
   success: boolean
   error?: string
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 export const auditLogger = () => {
@@ -45,7 +45,7 @@ export const logAuditEvent = async (
     resourceId: string | number
     success: boolean
     error?: string
-    metadata?: Record<string, any>
+    metadata?: Record<string, unknown>
   }
 ) => {
   const rawIP = c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown';

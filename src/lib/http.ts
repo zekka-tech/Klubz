@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 import { anonymizeIP } from './privacy';
+type JsonResponseInit = Parameters<Context['json']>[1];
 
 /**
  * Extract client IP address from request headers
@@ -65,7 +66,7 @@ export function errorResponse(
         timestamp: new Date().toISOString(),
       },
     },
-    status as any // Type assertion for Hono status codes
+    status as JsonResponseInit
   );
 }
 
@@ -73,5 +74,5 @@ export function errorResponse(
  * Standard success response format
  */
 export function successResponse<T>(c: Context, data: T, status: number = 200) {
-  return c.json(data, status as any); // Type assertion for Hono status codes
+  return c.json(data, status as JsonResponseInit);
 }

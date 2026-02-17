@@ -39,12 +39,12 @@ const registerSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /** Returns true if the error is a "table not found" D1 error — signals dev mode without migrations */
-function isTableMissing(err: any): boolean {
-  const msg = String(err?.message || '');
+function isTableMissing(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err || '');
   return msg.includes('no such table') || msg.includes('SQLITE_ERROR');
 }
 
-function getJWTSecret(c: any): string {
+function getJWTSecret(c: { env?: { JWT_SECRET?: string } }): string {
   const secret = c.env?.JWT_SECRET;
   if (!secret) {
     logger.fatal('JWT_SECRET not configured - application cannot start securely');
@@ -62,7 +62,7 @@ export const authRoutes = new Hono<AppEnv>();
 // ── Login ──────────────────────────────────────────────────────────────────
 
 authRoutes.post('/login', async (c) => {
-  let body: any;
+  let body: unknown;
   try {
     body = await c.req.json();
   } catch {
@@ -159,9 +159,11 @@ authRoutes.post('/login', async (c) => {
           mfaEnabled: !!user.mfa_enabled,
         },
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (!isTableMissing(err)) {
-        logger.error('Login DB error', err);
+        logger.error('Login DB error', err instanceof Error ? err : undefined, {
+          error: err instanceof Error ? err.message : String(err),
+        });
         return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Login failed' } }, 500);
       }
       // Table missing → fall through to dev fallback
@@ -185,7 +187,7 @@ authRoutes.post('/login', async (c) => {
 // ── Register ───────────────────────────────────────────────────────────────
 
 authRoutes.post('/register', async (c) => {
-  let body: any;
+  let body: unknown;
   try {
     body = await c.req.json();
   } catch {
@@ -243,10 +245,11 @@ authRoutes.post('/register', async (c) => {
         message: 'Registration successful',
         userId,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (!isTableMissing(err)) {
-        logger.error('Registration DB error', err);
-        if (err.message?.includes('UNIQUE')) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('Registration DB error', err instanceof Error ? err : undefined, { error: message });
+        if (message.includes('UNIQUE')) {
           return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Email already registered' } }, 409);
         }
         return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Registration failed' } }, 500);
@@ -281,14 +284,17 @@ authRoutes.post('/mfa/verify', async (c) => {
 // ── Token Refresh ──────────────────────────────────────────────────────────
 
 authRoutes.post('/refresh', async (c) => {
-  let body: any;
+  let body: unknown;
   try {
     body = await c.req.json();
   } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON body' } }, 400);
   }
 
-  const { refreshToken } = body || {};
+  const refreshToken =
+    typeof body === 'object' && body !== null && 'refreshToken' in body
+      ? (body as { refreshToken?: string }).refreshToken
+      : undefined;
   if (!refreshToken) {
     return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Refresh token required' } }, 401);
   }

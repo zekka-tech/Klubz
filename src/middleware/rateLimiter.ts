@@ -91,11 +91,11 @@ const inMemoryStore = new TTLMap(10_000);
 // ---------------------------------------------------------------------------
 
 async function getFromKV(
-  kv: any, // KVNamespace
+  kv: AppEnv['Bindings']['RATE_LIMIT_KV'],
   key: string,
 ): Promise<RateLimitEntry | null> {
   try {
-    const raw = await kv.get(key, { type: 'json' });
+    const raw = await kv.get<RateLimitEntry>(key, 'json');
     if (!raw) return null;
     const entry = raw as RateLimitEntry;
     if (Date.now() > entry.resetTime) return null;
@@ -106,7 +106,7 @@ async function getFromKV(
 }
 
 async function putToKV(
-  kv: any,
+  kv: AppEnv['Bindings']['RATE_LIMIT_KV'],
   key: string,
   entry: RateLimitEntry,
   windowMs: number,

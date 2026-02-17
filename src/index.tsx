@@ -9,7 +9,9 @@ import { paymentRoutes } from './routes/payments'
 import { eventBus } from './lib/eventBus'
 import { logger } from './lib/logger'
 import { anonymizeIP } from './lib/privacy'
+import type { Context } from 'hono'
 import type { AppEnv } from './types'
+type AppJsonInit = Parameters<Context<AppEnv>['json']>[1]
 
 const app = new Hono<AppEnv>()
 
@@ -115,30 +117,37 @@ app.use('*', async (c, next) => {
 app.use('*', async (c, next) => {
   try {
     await next()
-  } catch (err: any) {
+  } catch (err: unknown) {
     const requestId = c.req.header('X-Request-ID') || crypto.randomUUID()
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    const stack = err instanceof Error ? err.stack?.slice(0, 500) : undefined
+    const status = typeof err === 'object' && err !== null && 'status' in err
+      ? Number((err as { status?: unknown }).status) || 500
+      : 500
+    const code = typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code || 'INTERNAL_ERROR')
+      : 'INTERNAL_ERROR'
 
     console.error(JSON.stringify({
       level: 'error',
       type: 'unhandled',
       requestId,
-      error: err.message,
-      stack: err.stack?.slice(0, 500),
+      error: message,
+      stack,
       ts: new Date().toISOString(),
     }))
 
-    const status = err.status || 500
     const isProd = c.env?.ENVIRONMENT === 'production'
 
     return c.json({
       error: {
-        code: err.code || 'INTERNAL_ERROR',
-        message: isProd && status === 500 ? 'Internal server error' : err.message,
+        code,
+        message: isProd && status === 500 ? 'Internal server error' : message,
         status,
         requestId,
         timestamp: new Date().toISOString(),
       }
-    }, status)
+    }, status as AppJsonInit)
   }
 })
 

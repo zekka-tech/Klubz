@@ -9,6 +9,7 @@ import type { Context, Next } from 'hono';
 import type { AppEnv } from '../types';
 import { logger } from '../lib/logger';
 import { AppError } from '../lib/errors';
+type JsonInit = Parameters<Context<AppEnv>['json']>[1];
 
 export const errorHandler = () => {
   return async (c: Context<AppEnv>, next: Next) => {
@@ -38,7 +39,7 @@ export const errorHandler = () => {
             requestId: c.get('requestId'),
             timestamp: new Date().toISOString(),
           }
-        }, err.status as any);
+        }, err.status as JsonInit);
       }
 
       // Handle unknown errors - don't expose internals
