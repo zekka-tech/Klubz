@@ -102,6 +102,28 @@ async function authToken(userId: number) {
 }
 
 describe('Notification route integration flows', () => {
+  test('unauthorized requests are rejected for notifications routes', async () => {
+    const db = new MockDB(() => null);
+    const env = { ...baseEnv, DB: db, CACHE: new MockKV() };
+
+    const noAuthList = await app.request('/api/notifications', {}, env);
+    expect(noAuthList.status).toBe(401);
+
+    const invalidAuthRead = await app.request(
+      '/api/notifications/1/read',
+      { method: 'PATCH', headers: { Authorization: 'Bearer invalid-token' } },
+      env,
+    );
+    expect(invalidAuthRead.status).toBe(401);
+
+    const noAuthReadAll = await app.request(
+      '/api/notifications/read-all',
+      { method: 'POST' },
+      env,
+    );
+    expect(noAuthReadAll.status).toBe(401);
+  });
+
   test('lists user notifications with pagination and metadata parsing', async () => {
     const token = await authToken(5);
     const db = new MockDB((query, _params, kind) => {
