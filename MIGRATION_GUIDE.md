@@ -4,11 +4,12 @@
 
 1. **0003_add_payment_fields.sql** - Adds payment tracking to trip_participants
 2. **0004_performance_indexes.sql** - Adds 30+ performance indexes
+3. **0005_notifications.sql** - Adds notifications table and notification indexes
 
 ## Determinism and Safety Notes
 
 - `0004_performance_indexes.sql` now indexes only schema guaranteed by prior migrations.
-- Notification indexes were removed from `0004` until a dedicated notifications-table migration exists.
+- Notification indexes were moved into `0005_notifications.sql` together with table creation.
 - Session token index uses `sessions.token_hash` (present in base schema).
 - Legacy duplicate prefix (`0003_*`) is retained for backward compatibility with already-applied environments.
 
@@ -66,6 +67,7 @@ npx wrangler d1 execute klubz-production --remote \
 5. Upload migration files:
    - migrations/0003_add_payment_fields.sql
    - migrations/0004_performance_indexes.sql
+   - migrations/0005_notifications.sql
 6. Click "Apply Migrations"
 
 ## Migration Details
@@ -91,7 +93,19 @@ npx wrangler d1 execute klubz-production --remote \
 - Sessions (user_id, expiration, refresh tokens)
 - Audit logs (user_id, entity lookups, timestamps)
 - Matching engine (bounding boxes, departure times)
-- Notifications (user_id, status, type)
+```
+
+### 0005_notifications.sql
+```sql
+-- Adds notifications table with:
+- user_id, trip_id references
+- notification_type, channel, status lifecycle
+- message payload + metadata fields
+
+-- Indexes:
+- idx_notifications_user_status
+- idx_notifications_type
+- idx_notifications_trip
 ```
 
 ## Verification Commands
@@ -160,5 +174,6 @@ Migrations are applied in order:
 3. 0003_smart_matching.sql (existing)
 4. 0003_add_payment_fields.sql (existing)
 5. 0004_performance_indexes.sql (existing)
+6. 0005_notifications.sql (new)
 
 Note: Multiple files numbered 0003 exist. Wrangler applies them alphabetically.

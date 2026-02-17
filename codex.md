@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:40:33 UTC  
+Last updated: 2026-02-17 17:46:41 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -118,6 +118,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:46 UTC` | codex | action | migration-feature | added `0005_notifications.sql` with notifications table, constraints, and indexes (`idx_notifications_user_status`, `idx_notifications_type`, `idx_notifications_trip`)
+- `2026-02-17 17:46 UTC` | codex | action | migration-smoke | extended `scripts/db-smoke.sh` to verify notifications table and indexes
+- `2026-02-17 17:45 UTC` | codex | action | docs | updated `MIGRATION_GUIDE.md` with 0005 migration details/order and deployment instructions
+- `2026-02-17 17:45 UTC` | codex | action | quality-gates | re-ran type-check/lint/test/build all passing; local `db:smoke` remains sandbox-blocked (`listen EPERM 127.0.0.1`)
 - `2026-02-17 17:40 UTC` | codex | commit | `fdc1026` | hardened migration determinism, added `db:smoke` script, and wired migration-smoke CI job
 - `2026-02-17 17:40 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 17:38 UTC` | codex | action | migration-hardening | fixed `0004_performance_indexes.sql` to avoid non-existent schema assumptions (`sessions.refresh_token_hash`, `notifications` indexes)
