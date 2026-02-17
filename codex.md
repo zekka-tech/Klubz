@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 18:29:36 UTC  
+Last updated: 2026-02-17 18:30:07 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 18:30 UTC` | codex | commit | `e5b56d5` | added allow-path notification preference enforcement coverage (SMS sent when enabled, payment notification persisted when enabled)
+- `2026-02-17 18:30 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 18:29 UTC` | codex | action | integration-tests | expanded notification preference enforcement suite with positive-path assertions for SMS delivery + notification persistence when preferences are enabled
 - `2026-02-17 18:29 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (41 tests)
 - `2026-02-17 18:24 UTC` | codex | commit | `2293ec4` | extended preference enforcement coverage for SMS-disabled delivery path under Twilio-enabled branch
