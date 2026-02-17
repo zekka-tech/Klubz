@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 18:02:05 UTC  
+Last updated: 2026-02-17 18:08:32 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (36/36)
+- `npm test`: PASS (38/38)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 18:08 UTC` | codex | action | integration-tests | added `tests/integration/notification-preferences-enforcement.test.ts` to verify notifications are not persisted when `tripUpdates=false` for trip acceptance and payment success flows
+- `2026-02-17 18:08 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (38 tests)
 - `2026-02-17 18:02 UTC` | codex | commit | `14dbefe` | persisted user preferences and enforced notification preference checks across trip/payment flows
 - `2026-02-17 18:02 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 18:01 UTC` | codex | action | preference-enforcement | enforced user notification preferences (`tripUpdates`, `smsNotifications`) across trip and payment notification persistence/sending paths
