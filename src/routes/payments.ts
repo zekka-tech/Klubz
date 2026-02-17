@@ -96,8 +96,11 @@ paymentRoutes.post('/intent', async (c) => {
   const body = await c.req.json<CreateIntentBody>();
   const { tripId, amount } = body;
 
-  if (!tripId || !amount) {
+  if (!tripId || typeof amount !== 'number') {
     throw new ValidationError('tripId and amount are required');
+  }
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 100000) {
+    throw new ValidationError('amount must be a valid number between 0 and 100000');
   }
 
   const stripe = getStripe(c);
