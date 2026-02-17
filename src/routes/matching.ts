@@ -37,12 +37,10 @@ import type { AppEnv } from '../types';
 import {
   matchRiderToDrivers,
   optimizePool,
-  batchMatchRiders,
   MatchingRepository,
   DEFAULT_MATCH_CONFIG,
 } from '../lib/matching';
 import type {
-  MatchConfig,
   RiderRequest,
   GeoPoint,
   FindMatchesResponse,
@@ -710,8 +708,6 @@ export function createMatchingRoutes() {
    * GET /stats - Matching statistics
    */
   app.get('/stats', async (c) => {
-    const repo = getRepo(c);
-
     // These would be real aggregation queries in production
     const stats = {
       totalDriverTrips: 0,

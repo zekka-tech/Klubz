@@ -1,5 +1,4 @@
 import { Hono } from 'hono'
-import { renderer } from './renderer'
 import { createMatchingRoutes } from './routes/matching'
 import { authRoutes } from './routes/auth'
 import { userRoutes } from './routes/users'

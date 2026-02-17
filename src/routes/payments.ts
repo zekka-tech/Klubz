@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import Stripe from 'stripe';
 import { authMiddleware } from '../middleware/auth';
 import type { AppEnv, AuthUser } from '../types';
 import { getDB } from '../lib/db';
@@ -15,7 +16,6 @@ paymentRoutes.use('*', authMiddleware());
  * Get Stripe instance if configured
  */
 function getStripe(c: any) {
-  const Stripe = require('stripe');
   if (!c.env?.STRIPE_SECRET_KEY) {
     return null;
   }

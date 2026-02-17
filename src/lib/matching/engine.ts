@@ -22,8 +22,6 @@ import type {
   MatchResult,
   MatchConfig,
   ScoreBreakdown,
-  BoundingBox,
-  GeoPoint,
 } from './types';
 import { DEFAULT_MATCH_CONFIG } from './types';
 import {
@@ -31,8 +29,6 @@ import {
   minDistanceToRoute,
   isInsideBoundingBox,
   padBoundingBox,
-  buildBoundingBox,
-  isPickupBeforeDropoff,
   estimateDetourKm,
   estimateDetourMinutes,
   estimateCarbonSavedKg,

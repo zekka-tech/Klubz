@@ -25,16 +25,11 @@ export interface AuditLog {
 
 export const auditLogger = () => {
   return async (c: Context<AppEnv>, next: Next) => {
-    const startTime = Date.now()
     const requestId = c.req.header('X-Request-ID') || crypto.randomUUID()
 
     c.header('X-Request-ID', requestId)
 
-    try {
-      await next()
-    } catch (error: any) {
-      throw error
-    }
+    await next()
   }
 }
 

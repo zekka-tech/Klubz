@@ -8,8 +8,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
-import { getDB, getDBOptional } from '../lib/db';
-import { getIP, getUserAgent } from '../lib/http';
+import { getDB } from '../lib/db';
 
 export const monitoringRoutes = new Hono<AppEnv>();
 

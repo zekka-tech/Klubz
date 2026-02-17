@@ -31,8 +31,6 @@ const ALGORITHM = 'AES-GCM';
 const KEY_LENGTH = 256;
 const IV_LENGTH = 12; // 96 bits recommended for AES-GCM
 const ENCRYPTION_VERSION = 1;
-const PBKDF2_ITERATIONS = 100_000;
-const SALT_LENGTH = 16;
 
 // ---------------------------------------------------------------------------
 // Key Derivation

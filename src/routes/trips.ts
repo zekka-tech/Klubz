@@ -9,8 +9,7 @@ import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { eventBus } from '../lib/eventBus';
-import { getDB, getDBOptional } from '../lib/db';
-import { getIP, getUserAgent } from '../lib/http';
+import { getDB } from '../lib/db';
 import { matchRiderToDrivers } from '../lib/matching/engine';
 import type { RiderRequest, DriverTrip } from '../lib/matching/types';
 import { ValidationError } from '../lib/errors';
@@ -546,7 +545,7 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
   const user = c.get('user') as AuthUser;
   const tripId = c.req.param('tripId');
   let body: any = {};
-  try { body = await c.req.json(); } catch {}
+  try { body = await c.req.json(); } catch { body = {}; }
 
   const db = getDB(c);
   if (db) {

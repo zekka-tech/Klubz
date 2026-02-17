@@ -9,12 +9,11 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../types';
-import { createToken, verifyToken, issueTokenPair, AuthError } from '../middleware/auth';
+import { createToken, verifyToken, issueTokenPair } from '../middleware/auth';
 import { hashPassword, verifyPassword, hashForLookup, isLegacyHash } from '../lib/encryption';
 import { logger } from '../lib/logger';
-import { getDB, getDBOptional } from '../lib/db';
-import { getIP, getUserAgent, getAnonymizedIP } from '../lib/http';
-import { ValidationError, AuthenticationError, ConflictError, ServiceUnavailableError } from '../lib/errors';
+import { getDB } from '../lib/db';
+import { getAnonymizedIP, getUserAgent } from '../lib/http';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -33,11 +32,6 @@ const registerSchema = z.object({
   phone: z.string().optional(),
   role: z.enum(['user', 'admin']).default('user'),
   organizationId: z.string().optional(),
-});
-
-const mfaSchema = z.object({
-  token: z.string().length(6),
-  backupCode: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -203,7 +197,7 @@ authRoutes.post('/register', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Missing required fields' } }, 400);
   }
 
-  const { email, password, name, phone, role, organizationId } = parsed.data;
+  const { email, password, name, phone, role } = parsed.data;
   const db = getDB(c);
 
   // ── Real D1 path ──

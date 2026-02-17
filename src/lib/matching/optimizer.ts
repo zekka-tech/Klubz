@@ -27,9 +27,6 @@ import type {
 import { DEFAULT_MATCH_CONFIG } from './types';
 import {
   haversine,
-  estimateDetourKm,
-  estimateDetourMinutes,
-  estimateCarbonSavedKg,
   minDistanceToRoute,
 } from './geo';
 
@@ -256,7 +253,7 @@ export function optimizeMultiDriverPools(
 ): PoolAssignment[] {
   const pools: PoolAssignment[] = [];
 
-  for (const [driverTripId, { driver, matches }] of driverMatches) {
+  for (const [, { driver, matches }] of driverMatches) {
     const pool = optimizePool(driver, matches, riderMap, config);
     if (pool) {
       pools.push(pool);
@@ -292,7 +289,7 @@ export function assignRidersToDrivers(
   // Step 1: Group matches by driver
   const driverGroups = new Map<string, { driver: DriverTrip; matches: MatchResult[] }>();
 
-  for (const [riderId, matches] of riderMatches) {
+  for (const [, matches] of riderMatches) {
     for (const match of matches) {
       const driver = drivers.get(match.driverTripId);
       if (!driver) continue;

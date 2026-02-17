@@ -34,7 +34,6 @@ export function csrfProtection() {
 
     // Check Origin/Referer for same-origin
     const origin = c.req.header('Origin') || ''
-    const referer = c.req.header('Referer') || ''
     const host = c.req.header('Host') || ''
 
     if (origin) {

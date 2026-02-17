@@ -9,7 +9,7 @@ import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { eventBus } from '../lib/eventBus';
-import { getDB, getDBOptional } from '../lib/db';
+import { getDB } from '../lib/db';
 import { getIP, getUserAgent } from '../lib/http';
 import { decrypt, hashForLookup } from '../lib/encryption';
 import { AppError, ValidationError } from '../lib/errors';
@@ -118,7 +118,7 @@ userRoutes.put('/profile', async (c) => {
   if (body.name && body.name.length < 2) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Name must be at least 2 characters' } }, 400);
   }
-  if (body.phone && !/^\+?[\d\s\-\(\)]+$/.test(body.phone)) {
+  if (body.phone && !/^\+?[\d\s\-()]+$/.test(body.phone)) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid phone number format' } }, 400);
   }
 

@@ -4,7 +4,7 @@
  * Workers-compatible HTTP-based integrations (no Node SDKs).
  */
 
-import type { Bindings, Notification, NotificationChannel } from '../types';
+import type { Bindings } from '../types';
 import { logger } from '../lib/logger';
 
 // ---------------------------------------------------------------------------

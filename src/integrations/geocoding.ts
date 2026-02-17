@@ -5,7 +5,6 @@
  */
 
 import type { Bindings, GeocodingResult, RouteResult } from '../types';
-import { logger } from '../lib/logger';
 
 export class GeoService {
   private accessToken: string;
