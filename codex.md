@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 16:54:52 UTC  
+Last updated: 2026-02-17 16:56:25 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -117,6 +117,7 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 16:56 UTC` | codex | action | security-hardening | started critical fixes (registration role escalation + production webhook secret enforcement)
 - `2026-02-17 18:48 UTC` | codex | commit | `e2658f6` | unknown-based DB typing + explicit row models
 - `2026-02-17 18:49 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 18:42 UTC` | codex | commit | `17d7d89` | typed route model refactor wave

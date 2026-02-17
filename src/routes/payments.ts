@@ -151,6 +151,15 @@ paymentRoutes.post('/webhook', async (c) => {
 
   const body = await c.req.text();
   const webhookSecret = c.env?.STRIPE_WEBHOOK_SECRET;
+  const isProduction = c.env?.ENVIRONMENT === 'production';
+
+  if (!webhookSecret && isProduction) {
+    throw new AppError(
+      'Stripe webhook secret is required in production',
+      'CONFIGURATION_ERROR',
+      500,
+    );
+  }
 
   if (!webhookSecret) {
     logger.warn('Stripe webhook secret not configured, skipping signature verification');

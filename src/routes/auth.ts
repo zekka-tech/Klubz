@@ -30,7 +30,6 @@ const registerSchema = z.object({
   password: z.string().min(8),
   name: z.string().min(2),
   phone: z.string().optional(),
-  role: z.enum(['user', 'admin']).default('user'),
   organizationId: z.string().optional(),
 });
 
@@ -210,7 +209,7 @@ authRoutes.post('/register', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Missing required fields' } }, 400);
   }
 
-  const { email, password, name, phone, role } = parsed.data;
+  const { email, password, name, phone } = parsed.data;
   const db = getDB(c);
 
   // ── Real D1 path ──
@@ -239,7 +238,7 @@ authRoutes.post('/register', async (c) => {
           `INSERT INTO users (email, email_hash, password_hash, first_name_encrypted, last_name_encrypted, phone_encrypted, role, is_active, email_verified, created_ip)
            VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, FALSE, ?)`
         )
-        .bind(email, emailHash, passwordHash, firstName, lastName, phone || null, role, ip)
+        .bind(email, emailHash, passwordHash, firstName, lastName, phone || null, 'user', ip)
         .run();
 
       const userId = result?.meta?.last_row_id ?? 0;
