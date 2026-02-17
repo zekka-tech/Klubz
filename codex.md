@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 18:01:40 UTC  
+Last updated: 2026-02-17 18:02:05 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 18:02 UTC` | codex | commit | `14dbefe` | persisted user preferences and enforced notification preference checks across trip/payment flows
+- `2026-02-17 18:02 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 18:01 UTC` | codex | action | preference-enforcement | enforced user notification preferences (`tripUpdates`, `smsNotifications`) across trip and payment notification persistence/sending paths
 - `2026-02-17 18:00 UTC` | codex | action | preference-persistence | added `0006_user_preferences.sql`, `src/lib/userPreferences.ts`, and persisted `GET/PUT /api/users/preferences` backed by D1
 - `2026-02-17 18:00 UTC` | codex | action | integration-tests | added `tests/integration/user-preferences.test.ts` for defaults and upsert behavior
