@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 18:36:08 UTC  
+Last updated: 2026-02-17 18:44:30 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (42/42)
+- `npm test`: PASS (44/44)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 18:44 UTC` | codex | action | integration-tests | expanded notification lifecycle coverage with status-filter tests and mark-read->query-read state transition assertions
+- `2026-02-17 18:44 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (44 tests)
 - `2026-02-17 18:36 UTC` | codex | commit | `0759a65` | added stateful user preferences persistence-contract integration test and updated quality status
 - `2026-02-17 18:36 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 18:35 UTC` | codex | action | integration-tests | added stateful `PUT -> GET` persistence-contract test for `/api/users/preferences` across separate requests

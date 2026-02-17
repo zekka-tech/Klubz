@@ -204,4 +204,92 @@ describe('Notification route integration flows', () => {
     expect(body.updated).toBe(3);
     expect(updateCalled).toBe(true);
   });
+
+  test('status filter returns only matching notifications', async () => {
+    const token = await authToken(5);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('COUNT(*) as total') && kind === 'first') return { total: 1 };
+      if (query.includes('FROM notifications') && kind === 'all') {
+        return [{
+          id: 21,
+          user_id: 5,
+          trip_id: 88,
+          notification_type: 'trip_cancelled',
+          channel: 'in_app',
+          status: 'read',
+          subject: 'Trip cancelled',
+          message: 'Your trip was cancelled.',
+          metadata: null,
+          sent_at: '2026-02-17T10:00:00Z',
+          delivered_at: null,
+          read_at: '2026-02-17T10:05:00Z',
+          created_at: '2026-02-17T10:00:00Z',
+        }];
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/notifications?status=read&limit=10&offset=0',
+      { headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ id: number; status: string }> };
+    expect(body.data.length).toBe(1);
+    expect(body.data[0]?.id).toBe(21);
+    expect(body.data[0]?.status).toBe('read');
+  });
+
+  test('lifecycle: mark as read then query read notifications', async () => {
+    const token = await authToken(13);
+    const state = { read: false };
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id FROM notifications') && kind === 'first') return { id: 7 };
+      if (query.includes("SET status = 'read'") && kind === 'run') {
+        state.read = true;
+        return { ok: true };
+      }
+      if (query.includes('COUNT(*) as total') && kind === 'first') {
+        return { total: state.read ? 1 : 0 };
+      }
+      if (query.includes('FROM notifications') && kind === 'all') {
+        return state.read ? [{
+          id: 7,
+          user_id: 13,
+          trip_id: 10,
+          notification_type: 'booking_accepted',
+          channel: 'in_app',
+          status: 'read',
+          subject: 'Booking accepted',
+          message: 'Accepted.',
+          metadata: null,
+          sent_at: '2026-02-17T10:00:00Z',
+          delivered_at: null,
+          read_at: '2026-02-17T10:10:00Z',
+          created_at: '2026-02-17T10:00:00Z',
+        }] : [];
+      }
+      return null;
+    });
+
+    const markRead = await app.request(
+      '/api/notifications/7/read',
+      { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+    expect(markRead.status).toBe(200);
+
+    const readList = await app.request(
+      '/api/notifications?status=read&limit=10&offset=0',
+      { headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+    expect(readList.status).toBe(200);
+    const body = (await readList.json()) as { data: Array<{ id: number; status: string }>; pagination: { total: number } };
+    expect(body.pagination.total).toBe(1);
+    expect(body.data[0]?.id).toBe(7);
+    expect(body.data[0]?.status).toBe('read');
+  });
 });
