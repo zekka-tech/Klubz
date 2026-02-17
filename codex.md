@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:46:41 UTC  
+Last updated: 2026-02-17 17:46:59 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 17:46 UTC` | codex | commit | `98a044b` | added notifications schema migration and expanded migration smoke verification
+- `2026-02-17 17:46 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 17:46 UTC` | codex | action | migration-feature | added `0005_notifications.sql` with notifications table, constraints, and indexes (`idx_notifications_user_status`, `idx_notifications_type`, `idx_notifications_trip`)
 - `2026-02-17 17:46 UTC` | codex | action | migration-smoke | extended `scripts/db-smoke.sh` to verify notifications table and indexes
 - `2026-02-17 17:45 UTC` | codex | action | docs | updated `MIGRATION_GUIDE.md` with 0005 migration details/order and deployment instructions
