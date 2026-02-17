@@ -18,6 +18,7 @@ import { NotificationService } from '../integrations/notifications';
 import { decrypt } from '../lib/encryption';
 import { getCacheService } from '../lib/cache';
 import { createNotification } from '../lib/notificationStore';
+import { getUserNotificationPreferences } from '../lib/userPreferences';
 
 export const tripRoutes = new Hono<AppEnv>();
 
@@ -391,17 +392,21 @@ tripRoutes.post('/:tripId/book', async (c) => {
           `).bind(tripId).first<BookingTripDetailsRow>();
 
           if (tripDetails) {
+            const driverNotificationPrefs = await getUserNotificationPreferences(db, tripDetails.driver_id);
+
             try {
-              await createNotification(db, {
-                userId: tripDetails.driver_id,
-                tripId: Number.parseInt(tripId, 10),
-                notificationType: 'booking_request',
-                channel: 'in_app',
-                status: 'pending',
-                subject: 'New booking request',
-                message: `You received a new booking request for ${tripDetails.title || 'your trip'}.`,
-                metadata: { tripId, passengerId: user.id, passengers },
-              });
+              if (driverNotificationPrefs.tripUpdates) {
+                await createNotification(db, {
+                  userId: tripDetails.driver_id,
+                  tripId: Number.parseInt(tripId, 10),
+                  notificationType: 'booking_request',
+                  channel: 'in_app',
+                  status: 'pending',
+                  subject: 'New booking request',
+                  message: `You received a new booking request for ${tripDetails.title || 'your trip'}.`,
+                  metadata: { tripId, passengerId: user.id, passengers },
+                });
+              }
             } catch (err) {
               logger.warn('Failed to persist booking request notification', { error: err instanceof Error ? err.message : String(err) });
             }
@@ -418,10 +423,11 @@ tripRoutes.post('/:tripId/book', async (c) => {
               ? await decrypt(JSON.parse(riderDetails.last_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
               : '';
 
-            await notifications.sendEmail(
-              tripDetails.email,
-              'New Booking Request - Klubz',
-              `
+            if (driverNotificationPrefs.tripUpdates) {
+              await notifications.sendEmail(
+                tripDetails.email,
+                'New Booking Request - Klubz',
+                `
                 <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
                   <h1 style="color:#3B82F6">New Booking Request</h1>
                   <p>Hi ${driverFirstName}, you have a new booking request for your trip.</p>
@@ -435,8 +441,9 @@ tripRoutes.post('/:tripId/book', async (c) => {
                   <p>Log in to Klubz to accept or reject this booking.</p>
                 </div>
               `,
-              `New booking request from ${riderFirstName} ${riderLastName} for ${passengers} passenger(s).`
-            );
+                `New booking request from ${riderFirstName} ${riderLastName} for ${passengers} passenger(s).`
+              );
+            }
           }
         } catch (err) {
           logger.warn('Failed to send booking notification', { error: err instanceof Error ? err.message : String(err) });
@@ -603,17 +610,21 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
           `).bind(bookingId).first<AcceptBookingDetailsRow>();
 
           if (bookingDetails) {
+            const riderNotificationPrefs = await getUserNotificationPreferences(db, bookingDetails.user_id);
+
             try {
-              await createNotification(db, {
-                userId: bookingDetails.user_id,
-                tripId: Number.parseInt(tripId, 10),
-                notificationType: 'booking_accepted',
-                channel: 'in_app',
-                status: 'sent',
-                subject: 'Booking accepted',
-                message: `Your booking for ${bookingDetails.title || 'the trip'} was accepted.`,
-                metadata: { tripId, bookingId, acceptedBy: user.id },
-              });
+              if (riderNotificationPrefs.tripUpdates) {
+                await createNotification(db, {
+                  userId: bookingDetails.user_id,
+                  tripId: Number.parseInt(tripId, 10),
+                  notificationType: 'booking_accepted',
+                  channel: 'in_app',
+                  status: 'sent',
+                  subject: 'Booking accepted',
+                  message: `Your booking for ${bookingDetails.title || 'the trip'} was accepted.`,
+                  metadata: { tripId, bookingId, acceptedBy: user.id },
+                });
+              }
             } catch (err) {
               logger.warn('Failed to persist booking accepted notification', { error: err instanceof Error ? err.message : String(err) });
             }
@@ -627,7 +638,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
               : 'Your driver';
 
             // Send email confirmation
-            if (notifications.emailAvailable) {
+            if (notifications.emailAvailable && riderNotificationPrefs.tripUpdates) {
               await notifications.sendEmail(
                 bookingDetails.email,
                 'Trip Booking Confirmed - Klubz',
@@ -650,7 +661,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
             }
 
             // Send SMS confirmation if phone available
-            if (notifications.smsAvailable && bookingDetails.phone_encrypted) {
+            if (notifications.smsAvailable && bookingDetails.phone_encrypted && riderNotificationPrefs.tripUpdates && riderNotificationPrefs.smsNotifications) {
               try {
                 const phone = await decrypt(JSON.parse(bookingDetails.phone_encrypted).data, c.env.ENCRYPTION_KEY, bookingDetails.user_id.toString());
                 await notifications.sendSMS(
@@ -721,17 +732,21 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
           `).bind(bookingId).first<RejectRiderDetailsRow>();
 
           if (riderDetails) {
+            const riderNotificationPrefs = await getUserNotificationPreferences(db, riderDetails.user_id);
+
             try {
-              await createNotification(db, {
-                userId: riderDetails.user_id,
-                tripId: Number.parseInt(tripId, 10),
-                notificationType: 'booking_rejected',
-                channel: 'in_app',
-                status: 'sent',
-                subject: 'Booking request rejected',
-                message: `Your booking request for ${riderDetails.title || 'the trip'} was not accepted.`,
-                metadata: { tripId, bookingId, rejectedBy: user.id },
-              });
+              if (riderNotificationPrefs.tripUpdates) {
+                await createNotification(db, {
+                  userId: riderDetails.user_id,
+                  tripId: Number.parseInt(tripId, 10),
+                  notificationType: 'booking_rejected',
+                  channel: 'in_app',
+                  status: 'sent',
+                  subject: 'Booking request rejected',
+                  message: `Your booking request for ${riderDetails.title || 'the trip'} was not accepted.`,
+                  metadata: { tripId, bookingId, rejectedBy: user.id },
+                });
+              }
             } catch (err) {
               logger.warn('Failed to persist booking rejected notification', { error: err instanceof Error ? err.message : String(err) });
             }
@@ -742,10 +757,11 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
 
             const reason = (body as { reason?: string }).reason || 'The driver is unable to accommodate this booking';
 
-            await notifications.sendEmail(
-              riderDetails.email,
-              'Booking Request Update - Klubz',
-              `
+            if (riderNotificationPrefs.tripUpdates) {
+              await notifications.sendEmail(
+                riderDetails.email,
+                'Booking Request Update - Klubz',
+                `
                 <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
                   <h1 style="color:#6B7280">Booking Not Accepted</h1>
                   <p>Hi ${riderFirstName}, unfortunately your booking request was not accepted.</p>
@@ -757,8 +773,9 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
                   <p>Don't worry! You can search for other available trips on Klubz.</p>
                 </div>
               `,
-              `Your Klubz booking request was not accepted. Search for other trips at klubz.com`
-            );
+                `Your Klubz booking request was not accepted. Search for other trips at klubz.com`
+              );
+            }
           }
         } catch (err) {
           logger.warn('Failed to send rejection notification', { error: err instanceof Error ? err.message : String(err) });
@@ -819,17 +836,21 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
 
           for (const participant of (participants.results ?? []) as CancelParticipantRow[]) {
             try {
+              const participantNotificationPrefs = await getUserNotificationPreferences(db, participant.user_id);
+
               try {
-                await createNotification(db, {
-                  userId: participant.user_id,
-                  tripId: Number.parseInt(tripId, 10),
-                  notificationType: 'trip_cancelled',
-                  channel: 'in_app',
-                  status: 'sent',
-                  subject: 'Trip cancelled',
-                  message: `Your upcoming trip ${participant.title || ''} was cancelled by the driver.`,
-                  metadata: { tripId, cancelledBy: user.id },
-                });
+                if (participantNotificationPrefs.tripUpdates) {
+                  await createNotification(db, {
+                    userId: participant.user_id,
+                    tripId: Number.parseInt(tripId, 10),
+                    notificationType: 'trip_cancelled',
+                    channel: 'in_app',
+                    status: 'sent',
+                    subject: 'Trip cancelled',
+                    message: `Your upcoming trip ${participant.title || ''} was cancelled by the driver.`,
+                    metadata: { tripId, cancelledBy: user.id },
+                  });
+                }
               } catch (err) {
                 logger.warn('Failed to persist trip cancellation notification', { error: err instanceof Error ? err.message : String(err) });
               }
@@ -838,10 +859,11 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
                 ? await decrypt(JSON.parse(participant.first_name_encrypted).data, c.env.ENCRYPTION_KEY, participant.user_id.toString())
                 : 'Rider';
 
-              await notifications.sendEmail(
-                participant.email,
-                'Trip Cancelled - Klubz',
-                `
+              if (participantNotificationPrefs.tripUpdates) {
+                await notifications.sendEmail(
+                  participant.email,
+                  'Trip Cancelled - Klubz',
+                  `
                   <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
                     <h1 style="color:#EF4444">Trip Cancelled</h1>
                     <p>Hi ${firstName}, unfortunately your upcoming trip has been cancelled.</p>
@@ -855,8 +877,9 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
                     <p>We're sorry for the inconvenience. Search for alternative trips on Klubz.</p>
                   </div>
                 `,
-                `Your Klubz trip on ${new Date(participant.departure_time).toLocaleDateString()} has been cancelled. ${reason}`
-              );
+                  `Your Klubz trip on ${new Date(participant.departure_time).toLocaleDateString()} has been cancelled. ${reason}`
+                );
+              }
             } catch (err) {
               logger.warn('Failed to send cancellation notification to participant', {
                 error: err instanceof Error ? err.message : String(err),

@@ -14,6 +14,7 @@ import { getIP, getUserAgent } from '../lib/http';
 import { decrypt, hashForLookup } from '../lib/encryption';
 import { AppError, ValidationError } from '../lib/errors';
 import { getCacheService } from '../lib/cache';
+import { DEFAULT_USER_PREFERENCES, getUserPreferences, upsertUserPreferences } from '../lib/userPreferences';
 
 export const userRoutes = new Hono<AppEnv>();
 
@@ -421,16 +422,20 @@ userRoutes.post('/trips', async (c) => {
 // ---------------------------------------------------------------------------
 
 userRoutes.get('/preferences', async (c) => {
-  // Preferences stored in system_config or a user_preferences table
-  // Returning sensible defaults
-  return c.json({
-    notifications: { tripReminders: true, tripUpdates: true, marketingEmails: false, smsNotifications: true },
-    privacy: { shareLocation: true, allowDriverContact: true, showInDirectory: false },
-    accessibility: { wheelchairAccessible: false, visualImpairment: false, hearingImpairment: false },
-    language: 'en',
-    timezone: 'Africa/Johannesburg',
-    currency: 'ZAR',
-  });
+  const user = c.get('user') as AuthUser;
+  const db = getDB(c);
+
+  try {
+    const prefs = await getUserPreferences(db, user.id);
+    return c.json(prefs);
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.warn('Failed to fetch user preferences, falling back to defaults', {
+      userId: user.id,
+      error: parsed.message,
+    });
+    return c.json(DEFAULT_USER_PREFERENCES);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -438,20 +443,34 @@ userRoutes.get('/preferences', async (c) => {
 // ---------------------------------------------------------------------------
 
 userRoutes.put('/preferences', async (c) => {
+  const user = c.get('user') as AuthUser;
   let body: unknown;
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
   const payload = body as PreferencesBody;
+  const db = getDB(c);
 
-  return c.json({
-    notifications: payload.notifications || { tripReminders: true, tripUpdates: true, marketingEmails: false, smsNotifications: true },
-    privacy: payload.privacy || { shareLocation: true, allowDriverContact: true, showInDirectory: false },
-    accessibility: payload.accessibility || { wheelchairAccessible: false, visualImpairment: false, hearingImpairment: false },
-    language: payload.language || 'en',
-    timezone: payload.timezone || 'Africa/Johannesburg',
-    currency: payload.currency || 'ZAR',
+  if (payload.notifications !== undefined && typeof payload.notifications !== 'object') {
+    throw new ValidationError('notifications must be an object');
+  }
+  if (payload.privacy !== undefined && typeof payload.privacy !== 'object') {
+    throw new ValidationError('privacy must be an object');
+  }
+  if (payload.accessibility !== undefined && typeof payload.accessibility !== 'object') {
+    throw new ValidationError('accessibility must be an object');
+  }
+
+  const updated = await upsertUserPreferences(db, user.id, {
+    notifications: payload.notifications as unknown as typeof DEFAULT_USER_PREFERENCES.notifications,
+    privacy: payload.privacy as unknown as typeof DEFAULT_USER_PREFERENCES.privacy,
+    accessibility: payload.accessibility as unknown as typeof DEFAULT_USER_PREFERENCES.accessibility,
+    language: payload.language,
+    timezone: payload.timezone,
+    currency: payload.currency,
   });
+
+  return c.json(updated);
 });
 
 // ---------------------------------------------------------------------------

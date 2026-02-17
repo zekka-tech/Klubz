@@ -8,6 +8,7 @@ import { logger } from '../lib/logger';
 import { AppError, NotFoundError, ValidationError } from '../lib/errors';
 import { eventBus } from '../lib/eventBus';
 import { createNotification } from '../lib/notificationStore';
+import { getUserNotificationPreferences } from '../lib/userPreferences';
 
 export const paymentRoutes = new Hono<AppEnv>();
 
@@ -265,16 +266,19 @@ paymentRoutes.post('/webhook', async (c) => {
         const tripIdNum = Number.parseInt(tripId, 10);
         if (Number.isFinite(recipientId)) {
           try {
-            await createNotification(db, {
-              userId: recipientId,
-              tripId: Number.isFinite(tripIdNum) ? tripIdNum : null,
-              notificationType: 'payment_succeeded',
-              channel: 'in_app',
-              status: 'sent',
-              subject: 'Payment successful',
-              message: 'Your trip payment was successful.',
-              metadata: { bookingId, paymentIntentId: paymentIntent.id, amount: paymentIntent.amount / 100 },
-            });
+            const notificationPrefs = await getUserNotificationPreferences(db, recipientId);
+            if (notificationPrefs.tripUpdates) {
+              await createNotification(db, {
+                userId: recipientId,
+                tripId: Number.isFinite(tripIdNum) ? tripIdNum : null,
+                notificationType: 'payment_succeeded',
+                channel: 'in_app',
+                status: 'sent',
+                subject: 'Payment successful',
+                message: 'Your trip payment was successful.',
+                metadata: { bookingId, paymentIntentId: paymentIntent.id, amount: paymentIntent.amount / 100 },
+              });
+            }
           } catch (err) {
             logger.warn('Failed to persist payment succeeded notification', {
               error: err instanceof Error ? err.message : String(err),
@@ -325,16 +329,19 @@ paymentRoutes.post('/webhook', async (c) => {
         const booking = await db.prepare('SELECT user_id, trip_id FROM trip_participants WHERE id = ?').bind(bookingId).first<{ user_id: number; trip_id: number }>();
         if (booking) {
           try {
-            await createNotification(db, {
-              userId: booking.user_id,
-              tripId: booking.trip_id,
-              notificationType: 'payment_failed',
-              channel: 'in_app',
-              status: 'sent',
-              subject: 'Payment failed',
-              message: paymentIntent.last_payment_error?.message || 'Your trip payment failed. Please try again.',
-              metadata: { bookingId, paymentIntentId: paymentIntent.id },
-            });
+            const notificationPrefs = await getUserNotificationPreferences(db, booking.user_id);
+            if (notificationPrefs.tripUpdates) {
+              await createNotification(db, {
+                userId: booking.user_id,
+                tripId: booking.trip_id,
+                notificationType: 'payment_failed',
+                channel: 'in_app',
+                status: 'sent',
+                subject: 'Payment failed',
+                message: paymentIntent.last_payment_error?.message || 'Your trip payment failed. Please try again.',
+                metadata: { bookingId, paymentIntentId: paymentIntent.id },
+              });
+            }
           } catch (err) {
             logger.warn('Failed to persist payment failed notification', {
               error: err instanceof Error ? err.message : String(err),

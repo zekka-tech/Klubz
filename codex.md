@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 17:52:00 UTC  
+Last updated: 2026-02-17 18:01:40 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (34/34)
+- `npm test`: PASS (36/36)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -118,6 +118,11 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 18:01 UTC` | codex | action | preference-enforcement | enforced user notification preferences (`tripUpdates`, `smsNotifications`) across trip and payment notification persistence/sending paths
+- `2026-02-17 18:00 UTC` | codex | action | preference-persistence | added `0006_user_preferences.sql`, `src/lib/userPreferences.ts`, and persisted `GET/PUT /api/users/preferences` backed by D1
+- `2026-02-17 18:00 UTC` | codex | action | integration-tests | added `tests/integration/user-preferences.test.ts` for defaults and upsert behavior
+- `2026-02-17 18:00 UTC` | codex | action | migration-smoke | expanded `scripts/db-smoke.sh` and `MIGRATION_GUIDE.md` to validate/document `user_preferences` schema
+- `2026-02-17 18:00 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (36 tests); local `db:smoke` remains sandbox-blocked (`listen EPERM 127.0.0.1`)
 - `2026-02-17 17:51 UTC` | codex | commit | `c4c3e07` | implemented notifications API endpoints, in-app notification persistence hooks, and integration coverage
 - `2026-02-17 17:51 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 17:51 UTC` | codex | action | notification-api | added `/api/notifications` route with list, mark-read, and read-all endpoints

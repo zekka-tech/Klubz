@@ -5,6 +5,7 @@
 1. **0003_add_payment_fields.sql** - Adds payment tracking to trip_participants
 2. **0004_performance_indexes.sql** - Adds 30+ performance indexes
 3. **0005_notifications.sql** - Adds notifications table and notification indexes
+4. **0006_user_preferences.sql** - Adds persisted user preferences table and index
 
 ## Determinism and Safety Notes
 
@@ -68,6 +69,7 @@ npx wrangler d1 execute klubz-production --remote \
    - migrations/0003_add_payment_fields.sql
    - migrations/0004_performance_indexes.sql
    - migrations/0005_notifications.sql
+   - migrations/0006_user_preferences.sql
 6. Click "Apply Migrations"
 
 ## Migration Details
@@ -106,6 +108,16 @@ npx wrangler d1 execute klubz-production --remote \
 - idx_notifications_user_status
 - idx_notifications_type
 - idx_notifications_trip
+```
+
+### 0006_user_preferences.sql
+```sql
+-- Adds user_preferences table:
+- user-scoped notification/privacy/accessibility JSON configs
+- language, timezone, currency settings
+
+-- Indexes:
+- idx_user_preferences_user_id
 ```
 
 ## Verification Commands
@@ -175,5 +187,6 @@ Migrations are applied in order:
 4. 0003_add_payment_fields.sql (existing)
 5. 0004_performance_indexes.sql (existing)
 6. 0005_notifications.sql (new)
+7. 0006_user_preferences.sql (new)
 
 Note: Multiple files numbered 0003 exist. Wrangler applies them alphabetically.
