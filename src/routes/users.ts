@@ -20,6 +20,96 @@ export const userRoutes = new Hono<AppEnv>();
 // All user routes require auth
 userRoutes.use('*', authMiddleware());
 
+interface UserProfileRow {
+  id: number;
+  email: string;
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+  phone_encrypted: string | null;
+  avatar_url: string | null;
+  role: string;
+  email_verified: number;
+  mfa_enabled: number;
+  created_at: string;
+  last_login_at: string | null;
+  total_trips: number;
+  completed_trips: number;
+  avg_rating: number | null;
+}
+
+interface UpdateProfileBody {
+  name?: string;
+  phone?: string;
+  avatar?: string | null;
+}
+
+interface UserTripRow {
+  id: number;
+  title: string | null;
+  description: string | null;
+  origin: string;
+  destination: string;
+  departure_time: string;
+  status: string;
+  participant_role: string;
+  participant_status: string;
+  pickup_location_encrypted: string | null;
+  dropoff_location_encrypted: string | null;
+  price_per_seat: number;
+  currency: string | null;
+  available_seats: number;
+  total_seats: number;
+  vehicle_type: string;
+  rating: number | null;
+  driver_first_name: string | null;
+  driver_last_name: string | null;
+  driver_avatar: string | null;
+  created_at: string;
+}
+
+interface CreateTripBody {
+  title?: string;
+  notes?: string;
+  pickupLocation?: { address?: string; [key: string]: unknown };
+  dropoffLocation?: { address?: string; [key: string]: unknown };
+  scheduledTime?: string;
+  availableSeats?: number;
+  totalSeats?: number;
+  price?: number;
+}
+
+interface PreferencesBody {
+  notifications?: Record<string, unknown>;
+  privacy?: Record<string, unknown>;
+  accessibility?: Record<string, unknown>;
+  language?: string;
+  timezone?: string;
+  currency?: string;
+}
+
+interface ExportUserRow {
+  id: number;
+  email: string;
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+  phone_encrypted: string | null;
+  role: string;
+  email_verified: number;
+  phone_verified: number;
+  mfa_enabled: number;
+  created_at: string;
+  last_login_at: string | null;
+  created_ip: string | null;
+}
+
+interface CountRow {
+  count: number;
+}
+
+function parseError(err: unknown): { message: string } {
+  return { message: err instanceof Error ? err.message : String(err) };
+}
+
 // ---------------------------------------------------------------------------
 // GET /profile
 // ---------------------------------------------------------------------------
@@ -33,7 +123,7 @@ userRoutes.get('/profile', async (c) => {
 
   // Try cache first
   if (cache) {
-    const cached = await cache.get<any>(cacheKey);
+    const cached = await cache.get(cacheKey);
     if (cached) {
       logger.debug('User profile cache hit', { userId: user.id });
       return c.json(cached);
@@ -53,7 +143,7 @@ userRoutes.get('/profile', async (c) => {
            FROM users u WHERE u.id = ? AND u.deleted_at IS NULL`
         )
         .bind(user.id)
-        .first();
+        .first<UserProfileRow>();
 
       if (!row) {
         return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
@@ -85,8 +175,9 @@ userRoutes.get('/profile', async (c) => {
       }
 
       return c.json(profile);
-    } catch (err: any) {
-      logger.error('Profile DB error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Profile DB error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -110,15 +201,16 @@ userRoutes.get('/profile', async (c) => {
 
 userRoutes.put('/profile', async (c) => {
   const user = c.get('user') as AuthUser;
-  let body: any;
+  let body: unknown;
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
+  const payload = body as UpdateProfileBody;
 
-  if (body.name && body.name.length < 2) {
+  if (payload.name && payload.name.length < 2) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Name must be at least 2 characters' } }, 400);
   }
-  if (body.phone && !/^\+?[\d\s\-()]+$/.test(body.phone)) {
+  if (payload.phone && !/^\+?[\d\s\-()]+$/.test(payload.phone)) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid phone number format' } }, 400);
   }
 
@@ -126,15 +218,15 @@ userRoutes.put('/profile', async (c) => {
   if (db) {
     try {
       const parts: string[] = [];
-      const values: any[] = [];
+      const values: unknown[] = [];
 
-      if (body.name) {
-        const [first, ...rest] = body.name.split(' ');
+      if (payload.name) {
+        const [first, ...rest] = payload.name.split(' ');
         parts.push('first_name_encrypted = ?', 'last_name_encrypted = ?');
         values.push(first, rest.join(' ') || null);
       }
-      if (body.phone !== undefined) { parts.push('phone_encrypted = ?'); values.push(body.phone || null); }
-      if (body.avatar !== undefined) { parts.push('avatar_url = ?'); values.push(body.avatar || null); }
+      if (payload.phone !== undefined) { parts.push('phone_encrypted = ?'); values.push(payload.phone || null); }
+      if (payload.avatar !== undefined) { parts.push('avatar_url = ?'); values.push(payload.avatar || null); }
 
       parts.push('updated_at = CURRENT_TIMESTAMP');
       values.push(user.id);
@@ -148,8 +240,9 @@ userRoutes.put('/profile', async (c) => {
       }
 
       return c.json({ message: 'Profile updated', updatedAt: new Date().toISOString() });
-    } catch (err: any) {
-      logger.error('Profile update error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Profile update error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -185,7 +278,7 @@ userRoutes.get('/trips', async (c) => {
         LEFT JOIN users u ON t.driver_id = u.id
         WHERE tp.user_id = ?`;
 
-      const params: any[] = [user.id];
+      const params: unknown[] = [user.id];
 
       if (status) {
         countSql += ' AND t.status = ?';
@@ -195,13 +288,13 @@ userRoutes.get('/trips', async (c) => {
 
       dataSql += ' ORDER BY t.departure_time DESC LIMIT ? OFFSET ?';
 
-      const countResult = await db.prepare(countSql).bind(...params).first();
-      const total = (countResult as any)?.total ?? 0;
+      const countResult = await db.prepare(countSql).bind(...params).first<{ total: number }>();
+      const total = countResult?.total ?? 0;
 
       const dataParams = [...params, limit, (page - 1) * limit];
-      const { results } = await db.prepare(dataSql).bind(...dataParams).all();
+      const { results } = await db.prepare(dataSql).bind(...dataParams).all<UserTripRow>();
 
-      const trips = (results || []).map((r: any) => ({
+      const trips = (results || []).map((r) => ({
         id: r.id,
         title: r.title,
         description: r.description,
@@ -229,8 +322,9 @@ userRoutes.get('/trips', async (c) => {
         trips,
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       });
-    } catch (err: any) {
-      logger.error('User trips DB error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('User trips DB error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -263,16 +357,17 @@ userRoutes.get('/trips', async (c) => {
 
 userRoutes.post('/trips', async (c) => {
   const user = c.get('user') as AuthUser;
-  let body: any;
+  let body: unknown;
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
+  const payload = body as CreateTripBody;
 
-  if (!body.pickupLocation || !body.dropoffLocation || !body.scheduledTime) {
+  if (!payload.pickupLocation || !payload.dropoffLocation || !payload.scheduledTime) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Pickup, dropoff, and scheduledTime required' } }, 400);
   }
 
-  const scheduledTime = new Date(body.scheduledTime);
+  const scheduledTime = new Date(payload.scheduledTime);
   if (scheduledTime <= new Date()) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Scheduled time must be in the future' } }, 400);
   }
@@ -286,16 +381,16 @@ userRoutes.post('/trips', async (c) => {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', 'sedan', ?)`
         )
         .bind(
-          body.title || 'Trip',
-          body.notes || null,
-          body.pickupLocation.address || JSON.stringify(body.pickupLocation),
-          body.dropoffLocation.address || JSON.stringify(body.dropoffLocation),
+          payload.title || 'Trip',
+          payload.notes || null,
+          payload.pickupLocation.address || JSON.stringify(payload.pickupLocation),
+          payload.dropoffLocation.address || JSON.stringify(payload.dropoffLocation),
           'hash_' + Date.now(),
           'hash_' + (Date.now() + 1),
-          body.scheduledTime,
-          body.availableSeats || 3,
-          body.totalSeats || 4,
-          body.price || 35.00,
+          payload.scheduledTime,
+          payload.availableSeats || 3,
+          payload.totalSeats || 4,
+          payload.price || 35.00,
           'ZAR',
           user.id,
         )
@@ -307,13 +402,14 @@ userRoutes.post('/trips', async (c) => {
       eventBus.emit('trip:created', {
         tripId,
         driverId: user.id,
-        title: body.title || 'Trip',
-        scheduledTime: body.scheduledTime,
+        title: payload.title || 'Trip',
+        scheduledTime: payload.scheduledTime,
       }, user.id);
 
       return c.json({ message: 'Trip created successfully', trip: { id: tripId, status: 'scheduled', createdAt: new Date().toISOString() } });
-    } catch (err: any) {
-      logger.error('Trip create error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Trip create error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -342,18 +438,19 @@ userRoutes.get('/preferences', async (c) => {
 // ---------------------------------------------------------------------------
 
 userRoutes.put('/preferences', async (c) => {
-  let body: any;
+  let body: unknown;
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
+  const payload = body as PreferencesBody;
 
   return c.json({
-    notifications: body.notifications || { tripReminders: true, tripUpdates: true, marketingEmails: false, smsNotifications: true },
-    privacy: body.privacy || { shareLocation: true, allowDriverContact: true, showInDirectory: false },
-    accessibility: body.accessibility || { wheelchairAccessible: false, visualImpairment: false, hearingImpairment: false },
-    language: body.language || 'en',
-    timezone: body.timezone || 'Africa/Johannesburg',
-    currency: body.currency || 'ZAR',
+    notifications: payload.notifications || { tripReminders: true, tripUpdates: true, marketingEmails: false, smsNotifications: true },
+    privacy: payload.privacy || { shareLocation: true, allowDriverContact: true, showInDirectory: false },
+    accessibility: payload.accessibility || { wheelchairAccessible: false, visualImpairment: false, hearingImpairment: false },
+    language: payload.language || 'en',
+    timezone: payload.timezone || 'Africa/Johannesburg',
+    currency: payload.currency || 'ZAR',
   });
 });
 
@@ -389,7 +486,7 @@ userRoutes.get('/export', async (c) => {
       `).bind(user.id),
     ]);
 
-    const userRecord = (userData.results ?? [])[0] as any;
+    const userRecord = (userData.results ?? [])[0] as ExportUserRow | undefined;
 
     if (!userRecord) {
       throw new AppError('User not found', 'NOT_FOUND', 404);
@@ -476,7 +573,7 @@ userRoutes.delete('/account', async (c) => {
       FROM trip_participants
       WHERE user_id = ?
       AND status IN ('requested', 'accepted')
-    `).bind(user.id).first() as any;
+    `).bind(user.id).first<CountRow>();
 
     if (activeTrips && activeTrips.count > 0) {
       throw new ValidationError(

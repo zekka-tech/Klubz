@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import Stripe from 'stripe';
+import type { Context } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import type { AppEnv, AuthUser } from '../types';
 import { getDB } from '../lib/db';
@@ -12,15 +13,45 @@ export const paymentRoutes = new Hono<AppEnv>();
 // All payment routes require authentication
 paymentRoutes.use('*', authMiddleware());
 
+interface CreateIntentBody {
+  tripId: number | string;
+  amount: number;
+}
+
+interface BookingRow {
+  id: number;
+  title: string;
+}
+
+interface StripeWebhookEvent {
+  type: string;
+  data: {
+    object: {
+      id: string;
+      amount: number;
+      metadata: {
+        tripId?: string;
+        userId?: string;
+        bookingId?: string;
+      };
+      last_payment_error?: { message?: string };
+    };
+  };
+}
+
+function parseError(err: unknown): { message: string } {
+  return { message: err instanceof Error ? err.message : String(err) };
+}
+
 /**
  * Get Stripe instance if configured
  */
-function getStripe(c: any) {
+function getStripe(c: Context<AppEnv>) {
   if (!c.env?.STRIPE_SECRET_KEY) {
     return null;
   }
   return new Stripe(c.env.STRIPE_SECRET_KEY, {
-    apiVersion: '2024-11-20.acacia' as any,
+    apiVersion: '2023-10-16',
   });
 }
 
@@ -30,7 +61,7 @@ function getStripe(c: any) {
 
 paymentRoutes.post('/intent', async (c) => {
   const user = c.get('user') as AuthUser;
-  const body = await c.req.json();
+  const body = await c.req.json<CreateIntentBody>();
   const { tripId, amount } = body;
 
   if (!tripId || !amount) {
@@ -50,7 +81,7 @@ paymentRoutes.post('/intent', async (c) => {
     FROM trip_participants tp
     JOIN trips t ON tp.trip_id = t.id
     WHERE tp.trip_id = ? AND tp.user_id = ? AND tp.status = 'accepted'
-  `).bind(tripId, user.id).first() as any;
+  `).bind(tripId, user.id).first<BookingRow>();
 
   if (!booking) {
     throw new NotFoundError('Accepted booking for this trip');
@@ -93,8 +124,9 @@ paymentRoutes.post('/intent', async (c) => {
       currency: paymentIntent.currency,
     });
   } catch (err: unknown) {
+    const parsed = parseError(err);
     logger.error('Payment intent creation failed', {
-      error: err instanceof Error ? err.message : String(err),
+      error: parsed.message,
       userId: user.id,
       tripId,
     });
@@ -124,12 +156,12 @@ paymentRoutes.post('/webhook', async (c) => {
     logger.warn('Stripe webhook secret not configured, skipping signature verification');
   }
 
-  let event: any;
+  let event: StripeWebhookEvent;
   try {
     if (webhookSecret) {
-      event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
+      event = stripe.webhooks.constructEvent(body, signature, webhookSecret) as unknown as StripeWebhookEvent;
     } else {
-      event = JSON.parse(body);
+      event = JSON.parse(body) as StripeWebhookEvent;
     }
   } catch (err: unknown) {
     logger.error('Webhook signature verification failed', {
@@ -168,8 +200,9 @@ paymentRoutes.post('/webhook', async (c) => {
           amount: paymentIntent.amount / 100,
         });
       } catch (err: unknown) {
+        const parsed = parseError(err);
         logger.error('Failed to update payment status', {
-          error: err instanceof Error ? err.message : String(err),
+          error: parsed.message,
           bookingId,
         });
       }
@@ -198,8 +231,9 @@ paymentRoutes.post('/webhook', async (c) => {
           reason: paymentIntent.last_payment_error?.message,
         });
       } catch (err: unknown) {
+        const parsed = parseError(err);
         logger.error('Failed to update payment status', {
-          error: err instanceof Error ? err.message : String(err),
+          error: parsed.message,
           bookingId,
         });
       }
@@ -222,8 +256,9 @@ paymentRoutes.post('/webhook', async (c) => {
           bookingId,
         });
       } catch (err: unknown) {
+        const parsed = parseError(err);
         logger.error('Failed to update payment status', {
-          error: err instanceof Error ? err.message : String(err),
+          error: parsed.message,
           bookingId,
         });
       }

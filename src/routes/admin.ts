@@ -12,6 +12,46 @@ import { getDB } from '../lib/db';
 
 export const adminRoutes = new Hono<AppEnv>();
 
+interface TotalRow {
+  total: number;
+}
+
+interface AdminUserRow {
+  id: number;
+  email: string;
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+  phone_encrypted: string | null;
+  role: string;
+  is_active: number;
+  last_login_at: string | null;
+  created_at: string;
+  trip_count: number;
+  participation_count: number;
+  avg_driver_rating: number | null;
+}
+
+interface AuditLogRow {
+  id: number;
+  user_id: number | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: number | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+interface UpdateUserBody {
+  email?: string;
+  role?: 'admin' | 'user' | 'super_admin';
+  status?: 'active' | 'inactive' | 'suspended';
+  name?: string;
+}
+
+function parseError(err: unknown): { message: string } {
+  return { message: err instanceof Error ? err.message : String(err) };
+}
+
 // Admin-only routes - require authentication unconditionally
 adminRoutes.use('*', authMiddleware(['admin', 'super_admin']));
 
@@ -51,8 +91,9 @@ adminRoutes.get('/stats', async (c) => {
         sla: { uptime: 99.85, avgResponseTime: 145 },
         timestamp: new Date().toISOString(),
       });
-    } catch (err: any) {
-      logger.error('Admin stats DB error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Admin stats DB error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -85,7 +126,7 @@ adminRoutes.get('/users', async (c) => {
   if (db) {
     try {
       let where = 'WHERE deleted_at IS NULL';
-      const params: any[] = [];
+      const params: unknown[] = [];
 
       if (search) {
         where += ' AND (email LIKE ? OR first_name_encrypted LIKE ? OR last_name_encrypted LIKE ?)';
@@ -96,8 +137,8 @@ adminRoutes.get('/users', async (c) => {
       if (status === 'active') { where += ' AND is_active = 1'; }
       else if (status === 'inactive') { where += ' AND is_active = 0'; }
 
-      const countRes = await db.prepare(`SELECT COUNT(*) as total FROM users ${where}`).bind(...params).first();
-      const total = (countRes as any)?.total ?? 0;
+      const countRes = await db.prepare(`SELECT COUNT(*) as total FROM users ${where}`).bind(...params).first<TotalRow>();
+      const total = countRes?.total ?? 0;
 
       const dataParams = [...params, limit, (page - 1) * limit];
       const { results } = await db
@@ -117,9 +158,9 @@ adminRoutes.get('/users', async (c) => {
           LIMIT ? OFFSET ?
         `)
         .bind(...dataParams)
-        .all();
+        .all<AdminUserRow>();
 
-      const users = (results || []).map((r: any) => ({
+      const users = (results || []).map((r) => ({
         id: r.id,
         email: r.email,
         name: [r.first_name_encrypted, r.last_name_encrypted].filter(Boolean).join(' ') || r.email.split('@')[0],
@@ -139,8 +180,9 @@ adminRoutes.get('/users', async (c) => {
         users,
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       });
-    } catch (err: any) {
-      logger.error('Admin users DB error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Admin users DB error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -182,8 +224,9 @@ adminRoutes.get('/users/:userId', async (c) => {
         createdAt: user.created_at,
         lastLoginAt: user.last_login_at,
       });
-    } catch (err: any) {
-      logger.error('Admin user detail error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Admin user detail error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -196,18 +239,19 @@ adminRoutes.get('/users/:userId', async (c) => {
 
 adminRoutes.put('/users/:userId', async (c) => {
   const userId = c.req.param('userId');
-  let body: any;
+  let body: unknown;
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
+  const payload = body as UpdateUserBody;
 
-  if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
+  if (payload.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid email format' } }, 400);
   }
-  if (body.role && !['admin', 'user', 'super_admin'].includes(body.role)) {
+  if (payload.role && !['admin', 'user', 'super_admin'].includes(payload.role)) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid role' } }, 400);
   }
-  if (body.status && !['active', 'inactive', 'suspended'].includes(body.status)) {
+  if (payload.status && !['active', 'inactive', 'suspended'].includes(payload.status)) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid status' } }, 400);
   }
 
@@ -215,13 +259,13 @@ adminRoutes.put('/users/:userId', async (c) => {
   if (db) {
     try {
       const parts: string[] = [];
-      const values: any[] = [];
+      const values: unknown[] = [];
 
-      if (body.role) { parts.push('role = ?'); values.push(body.role); }
-      if (body.status === 'active') { parts.push('is_active = 1'); }
-      else if (body.status === 'inactive' || body.status === 'suspended') { parts.push('is_active = 0'); }
-      if (body.name) {
-        const [first, ...rest] = body.name.split(' ');
+      if (payload.role) { parts.push('role = ?'); values.push(payload.role); }
+      if (payload.status === 'active') { parts.push('is_active = 1'); }
+      else if (payload.status === 'inactive' || payload.status === 'suspended') { parts.push('is_active = 0'); }
+      if (payload.name) {
+        const [first, ...rest] = payload.name.split(' ');
         parts.push('first_name_encrypted = ?', 'last_name_encrypted = ?');
         values.push(first, rest.join(' ') || null);
       }
@@ -233,8 +277,9 @@ adminRoutes.put('/users/:userId', async (c) => {
       }
 
       return c.json({ message: 'User updated successfully', user: { id: userId, updatedAt: new Date().toISOString() } });
-    } catch (err: any) {
-      logger.error('Admin user update error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Admin user update error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -266,23 +311,23 @@ adminRoutes.get('/logs', async (c) => {
   if (db) {
     try {
       let where = '1=1';
-      const params: any[] = [];
+      const params: unknown[] = [];
 
       if (level !== 'all') {
         where += ' AND action LIKE ?';
         params.push(`%${level.toUpperCase()}%`);
       }
 
-      const countRes = await db.prepare(`SELECT COUNT(*) as total FROM audit_logs WHERE ${where}`).bind(...params).first();
-      const total = (countRes as any)?.total ?? 0;
+      const countRes = await db.prepare(`SELECT COUNT(*) as total FROM audit_logs WHERE ${where}`).bind(...params).first<TotalRow>();
+      const total = countRes?.total ?? 0;
 
       const dataParams = [...params, limit, (page - 1) * limit];
       const { results } = await db
         .prepare(`SELECT id, user_id, action, entity_type, entity_id, ip_address, user_agent, created_at FROM audit_logs WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
         .bind(...dataParams)
-        .all();
+        .all<AuditLogRow>();
 
-      const logs = (results || []).map((r: any) => ({
+      const logs = (results || []).map((r) => ({
         id: r.id,
         timestamp: r.created_at,
         level: r.action?.includes('ERROR') ? 'error' : r.action?.includes('SECURITY') ? 'warn' : 'info',
@@ -293,8 +338,9 @@ adminRoutes.get('/logs', async (c) => {
       }));
 
       return c.json({ logs, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
-    } catch (err: any) {
-      logger.error('Admin logs error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Admin logs error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -337,8 +383,9 @@ adminRoutes.post('/users/:userId/export', async (c) => {
           },
         },
       });
-    } catch (err: any) {
-      logger.error('Data export error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Data export error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 

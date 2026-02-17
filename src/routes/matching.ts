@@ -33,7 +33,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Context } from 'hono';
-import type { AppEnv } from '../types';
+import type { AppEnv, AuthUser } from '../types';
 import {
   matchRiderToDrivers,
   optimizePool,
@@ -44,6 +44,8 @@ import type {
   RiderRequest,
   GeoPoint,
   FindMatchesResponse,
+  DriverTripStatus,
+  RiderRequestStatus,
 } from '../lib/matching';
 
 // ---------------------------------------------------------------------------
@@ -127,6 +129,18 @@ const rejectMatchSchema = z.object({
 export function createMatchingRoutes() {
   const app = new Hono<AppEnv>();
 
+  function parseDriverTripStatus(status?: string): DriverTripStatus | undefined {
+    if (!status) return undefined;
+    const allowed: DriverTripStatus[] = ['offered', 'active', 'completed', 'cancelled', 'expired'];
+    return allowed.includes(status as DriverTripStatus) ? (status as DriverTripStatus) : undefined;
+  }
+
+  function parseRiderRequestStatus(status?: string): RiderRequestStatus | undefined {
+    if (!status) return undefined;
+    const allowed: RiderRequestStatus[] = ['pending', 'matched', 'confirmed', 'in_progress', 'completed', 'cancelled', 'expired'];
+    return allowed.includes(status as RiderRequestStatus) ? (status as RiderRequestStatus) : undefined;
+  }
+
   // Helper to get repository
   function getRepo(c: Context<AppEnv>): MatchingRepository {
     return new MatchingRepository(c.env.DB, c.env.CACHE);
@@ -156,7 +170,7 @@ export function createMatchingRoutes() {
     }
 
     const data = parsed.data;
-    const user = c.get('user') as any;
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
     const id = uuid();
 
@@ -167,7 +181,7 @@ export function createMatchingRoutes() {
       routePolyline = decodePolyline(data.routePolylineEncoded);
     }
 
-    const trip = await repo.createDriverTrip(id, parseInt(user?.id) || 0, {
+    const trip = await repo.createDriverTrip(id, Number(user?.id) || 0, {
       departure: data.departure,
       destination: data.destination,
       shiftLocation: data.shiftLocation,
@@ -190,14 +204,14 @@ export function createMatchingRoutes() {
    * GET /driver-trips - List driver's trips
    */
   app.get('/driver-trips', async (c) => {
-    const user = c.get('user') as any;
-    const status = c.req.query('status') as any;
+    const user = c.get('user') as AuthUser;
+    const status = parseDriverTripStatus(c.req.query('status'));
     const limit = parseInt(c.req.query('limit') || '50');
     const offset = parseInt(c.req.query('offset') || '0');
 
     const repo = getRepo(c);
     const trips = await repo.listDriverTrips(
-      parseInt(user?.id) || 0,
+      Number(user?.id) || 0,
       status,
       limit,
       offset,
@@ -280,7 +294,7 @@ export function createMatchingRoutes() {
     }
 
     const data = parsed.data;
-    const user = c.get('user') as any;
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
     const id = uuid();
 
@@ -292,7 +306,7 @@ export function createMatchingRoutes() {
       );
     }
 
-    const request = await repo.createRiderRequest(id, parseInt(user?.id) || 0, {
+    const request = await repo.createRiderRequest(id, Number(user?.id) || 0, {
       pickup: data.pickup,
       dropoff: data.dropoff,
       earliestDeparture: data.earliestDeparture,
@@ -312,14 +326,14 @@ export function createMatchingRoutes() {
    * GET /rider-requests - List rider's requests
    */
   app.get('/rider-requests', async (c) => {
-    const user = c.get('user') as any;
-    const status = c.req.query('status') as any;
+    const user = c.get('user') as AuthUser;
+    const status = parseRiderRequestStatus(c.req.query('status'));
     const limit = parseInt(c.req.query('limit') || '50');
     const offset = parseInt(c.req.query('offset') || '0');
 
     const repo = getRepo(c);
     const requests = await repo.listRiderRequests(
-      parseInt(user?.id) || 0,
+      Number(user?.id) || 0,
       status,
       limit,
       offset,
@@ -381,7 +395,7 @@ export function createMatchingRoutes() {
     }
 
     const data = parsed.data;
-    const user = c.get('user') as any;
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
 
     // Resolve rider request
@@ -466,7 +480,7 @@ export function createMatchingRoutes() {
     }
 
     const data = parsed.data;
-    const user = c.get('user') as any;
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
 
     // Resolve rider request
@@ -668,7 +682,7 @@ export function createMatchingRoutes() {
    * GET /config - Get matching config for the user's organization
    */
   app.get('/config', async (c) => {
-    const user = c.get('user') as any;
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
 
     let config = DEFAULT_MATCH_CONFIG;
@@ -684,7 +698,7 @@ export function createMatchingRoutes() {
    * PUT /config - Update matching config (admin)
    */
   app.put('/config', async (c) => {
-    const user = c.get('user') as any;
+    const user = c.get('user') as AuthUser;
 
     if (!user?.organizationId) {
       return c.json(

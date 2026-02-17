@@ -14,6 +14,39 @@ export const monitoringRoutes = new Hono<AppEnv>();
 
 const APP_START_TIME = Date.now();
 
+interface MetricsSummary {
+  requests: { total: number; last1h: number; last24h: number };
+  errors: { total: number; rate: number | string };
+  responseTime: { avg: number };
+}
+
+interface BusinessMetrics {
+  activeTrips: number;
+  totalUsers: number;
+  completedTrips: number;
+  totalBookings: number;
+}
+
+interface EndpointMetricRow {
+  action: string;
+  request_count: number;
+  error_count: number;
+}
+
+interface EndpointMetric {
+  action: string;
+  requests: number;
+  errorRate: number | string;
+}
+
+interface CountRow {
+  count: number;
+}
+
+function parseError(err: unknown): { message: string } {
+  return { message: err instanceof Error ? err.message : String(err) };
+}
+
 // ---------------------------------------------------------------------------
 // GET /health - Public
 // ---------------------------------------------------------------------------
@@ -52,8 +85,8 @@ monitoringRoutes.get('/health', async (c) => {
 
 monitoringRoutes.get('/metrics', authMiddleware(['admin', 'super_admin']), async (c) => {
   const db = getDB(c);
-  const appMetrics: any = { requests: { total: 0, last1h: 0, last24h: 0 }, errors: { total: 0, rate: 0 }, responseTime: { avg: 0 } };
-  const businessMetrics: any = { activeTrips: 0, totalUsers: 0, completedTrips: 0, totalBookings: 0 };
+  const appMetrics: MetricsSummary = { requests: { total: 0, last1h: 0, last24h: 0 }, errors: { total: 0, rate: 0 }, responseTime: { avg: 0 } };
+  const businessMetrics: BusinessMetrics = { activeTrips: 0, totalUsers: 0, completedTrips: 0, totalBookings: 0 };
 
   if (db) {
     try {
@@ -93,8 +126,9 @@ monitoringRoutes.get('/metrics', authMiddleware(['admin', 'super_admin']), async
       appMetrics.requests.last24h = logsLast24h.results?.[0]?.count ?? 0;
       appMetrics.errors.total = totalErrs;
       appMetrics.errors.rate = totalReqs > 0 ? ((totalErrs / totalReqs) * 100).toFixed(2) : 0;
-    } catch (err: any) {
-      logger.error('Metrics DB error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Metrics DB error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -128,7 +162,7 @@ monitoringRoutes.get('/sla', async (c) => {
 monitoringRoutes.get('/performance', async (c) => {
   const db = getDB(c);
   const timeframe = c.req.query('timeframe') || '1h';
-  let endpoints: any[] = [];
+  let endpoints: EndpointMetric[] = [];
 
   if (db) {
     try {
@@ -149,17 +183,18 @@ monitoringRoutes.get('/performance', async (c) => {
         GROUP BY action
         ORDER BY request_count DESC
         LIMIT 10
-      `).bind(cutoff).all();
+      `).bind(cutoff).all<EndpointMetricRow>();
 
-      endpoints = (results || []).map((r: any) => ({
+      endpoints = (results || []).map((r) => ({
         action: r.action,
         requests: r.request_count ?? 0,
         errorRate: r.request_count > 0
           ? ((r.error_count / r.request_count) * 100).toFixed(2)
           : 0,
       }));
-    } catch (err: any) {
-      logger.error('Performance metrics error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Performance metrics error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -199,13 +234,14 @@ monitoringRoutes.get('/security', async (c) => {
         `),
       ]);
 
-      failedLogins = (failed.results?.[0] as any)?.count ?? 0;
-      successfulLogins = (success.results?.[0] as any)?.count ?? 0;
-      mfaEnabled = (mfaEnabledRes.results?.[0] as any)?.count ?? 0;
-      mfaDisabled = (mfaDisabledRes.results?.[0] as any)?.count ?? 0;
+      failedLogins = (failed.results?.[0] as CountRow | undefined)?.count ?? 0;
+      successfulLogins = (success.results?.[0] as CountRow | undefined)?.count ?? 0;
+      mfaEnabled = (mfaEnabledRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+      mfaDisabled = (mfaDisabledRes.results?.[0] as CountRow | undefined)?.count ?? 0;
       suspiciousIPs = (suspiciousRes.results?.length ?? 0);
-    } catch (err: any) {
-      logger.error('Security metrics error', err);
+    } catch (err: unknown) {
+      const parsed = parseError(err);
+      logger.error('Security metrics error', err instanceof Error ? err : undefined, { error: parsed.message });
     }
   }
 
@@ -256,8 +292,8 @@ monitoringRoutes.get('/carbon', async (c) => {
 
   if (db) {
     try {
-      const completed = await db.prepare("SELECT COUNT(*) as count FROM trips WHERE status = 'completed'").first();
-      totalTrips = (completed as any)?.count ?? 0;
+      const completed = await db.prepare("SELECT COUNT(*) as count FROM trips WHERE status = 'completed'").first<CountRow>();
+      totalTrips = completed?.count ?? 0;
       totalSaved = totalTrips * 2.1; // ~2.1 kg CO2 per shared trip
     } catch { /* best-effort */ }
   }

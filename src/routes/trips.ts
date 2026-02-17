@@ -21,6 +21,120 @@ export const tripRoutes = new Hono<AppEnv>();
 
 tripRoutes.use('*', authMiddleware());
 
+interface LocationInput {
+  address?: string;
+  [key: string]: unknown;
+}
+
+interface TripSearchResult {
+  trips: unknown[];
+  searchCriteria: {
+    pickupLocation: { lat: number; lng: number };
+    dropoffLocation: { lat: number; lng: number };
+    maxDetour: number;
+    date?: string;
+    time?: string;
+  };
+  totalResults: number;
+}
+
+interface DriverTripRow {
+  id: number;
+  origin: string;
+  destination: string;
+  departure_time: string;
+  available_seats: number;
+  vehicle_type: string | null;
+  price_per_seat: number | null;
+  driver_id: number;
+}
+
+interface BookRequestBody {
+  pickupLocation?: LocationInput;
+  dropoffLocation?: LocationInput;
+  passengers?: number;
+}
+
+interface OfferRequestBody {
+  pickupLocation?: LocationInput;
+  dropoffLocation?: LocationInput;
+  scheduledTime?: string;
+  availableSeats?: number;
+  price?: number;
+  notes?: string;
+  vehicleInfo?: {
+    make?: string;
+    model?: string;
+    licensePlate?: string;
+  };
+}
+
+interface RateRequestBody {
+  rating?: number;
+  comment?: string;
+}
+
+interface BookingTripDetailsRow {
+  title: string | null;
+  email: string;
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+  driver_id: number;
+}
+
+interface RiderNameRow {
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+}
+
+interface AcceptBookingDetailsRow {
+  user_id: number;
+  title: string | null;
+  origin: string;
+  destination: string;
+  departure_time: string;
+  price_per_seat: number;
+  email: string;
+  first_name_encrypted: string | null;
+  phone_encrypted: string | null;
+  driver_first_name: string | null;
+}
+
+interface RejectRiderDetailsRow {
+  email: string;
+  first_name_encrypted: string | null;
+  user_id: number;
+  title: string | null;
+  departure_time: string;
+}
+
+interface CancelParticipantRow {
+  email: string;
+  first_name_encrypted: string | null;
+  user_id: number;
+  title: string | null;
+  departure_time: string;
+  origin: string;
+  destination: string;
+}
+
+function parseError(err: unknown): { message: string } {
+  return { message: err instanceof Error ? err.message : String(err) };
+}
+
+function parseMaybeJsonLocation(value: string, fallback: { lat: number; lng: number }): { lat: number; lng: number } {
+  if (!value.includes('{')) return fallback;
+  try {
+    const parsed = JSON.parse(value) as { lat?: number; lng?: number };
+    return {
+      lat: typeof parsed.lat === 'number' ? parsed.lat : fallback.lat,
+      lng: typeof parsed.lng === 'number' ? parsed.lng : fallback.lng,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // GET /available - search for trips
 // ---------------------------------------------------------------------------
@@ -42,7 +156,7 @@ tripRoutes.get('/available', async (c) => {
 
   // Try cache first
   if (cache) {
-    const cached = await cache.get<any>(cacheKey);
+    const cached = await cache.get<TripSearchResult>(cacheKey);
     if (cached) {
       logger.debug('Trip search cache hit', { cacheKey });
       return c.json(cached);
@@ -63,7 +177,7 @@ tripRoutes.get('/available', async (c) => {
         AND t.departure_time >= ?
       ORDER BY t.departure_time ASC
       LIMIT 50
-    `).bind(departureTime.toISOString()).all();
+    `).bind(departureTime.toISOString()).all<DriverTripRow>();
 
     // Create rider request
     const riderRequest: RiderRequest = {
@@ -83,10 +197,10 @@ tripRoutes.get('/available', async (c) => {
     };
 
     // Convert DB results to DriverTrip format (simplified)
-    const drivers: DriverTrip[] = (driverTrips as any[]).map(t => {
+    const drivers: DriverTrip[] = (driverTrips ?? []).map((t) => {
       // Parse coordinates from origin/destination strings (simplified)
-      const originCoords = t.origin.includes('{') ? JSON.parse(t.origin) : { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) };
-      const destCoords = t.destination.includes('{') ? JSON.parse(t.destination) : { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) };
+      const originCoords = parseMaybeJsonLocation(t.origin, { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) });
+      const destCoords = parseMaybeJsonLocation(t.destination, { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) });
 
       return {
         id: String(t.id),
@@ -155,8 +269,11 @@ tripRoutes.get('/available', async (c) => {
     }
 
     return c.json(result);
-  } catch (err: any) {
-    logger.error('Available trips error', err);
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    logger.error('Available trips error', err instanceof Error ? err : undefined, {
+      error: parsedError.message,
+    });
     return c.json({
       trips: [],
       searchCriteria: {
@@ -176,12 +293,12 @@ tripRoutes.get('/available', async (c) => {
 tripRoutes.post('/:tripId/book', async (c) => {
   const user = c.get('user') as AuthUser;
   const tripId = c.req.param('tripId');
-  let body: any;
+  let body: unknown;
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
 
-  const { pickupLocation, dropoffLocation, passengers = 1 } = body;
+  const { pickupLocation, dropoffLocation, passengers = 1 } = (body as BookRequestBody);
   if (!pickupLocation || !dropoffLocation) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Pickup and dropoff locations are required' } }, 400);
   }
@@ -228,14 +345,14 @@ tripRoutes.post('/:tripId/book', async (c) => {
             FROM trips t
             JOIN users u ON t.driver_id = u.id
             WHERE t.id = ?
-          `).bind(tripId).first() as any;
+          `).bind(tripId).first<BookingTripDetailsRow>();
 
           if (tripDetails) {
             const driverFirstName = tripDetails.first_name_encrypted
               ? await decrypt(JSON.parse(tripDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, tripDetails.driver_id.toString())
               : 'Driver';
 
-            const riderDetails = await db.prepare('SELECT first_name_encrypted, last_name_encrypted FROM users WHERE id = ?').bind(user.id).first() as any;
+            const riderDetails = await db.prepare('SELECT first_name_encrypted, last_name_encrypted FROM users WHERE id = ?').bind(user.id).first<RiderNameRow>();
             const riderFirstName = riderDetails?.first_name_encrypted
               ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
               : 'A rider';
@@ -269,9 +386,10 @@ tripRoutes.post('/:tripId/book', async (c) => {
       }
 
       return c.json({ message: 'Booking request submitted successfully', booking: { tripId, passengerId: user.id, status: 'requested', createdAt: new Date().toISOString() } });
-    } catch (err: any) {
-      logger.error('Booking error', err);
-      if (err.message?.includes('UNIQUE')) {
+    } catch (err: unknown) {
+      const parsedError = parseError(err);
+      logger.error('Booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
+      if (parsedError.message.includes('UNIQUE')) {
         return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Already booked on this trip' } }, 409);
       }
     }
@@ -286,12 +404,12 @@ tripRoutes.post('/:tripId/book', async (c) => {
 
 tripRoutes.post('/offer', async (c) => {
   const user = c.get('user') as AuthUser;
-  let body: any;
+  let body: unknown;
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
 
-  const { pickupLocation, dropoffLocation, scheduledTime, availableSeats = 3, price, vehicleInfo, notes } = body;
+  const { pickupLocation, dropoffLocation, scheduledTime, availableSeats = 3, price, vehicleInfo, notes } = (body as OfferRequestBody);
 
   if (!pickupLocation || !dropoffLocation || !scheduledTime) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Pickup, dropoff, and scheduled time are required' } }, 400);
@@ -358,8 +476,9 @@ tripRoutes.post('/offer', async (c) => {
         message: 'Trip offer created successfully',
         trip: { id: tripId, status: 'scheduled', driverId: user.id, availableSeats, createdAt: new Date().toISOString() },
       });
-    } catch (err: any) {
-      logger.error('Trip offer error', err);
+    } catch (err: unknown) {
+      const parsedError = parseError(err);
+      logger.error('Trip offer error', err instanceof Error ? err : undefined, { error: parsedError.message });
     }
   }
 
@@ -405,7 +524,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
             JOIN users u ON tp.user_id = u.id
             JOIN users d ON t.driver_id = d.id
             WHERE tp.id = ?
-          `).bind(bookingId).first() as any;
+          `).bind(bookingId).first<AcceptBookingDetailsRow>();
 
           if (bookingDetails) {
             const riderFirstName = bookingDetails.first_name_encrypted
@@ -458,8 +577,9 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
       }
 
       return c.json({ message: 'Booking accepted successfully', booking: { id: bookingId, tripId, status: 'accepted', acceptedAt: new Date().toISOString() } });
-    } catch (err: any) {
-      logger.error('Accept booking error', err);
+    } catch (err: unknown) {
+      const parsedError = parseError(err);
+      logger.error('Accept booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
     }
   }
 
@@ -474,7 +594,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
   const user = c.get('user') as AuthUser;
   const tripId = c.req.param('tripId');
   const bookingId = c.req.param('bookingId');
-  let body: any = {};
+  let body: unknown = {};
   try { body = await c.req.json(); } catch { /* empty body is OK */ }
 
   const db = getDB(c);
@@ -498,14 +618,14 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
             JOIN users u ON tp.user_id = u.id
             JOIN trips t ON tp.trip_id = t.id
             WHERE tp.id = ?
-          `).bind(bookingId).first() as any;
+          `).bind(bookingId).first<RejectRiderDetailsRow>();
 
           if (riderDetails) {
             const riderFirstName = riderDetails.first_name_encrypted
               ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, riderDetails.user_id.toString())
               : 'Rider';
 
-            const reason = body.reason || 'The driver is unable to accommodate this booking';
+            const reason = (body as { reason?: string }).reason || 'The driver is unable to accommodate this booking';
 
             await notifications.sendEmail(
               riderDetails.email,
@@ -529,8 +649,9 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
           logger.warn('Failed to send rejection notification', { error: err instanceof Error ? err.message : String(err) });
         }
       }
-    } catch (err: any) {
-      logger.error('Reject booking error', err);
+    } catch (err: unknown) {
+      const parsedError = parseError(err);
+      logger.error('Reject booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
     }
   }
 
@@ -544,7 +665,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
 tripRoutes.post('/:tripId/cancel', async (c) => {
   const user = c.get('user') as AuthUser;
   const tripId = c.req.param('tripId');
-  let body: any = {};
+  let body: unknown = {};
   try { body = await c.req.json(); } catch { body = {}; }
 
   const db = getDB(c);
@@ -570,9 +691,9 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
             WHERE tp.trip_id = ? AND tp.status = 'accepted' AND tp.role = 'rider'
           `).bind(tripId).all();
 
-          const reason = body.reason || 'The driver had to cancel this trip';
+          const reason = (body as { reason?: string }).reason || 'The driver had to cancel this trip';
 
-          for (const participant of participants.results as any[]) {
+          for (const participant of (participants.results ?? []) as CancelParticipantRow[]) {
             try {
               const firstName = participant.first_name_encrypted
                 ? await decrypt(JSON.parse(participant.first_name_encrypted).data, c.env.ENCRYPTION_KEY, participant.user_id.toString())
@@ -608,8 +729,9 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
           logger.warn('Failed to send cancellation notifications', { error: err instanceof Error ? err.message : String(err) });
         }
       }
-    } catch (err: any) {
-      logger.error('Cancel trip error', err);
+    } catch (err: unknown) {
+      const parsedError = parseError(err);
+      logger.error('Cancel trip error', err instanceof Error ? err : undefined, { error: parsedError.message });
     }
   }
 
@@ -623,12 +745,12 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
 tripRoutes.post('/:tripId/rate', async (c) => {
   const user = c.get('user') as AuthUser;
   const tripId = c.req.param('tripId');
-  let body: any;
+  let body: unknown;
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
 
-  const { rating, comment } = body;
+  const { rating, comment } = (body as RateRequestBody);
   if (typeof rating !== 'number' || rating < 1 || rating > 5) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Rating must be between 1 and 5' } }, 400);
   }
@@ -643,8 +765,9 @@ tripRoutes.post('/:tripId/rate', async (c) => {
         .prepare('UPDATE trip_participants SET rating = ?, review_encrypted = ? WHERE trip_id = ? AND user_id = ?')
         .bind(rating, comment || null, tripId, user.id)
         .run();
-    } catch (err: any) {
-      logger.error('Rate trip error', err);
+    } catch (err: unknown) {
+      const parsedError = parseError(err);
+      logger.error('Rate trip error', err instanceof Error ? err : undefined, { error: parsedError.message });
     }
   }
 
