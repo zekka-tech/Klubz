@@ -4,9 +4,8 @@
  * Provides caching layer using Cloudflare KV for improved performance.
  */
 
-import type { KVNamespace } from '@cloudflare/workers-types';
 import type { Context } from 'hono';
-import type { AppEnv } from '../types';
+import type { AppEnv, KVNamespace } from '../types';
 import { logger } from './logger';
 
 export class CacheService {

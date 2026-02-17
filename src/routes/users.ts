@@ -389,7 +389,7 @@ userRoutes.get('/export', async (c) => {
       `).bind(user.id),
     ]);
 
-    const userRecord = userData.results[0] as any;
+    const userRecord = (userData.results ?? [])[0] as any;
 
     if (!userRecord) {
       throw new AppError('User not found', 'NOT_FOUND', 404);
@@ -420,10 +420,10 @@ userRoutes.get('/export', async (c) => {
         createdIP: userRecord.created_ip,
       },
       trips: {
-        asDriver: trips.results,
-        asPassenger: participants.results,
+        asDriver: trips.results ?? [],
+        asPassenger: participants.results ?? [],
       },
-      auditLogs: auditLogs.results,
+      auditLogs: auditLogs.results ?? [],
     };
 
     // Log export request
@@ -446,9 +446,9 @@ userRoutes.get('/export', async (c) => {
       userId: user.id,
       data: decryptedData,
       meta: {
-        tripsCount: trips.results.length,
-        participationsCount: participants.results.length,
-        auditLogsCount: auditLogs.results.length,
+        tripsCount: (trips.results ?? []).length,
+        participationsCount: (participants.results ?? []).length,
+        auditLogsCount: (auditLogs.results ?? []).length,
       }
     });
   } catch (err: unknown) {

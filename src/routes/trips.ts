@@ -68,14 +68,19 @@ tripRoutes.get('/available', async (c) => {
 
     // Create rider request
     const riderRequest: RiderRequest = {
-      riderId: user.id,
-      departure: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
-      destination: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
-      earliestDeparture: departureTime,
-      latestDeparture: new Date(departureTime.getTime() + 2 * 60 * 60 * 1000), // 2 hour window
+      id: `search-${user.id}-${Date.now()}`,
+      riderId: String(user.id),
+      pickup: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
+      dropoff: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
+      earliestDeparture: departureTime.getTime(),
+      latestDeparture: departureTime.getTime() + 2 * 60 * 60 * 1000,
       seatsNeeded: 1,
-      maxDetourMinutes: parseInt(maxDetour),
-      maxWalkingDistanceKm: 0.5,
+      status: 'pending',
+      preferences: {
+        maxDetourMinutes: parseInt(maxDetour),
+        maxWalkDistanceKm: 0.5,
+      },
+      createdAt: new Date().toISOString(),
     };
 
     // Convert DB results to DriverTrip format (simplified)
@@ -85,43 +90,48 @@ tripRoutes.get('/available', async (c) => {
       const destCoords = t.destination.includes('{') ? JSON.parse(t.destination) : { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) };
 
       return {
-        tripId: t.id,
-        driverId: t.driver_id,
+        id: String(t.id),
+        driverId: String(t.driver_id),
         departure: { lat: originCoords.lat || parseFloat(pickupLat), lng: originCoords.lng || parseFloat(pickupLng) },
         destination: { lat: destCoords.lat || parseFloat(dropoffLat), lng: destCoords.lng || parseFloat(dropoffLng) },
-        departureTime: new Date(t.departure_time),
+        departureTime: new Date(t.departure_time).getTime(),
         availableSeats: t.available_seats,
-        vehicle: { type: t.vehicle_type || 'sedan', make: '', model: '', year: 2020 },
-        pricePerSeat: t.price_per_seat,
+        totalSeats: t.available_seats,
+        routePolyline: [],
+        status: 'active',
+        vehicle: { make: t.vehicle_type || 'sedan', model: '', year: 2020, licensePlate: '', capacity: t.available_seats },
+        createdAt: new Date().toISOString(),
+        routeDistanceKm: Number(t.price_per_seat) || undefined,
       };
     });
 
     // Use matching algorithm
-    const matches = matchRiderToDrivers(riderRequest, drivers);
+    const { matches } = matchRiderToDrivers(riderRequest, drivers);
+    const driverById = new Map(drivers.map((d) => [d.id, d]));
 
     const trips = matches.map(match => ({
-      id: match.trip.tripId,
-      title: `Trip to ${match.trip.destination.lat.toFixed(4)}, ${match.trip.destination.lng.toFixed(4)}`,
-      driverName: `Driver ${match.trip.driverId}`,
+      id: match.driverTripId,
+      title: `Trip to ${(driverById.get(match.driverTripId)?.destination.lat ?? 0).toFixed(4)}, ${(driverById.get(match.driverTripId)?.destination.lng ?? 0).toFixed(4)}`,
+      driverName: `Driver ${match.driverId}`,
       driverRating: 4.5,
       pickupLocation: {
-        lat: match.trip.departure.lat,
-        lng: match.trip.departure.lng,
+        lat: driverById.get(match.driverTripId)?.departure.lat ?? 0,
+        lng: driverById.get(match.driverTripId)?.departure.lng ?? 0,
       },
       dropoffLocation: {
-        lat: match.trip.destination.lat,
-        lng: match.trip.destination.lng,
+        lat: driverById.get(match.driverTripId)?.destination.lat ?? 0,
+        lng: driverById.get(match.driverTripId)?.destination.lng ?? 0,
       },
-      scheduledTime: match.trip.departureTime.toISOString(),
-      availableSeats: match.trip.availableSeats,
-      vehicleType: match.trip.vehicle?.type || 'sedan',
-      pricePerSeat: match.trip.pricePerSeat || 35,
+      scheduledTime: new Date(driverById.get(match.driverTripId)?.departureTime ?? Date.now()).toISOString(),
+      availableSeats: driverById.get(match.driverTripId)?.availableSeats ?? 0,
+      vehicleType: driverById.get(match.driverTripId)?.vehicle?.make || 'sedan',
+      pricePerSeat: 35,
       // Matching scores
       matchScore: match.score,
       explanation: match.explanation,
-      detourMinutes: match.breakdown?.detourMinutes || 0,
+      detourMinutes: match.estimatedDetourMinutes || 0,
       walkingDistanceKm: match.breakdown?.pickupDistanceKm || 0,
-      carbonSavedKg: match.breakdown?.carbonSavedKg || 0,
+      carbonSavedKg: match.carbonSavedKg || 0,
     }));
 
     logger.info('Trip search completed with matching engine', {

@@ -1,6 +1,7 @@
 import { jsxRenderer } from 'hono/jsx-renderer'
 
-export const renderer = jsxRenderer(({ children, title = 'Klubz - Smart Carpooling' }) => {
+export const renderer = jsxRenderer(({ children }) => {
+  const title = 'Klubz - Smart Carpooling'
   return (
     <html lang="en" data-theme="dark">
       <head>

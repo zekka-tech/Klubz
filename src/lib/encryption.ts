@@ -48,7 +48,7 @@ async function importKey(hexKey: string): Promise<CryptoKey> {
   }
   return crypto.subtle.importKey(
     'raw',
-    keyBytes,
+    keyBytes as unknown as BufferSource,
     { name: ALGORITHM, length: KEY_LENGTH },
     false,
     ['encrypt', 'decrypt'],
@@ -75,7 +75,7 @@ export async function encrypt(
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
   const encoded = new TextEncoder().encode(data);
 
-  const params: AesGcmParams = { name: ALGORITHM, iv };
+  const params: AesGcmParams = { name: ALGORITHM, iv: iv as unknown as BufferSource };
   if (aad) {
     params.additionalData = new TextEncoder().encode(aad);
   }
@@ -105,12 +105,12 @@ export async function decrypt(
   const iv = base64ToBytes(encrypted.iv);
   const ciphertext = base64ToBytes(encrypted.ct);
 
-  const params: AesGcmParams = { name: ALGORITHM, iv };
+  const params: AesGcmParams = { name: ALGORITHM, iv: iv as unknown as BufferSource };
   if (aad) {
     params.additionalData = new TextEncoder().encode(aad);
   }
 
-  const plaintext = await crypto.subtle.decrypt(params, key, ciphertext);
+  const plaintext = await crypto.subtle.decrypt(params, key, ciphertext as unknown as BufferSource);
   return new TextDecoder().decode(plaintext);
 }
 
@@ -203,7 +203,7 @@ async function verifyPasswordPBKDF2(
   const computedHash = await crypto.subtle.deriveBits(
     {
       name: 'PBKDF2',
-      salt,
+      salt: salt as unknown as BufferSource,
       iterations,
       hash: 'SHA-256',
     },

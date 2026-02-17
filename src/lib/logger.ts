@@ -72,22 +72,38 @@ class Logger {
     this.emit({ level: 'warn', message, timestamp: new Date().toISOString(), metadata: meta });
   }
 
-  error(message: string, error?: Error, meta?: Record<string, unknown>) {
+  error(message: string, errorOrMeta?: Error | Record<string, unknown>, meta?: Record<string, unknown>) {
+    let error: Error | undefined;
+    let mergedMeta: Record<string, unknown> | undefined;
+    if (errorOrMeta instanceof Error) {
+      error = errorOrMeta;
+      mergedMeta = meta;
+    } else {
+      mergedMeta = errorOrMeta;
+    }
     this.emit({
       level: 'error',
       message,
       timestamp: new Date().toISOString(),
-      metadata: meta,
+      metadata: mergedMeta,
       error: error ? { name: error.name, message: error.message, stack: error.stack?.slice(0, 500) } : undefined,
     });
   }
 
-  fatal(message: string, error?: Error, meta?: Record<string, unknown>) {
+  fatal(message: string, errorOrMeta?: Error | Record<string, unknown>, meta?: Record<string, unknown>) {
+    let error: Error | undefined;
+    let mergedMeta: Record<string, unknown> | undefined;
+    if (errorOrMeta instanceof Error) {
+      error = errorOrMeta;
+      mergedMeta = meta;
+    } else {
+      mergedMeta = errorOrMeta;
+    }
     this.emit({
       level: 'fatal',
       message,
       timestamp: new Date().toISOString(),
-      metadata: meta,
+      metadata: mergedMeta,
       error: error ? { name: error.name, message: error.message, stack: error.stack?.slice(0, 500) } : undefined,
     });
   }

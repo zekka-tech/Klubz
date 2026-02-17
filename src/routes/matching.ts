@@ -32,6 +32,8 @@
 
 import { Hono } from 'hono';
 import { z } from 'zod';
+import type { Context } from 'hono';
+import type { AppEnv } from '../types';
 import {
   matchRiderToDrivers,
   optimizePool,
@@ -120,22 +122,15 @@ const rejectMatchSchema = z.object({
 // Bindings type
 // ---------------------------------------------------------------------------
 
-interface Env {
-  DB: any;
-  CACHE: any;
-  JWT_SECRET: string;
-  ENVIRONMENT: string;
-}
-
 // ---------------------------------------------------------------------------
 // Route Factory
 // ---------------------------------------------------------------------------
 
 export function createMatchingRoutes() {
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<AppEnv>();
 
   // Helper to get repository
-  function getRepo(c: any): MatchingRepository {
+  function getRepo(c: Context<AppEnv>): MatchingRepository {
     return new MatchingRepository(c.env.DB, c.env.CACHE);
   }
 
