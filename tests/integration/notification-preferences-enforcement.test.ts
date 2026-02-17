@@ -1,7 +1,8 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import app from '../../src/index';
 import { createToken } from '../../src/middleware/auth';
 import type { JWTPayload } from '../../src/types';
+import { encrypt } from '../../src/lib/encryption';
 
 type ResolverKind = 'first' | 'all' | 'run';
 type Resolver = (query: string, params: unknown[], kind: ResolverKind) => unknown;
@@ -93,6 +94,28 @@ const prefsTripUpdatesDisabled = {
     tripUpdates: false,
     marketingEmails: false,
     smsNotifications: true,
+  }),
+  privacy_json: JSON.stringify({
+    shareLocation: true,
+    allowDriverContact: true,
+    showInDirectory: false,
+  }),
+  accessibility_json: JSON.stringify({
+    wheelchairAccessible: false,
+    visualImpairment: false,
+    hearingImpairment: false,
+  }),
+  language: 'en',
+  timezone: 'Africa/Johannesburg',
+  currency: 'ZAR',
+};
+
+const prefsSmsDisabled = {
+  notifications_json: JSON.stringify({
+    tripReminders: true,
+    tripUpdates: true,
+    marketingEmails: false,
+    smsNotifications: false,
   }),
   privacy_json: JSON.stringify({
     shareLocation: true,
@@ -206,5 +229,65 @@ describe('Notification preference enforcement integration', () => {
 
     expect(res.status).toBe(200);
     expect(notificationInserts).toBe(0);
+  });
+
+  test('booking acceptance does not send SMS when smsNotifications is disabled', async () => {
+    const token = await authToken(60, 'user');
+    const smsEncrypted = await encrypt('+27123456789', baseEnv.ENCRYPTION_KEY, '60');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 60 };
+      }
+      if (query.includes("UPDATE trip_participants SET status = 'accepted'") && kind === 'run') {
+        return { ok: true };
+      }
+      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+        return { ok: true };
+      }
+      if (query.includes('SELECT tp.user_id') && kind === 'first') {
+        return {
+          user_id: 60,
+          title: 'Morning Ride',
+          origin: 'A',
+          destination: 'B',
+          departure_time: new Date().toISOString(),
+          price_per_seat: 30,
+          email: 'rider@example.com',
+          first_name_encrypted: null,
+          last_name_encrypted: null,
+          phone_encrypted: JSON.stringify({ data: smsEncrypted }),
+          driver_first_name: null,
+        };
+      }
+      if (query.includes('FROM user_preferences') && kind === 'first') {
+        return prefsSmsDisabled;
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') {
+        return { ok: true };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      {
+        ...baseEnv,
+        TWILIO_ACCOUNT_SID: 'AC_test',
+        TWILIO_AUTH_TOKEN: 'auth_test',
+        TWILIO_PHONE_NUMBER: '+10000000000',
+        DB: db,
+        CACHE: new MockKV(),
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });
