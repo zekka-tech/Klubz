@@ -34,6 +34,17 @@ const registerSchema = z.object({
   organizationId: z.string().optional(),
 });
 
+interface LoginUserRow {
+  id: number;
+  email: string;
+  password_hash: string;
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+  role: string;
+  is_active: number;
+  mfa_enabled: number;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -86,7 +97,7 @@ authRoutes.post('/login', async (c) => {
       const user = await db
         .prepare('SELECT id, email, password_hash, first_name_encrypted, last_name_encrypted, role, is_active, mfa_enabled, last_login_at, created_at FROM users WHERE email_hash = ? AND deleted_at IS NULL')
         .bind(emailHash)
-        .first();
+        .first<LoginUserRow>();
 
       if (!user) {
         return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Invalid email or password' } }, 401);
@@ -211,7 +222,7 @@ authRoutes.post('/register', async (c) => {
       const existing = await db
         .prepare('SELECT id FROM users WHERE email_hash = ? AND deleted_at IS NULL')
         .bind(emailHash)
-        .first();
+        .first<{ id: number }>();
 
       if (existing) {
         return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Email already registered' } }, 409);

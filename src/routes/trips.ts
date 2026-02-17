@@ -49,6 +49,10 @@ interface DriverTripRow {
   driver_id: number;
 }
 
+interface TripSeatRow {
+  available_seats: number;
+}
+
 interface BookRequestBody {
   pickupLocation?: LocationInput;
   dropoffLocation?: LocationInput;
@@ -310,9 +314,9 @@ tripRoutes.post('/:tripId/book', async (c) => {
   if (db) {
     try {
       // Verify trip exists and has seats
-      const trip = await db.prepare('SELECT id, available_seats, status FROM trips WHERE id = ?').bind(tripId).first();
+      const trip = await db.prepare('SELECT id, available_seats, status FROM trips WHERE id = ?').bind(tripId).first<TripSeatRow>();
       if (!trip) return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
-      if ((trip.available_seats as number) < passengers) {
+      if (trip.available_seats < passengers) {
         return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Not enough seats' } }, 400);
       }
 

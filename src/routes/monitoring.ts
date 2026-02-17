@@ -113,17 +113,17 @@ monitoringRoutes.get('/metrics', authMiddleware(['admin', 'super_admin']), async
         db.prepare("SELECT COUNT(*) as count FROM trip_participants WHERE status = 'accepted'"),
       ]);
 
-      businessMetrics.activeTrips = tripsActive.results?.[0]?.count ?? 0;
-      businessMetrics.completedTrips = tripsCompleted.results?.[0]?.count ?? 0;
-      businessMetrics.totalUsers = usersTotal.results?.[0]?.count ?? 0;
-      businessMetrics.totalBookings = bookingsTotal.results?.[0]?.count ?? 0;
+      businessMetrics.activeTrips = (tripsActive.results?.[0] as CountRow | undefined)?.count ?? 0;
+      businessMetrics.completedTrips = (tripsCompleted.results?.[0] as CountRow | undefined)?.count ?? 0;
+      businessMetrics.totalUsers = (usersTotal.results?.[0] as CountRow | undefined)?.count ?? 0;
+      businessMetrics.totalBookings = (bookingsTotal.results?.[0] as CountRow | undefined)?.count ?? 0;
 
-      const totalReqs = logsTotal.results?.[0]?.count ?? 0;
-      const totalErrs = errorsTotal.results?.[0]?.count ?? 0;
+      const totalReqs = (logsTotal.results?.[0] as CountRow | undefined)?.count ?? 0;
+      const totalErrs = (errorsTotal.results?.[0] as CountRow | undefined)?.count ?? 0;
 
       appMetrics.requests.total = totalReqs;
-      appMetrics.requests.last1h = logsLast1h.results?.[0]?.count ?? 0;
-      appMetrics.requests.last24h = logsLast24h.results?.[0]?.count ?? 0;
+      appMetrics.requests.last1h = (logsLast1h.results?.[0] as CountRow | undefined)?.count ?? 0;
+      appMetrics.requests.last24h = (logsLast24h.results?.[0] as CountRow | undefined)?.count ?? 0;
       appMetrics.errors.total = totalErrs;
       appMetrics.errors.rate = totalReqs > 0 ? ((totalErrs / totalReqs) * 100).toFixed(2) : 0;
     } catch (err: unknown) {

@@ -11,14 +11,14 @@
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
-  batch<T = any>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
   exec(query: string): Promise<D1ExecResult>;
 }
 
 export interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
-  first<T = any>(column?: string): Promise<T | null>;
-  all<T = any>(): Promise<D1Result<T>>;
+  first<T = unknown>(column?: string): Promise<T | null>;
+  all<T = unknown>(): Promise<D1Result<T>>;
   run(): Promise<D1Result>;
 }
 

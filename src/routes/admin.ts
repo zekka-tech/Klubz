@@ -12,6 +12,10 @@ import { getDB } from '../lib/db';
 
 export const adminRoutes = new Hono<AppEnv>();
 
+interface CountRow {
+  count: number;
+}
+
 interface TotalRow {
   total: number;
 }
@@ -29,6 +33,30 @@ interface AdminUserRow {
   trip_count: number;
   participation_count: number;
   avg_driver_rating: number | null;
+}
+
+interface AdminUserDetailRow {
+  id: number;
+  email: string;
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+  role: string;
+  phone_encrypted: string | null;
+  is_active: number;
+  email_verified: number;
+  mfa_enabled: number;
+  total_trips: number;
+  avg_rating: number | null;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+interface ExportUserRow {
+  email: string;
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+  role: string;
+  created_at: string;
 }
 
 interface AuditLogRow {
@@ -73,12 +101,12 @@ adminRoutes.get('/stats', async (c) => {
         db.prepare("SELECT COALESCE(SUM(price_per_seat), 0) as total FROM trips WHERE status = 'completed'"),
       ]);
 
-      const totalUsers = usersRes.results?.[0]?.count ?? 0;
-      const activeUsers = activeUsersRes.results?.[0]?.count ?? 0;
-      const totalTrips = tripsRes.results?.[0]?.count ?? 0;
-      const completedTrips = completedRes.results?.[0]?.count ?? 0;
-      const activeDrivers = driversRes.results?.[0]?.count ?? 0;
-      const revenue = carbonRes.results?.[0]?.total ?? 0;
+      const totalUsers = (usersRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+      const activeUsers = (activeUsersRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+      const totalTrips = (tripsRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+      const completedTrips = (completedRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+      const activeDrivers = (driversRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+      const revenue = (carbonRes.results?.[0] as TotalRow | undefined)?.total ?? 0;
 
       return c.json({
         totalUsers,
@@ -207,7 +235,7 @@ adminRoutes.get('/users/:userId', async (c) => {
            FROM users u WHERE u.id = ?`
         )
         .bind(userId)
-        .first();
+        .first<AdminUserDetailRow>();
 
       if (!user) return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
 
@@ -357,7 +385,7 @@ adminRoutes.post('/users/:userId/export', async (c) => {
 
   if (db) {
     try {
-      const user = await db.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+      const user = await db.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first<ExportUserRow>();
       if (!user) return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
 
       const { results: trips } = await db
