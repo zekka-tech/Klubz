@@ -132,6 +132,28 @@ const prefsSmsDisabled = {
   currency: 'ZAR',
 };
 
+const prefsNotificationsEnabled = {
+  notifications_json: JSON.stringify({
+    tripReminders: true,
+    tripUpdates: true,
+    marketingEmails: false,
+    smsNotifications: true,
+  }),
+  privacy_json: JSON.stringify({
+    shareLocation: true,
+    allowDriverContact: true,
+    showInDirectory: false,
+  }),
+  accessibility_json: JSON.stringify({
+    wheelchairAccessible: false,
+    visualImpairment: false,
+    hearingImpairment: false,
+  }),
+  language: 'en',
+  timezone: 'Africa/Johannesburg',
+  currency: 'ZAR',
+};
+
 async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' = 'user') {
   const now = Math.floor(Date.now() / 1000);
   const payload: JWTPayload = {
@@ -289,5 +311,118 @@ describe('Notification preference enforcement integration', () => {
     expect(res.status).toBe(200);
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
+  });
+
+  test('booking acceptance sends SMS and persists notification when preferences allow it', async () => {
+    const token = await authToken(61, 'user');
+    const smsEncrypted = await encrypt('+27123456780', baseEnv.ENCRYPTION_KEY, '61');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify({ sid: 'SM123', status: 'sent' }),
+      { status: 201, headers: { 'Content-Type': 'application/json' } },
+    ));
+    let notificationInserts = 0;
+
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 61 };
+      }
+      if (query.includes("UPDATE trip_participants SET status = 'accepted'") && kind === 'run') {
+        return { ok: true };
+      }
+      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+        return { ok: true };
+      }
+      if (query.includes('SELECT tp.user_id') && kind === 'first') {
+        return {
+          user_id: 61,
+          title: 'Evening Ride',
+          origin: 'A',
+          destination: 'B',
+          departure_time: new Date().toISOString(),
+          price_per_seat: 30,
+          email: 'rider@example.com',
+          first_name_encrypted: null,
+          last_name_encrypted: null,
+          phone_encrypted: JSON.stringify({ data: smsEncrypted }),
+          driver_first_name: null,
+        };
+      }
+      if (query.includes('FROM user_preferences') && kind === 'first') {
+        return prefsNotificationsEnabled;
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') {
+        notificationInserts += 1;
+        return { ok: true };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      {
+        ...baseEnv,
+        TWILIO_ACCOUNT_SID: 'AC_test',
+        TWILIO_AUTH_TOKEN: 'auth_test',
+        TWILIO_PHONE_NUMBER: '+10000000000',
+        DB: db,
+        CACHE: new MockKV(),
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect(notificationInserts).toBe(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    fetchSpy.mockRestore();
+  });
+
+  test('payment succeeded webhook persists notification when tripUpdates is enabled', async () => {
+    const token = await authToken(44, 'user');
+    let notificationInserts = 0;
+    const event = {
+      id: 'evt_pref_allow_1',
+      type: 'payment_intent.succeeded',
+      data: {
+        object: {
+          id: 'pi_pref_allow_1',
+          amount: 2500,
+          metadata: {
+            tripId: '10',
+            userId: '44',
+            bookingId: '88',
+          },
+        },
+      },
+    };
+
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes("SET payment_status = 'paid'") && kind === 'run') {
+        return { ok: true };
+      }
+      if (query.includes('FROM user_preferences') && kind === 'first') {
+        return prefsNotificationsEnabled;
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') {
+        notificationInserts += 1;
+        return { ok: true };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(event),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(notificationInserts).toBe(1);
   });
 });

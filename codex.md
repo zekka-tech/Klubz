@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 18:24:44 UTC  
+Last updated: 2026-02-17 18:29:36 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (39/39)
+- `npm test`: PASS (41/41)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 18:29 UTC` | codex | action | integration-tests | expanded notification preference enforcement suite with positive-path assertions for SMS delivery + notification persistence when preferences are enabled
+- `2026-02-17 18:29 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (41 tests)
 - `2026-02-17 18:24 UTC` | codex | commit | `2293ec4` | extended preference enforcement coverage for SMS-disabled delivery path under Twilio-enabled branch
 - `2026-02-17 18:24 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 18:22 UTC` | codex | action | integration-tests | expanded `tests/integration/notification-preferences-enforcement.test.ts` with Twilio-enabled branch validation ensuring SMS is skipped when `smsNotifications=false`
