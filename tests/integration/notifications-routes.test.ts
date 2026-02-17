@@ -367,4 +367,19 @@ describe('Notification route integration flows', () => {
     expect(body.pagination.offset).toBe(2);
     expect(body.pagination.hasMore).toBe(false);
   });
+
+  test('invalid status filter returns 400 validation error', async () => {
+    const token = await authToken(17);
+    const db = new MockDB(() => null);
+
+    const res = await app.request(
+      '/api/notifications?status=unknown',
+      { headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+  });
 });

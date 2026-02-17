@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-17 19:05:04 UTC  
+Last updated: 2026-02-17 19:08:36 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (46/46)
+- `npm test`: PASS (47/47)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-17 19:08 UTC` | codex | action | integration-tests | added invalid `status` query-param contract test for `/api/notifications` (`400 VALIDATION_ERROR`)
+- `2026-02-17 19:08 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (47 tests)
 - `2026-02-17 19:05 UTC` | codex | commit | `f947ae7` | added notification pagination boundary integration coverage and updated quality status
 - `2026-02-17 19:05 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 19:04 UTC` | codex | action | integration-tests | added pagination boundary coverage for `/api/notifications` (`limit` clamp and `offset`/`hasMore` behavior)
