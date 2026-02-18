@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 06:06:58 UTC  
+Last updated: 2026-02-18 06:11:30 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (111/111)
+- `npm test`: PASS (113/113)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
@@ -35,14 +35,14 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `6e018d8` - Added privileged read-access audit coverage with best-effort non-blocking writes for admin and monitoring read endpoints, plus integration assertions for audit action persistence.
-2. `0e9de3b` - Updated codex ledger for transactional consistency hardening batch.
-3. `b9802b2` - Hardened matching confirm transactional consistency with atomic seat reservation/release compensation and race-contract integration tests.
-4. `d939658` - Updated codex ledger for mutation validation hardening batch.
-5. `0b94ae4` - Hardened matching mutation input validation and trip-offer payload contracts with expanded negative-path integration coverage.
-6. `c1cd599` - Hardened admin mutation safety by removing silent-success fallbacks on DB failures, adding explicit `500 INTERNAL_ERROR` contracts for failed admin updates/exports, enforcing update-field validation, and adding admin action audit-log writes (`ADMIN_USER_UPDATED`, `ADMIN_USER_EXPORT`) with dedicated integration coverage.
-7. `b9c526d` - Blocked admin privilege escalation by restricting `super_admin` role assignment/modification to super admins only, and added integration contracts to prevent admin-driven elevation or super-admin account tampering.
-8. `87ce1fe` - Added automated migration filename/order policy enforcement (`scripts/check-migration-order.js`), wired `db:check-migrations` into CI before migration smoke tests, and documented deterministic numbering policy (next unique prefix `0007_*`).
+1. `4778fb4` - Normalized malformed JSON contracts on matching write endpoints (`driver-trips` create, `rider-requests` create, `find`, `find-pool`, `confirm`, `reject`) to consistently return `400 VALIDATION_ERROR` with `Invalid JSON`; added integration coverage for `find/find-pool/confirm/reject`.
+2. `a29810d` - Updated codex ledger for privileged audit coverage batch.
+3. `6e018d8` - Added privileged read-access audit coverage with best-effort non-blocking writes for admin and monitoring read endpoints, plus integration assertions for audit action persistence.
+4. `0e9de3b` - Updated codex ledger for transactional consistency hardening batch.
+5. `b9802b2` - Hardened matching confirm transactional consistency with atomic seat reservation/release compensation and race-contract integration tests.
+6. `d939658` - Updated codex ledger for mutation validation hardening batch.
+7. `0b94ae4` - Hardened matching mutation input validation and trip-offer payload contracts with expanded negative-path integration coverage.
+8. `c1cd599` - Hardened admin mutation safety by removing silent-success fallbacks on DB failures, adding explicit `500 INTERNAL_ERROR` contracts for failed admin updates/exports, enforcing update-field validation, and adding admin action audit-log writes (`ADMIN_USER_UPDATED`, `ADMIN_USER_EXPORT`) with dedicated integration coverage.
 
 Functional status:
 - Application compiles and builds.
@@ -120,6 +120,9 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 06:11 UTC` | codex | commit | `4778fb4` | normalized malformed-JSON validation contract across matching write endpoints and added integration coverage
+- `2026-02-18 06:10 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (113 tests)
+- `2026-02-18 06:09 UTC` | codex | action | matching-json-contract-hardening | added shared JSON-parse guard and standardized `400 VALIDATION_ERROR` response for malformed JSON on matching write paths
 - `2026-02-18 06:06 UTC` | codex | commit | `6e018d8` | added privileged read-access audit coverage across admin/monitoring routes and expanded integration contracts
 - `2026-02-18 06:05 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (111 tests)
 - `2026-02-18 06:04 UTC` | codex | action | security-audit-coverage | implemented best-effort admin/monitoring security event logging for privileged read paths (`ADMIN_*_VIEWED`, `ADMIN_MONITORING_*_VIEWED`)
