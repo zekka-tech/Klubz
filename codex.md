@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 04:49:00 UTC  
+Last updated: 2026-02-18 04:56:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (70/70)
+- `npm test`: PASS (72/72)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -34,23 +34,24 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `0cfe8b2` - Hardened match confirmation/rejection integrity by binding operations to canonical match context, preventing payload mismatch abuse, and enforcing pending-only transitions with explicit `409 CONFLICT` contracts.
-2. `305d7dc` - Closed matching-route authz gaps by enforcing JWT auth globally, owner/admin authorization on trip/request/match resources, admin-only controls for batch/config-write/stats, and added integration coverage for unauthorized/forbidden paths.
-3. `31ddff2` - Added idempotent replay handling for payment intent creation using scoped cache keys, cached response reuse, and pending-intent retrieval to prevent duplicate Stripe intent creation on retries.
-4. `f328d53` - Expanded idempotency replay protection across driver write operations (`accept`, `reject`, `cancel`) to prevent duplicate state mutations under retry conditions.
-5. `91c038d` - Added conflict-safe state guards for booking reject and trip cancel transitions with explicit `409 CONFLICT` responses for non-pending/non-cancellable states.
-6. `1cbfe37` - Hardened booking acceptance consistency with guarded pending-only transitions, seat-decrement conflict handling, and compensating rollback when seat updates lose races.
-7. `bf1a256` - Guarded payment webhook transitions to prevent terminal-state downgrades (for example `paid -> failed/canceled`) and added regression coverage.
-8. `d6a7f7b` - Enforced server-side payment fare integrity by rejecting tampered `/api/payments/intent` amounts that do not match persisted trip fare.
-9. `9cac544` - Added webhook abuse-path integration contracts for missing signature and missing-metadata events (`succeeded`, `payment_failed`, `canceled`) and asserted no DB mutation on ignored events.
-10. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
-11. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
-12. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
-13. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
-14. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
-15. `88d1608` - Resolved lint-blocking errors across services and routes.
-16. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
-17. `37b9168` - Improved migration docs, tightened test scope, updated deps.
+1. `06a4016` - Enforced monitoring auth contracts by requiring JWT auth for `/sla`, `/performance`, `/errors`, `/carbon`, `/alerts` and admin role for `/security`, with integration tests for `401/403/200` behavior.
+2. `0cfe8b2` - Hardened match confirmation/rejection integrity by binding operations to canonical match context, preventing payload mismatch abuse, and enforcing pending-only transitions with explicit `409 CONFLICT` contracts.
+3. `305d7dc` - Closed matching-route authz gaps by enforcing JWT auth globally, owner/admin authorization on trip/request/match resources, admin-only controls for batch/config-write/stats, and added integration coverage for unauthorized/forbidden paths.
+4. `31ddff2` - Added idempotent replay handling for payment intent creation using scoped cache keys, cached response reuse, and pending-intent retrieval to prevent duplicate Stripe intent creation on retries.
+5. `f328d53` - Expanded idempotency replay protection across driver write operations (`accept`, `reject`, `cancel`) to prevent duplicate state mutations under retry conditions.
+6. `91c038d` - Added conflict-safe state guards for booking reject and trip cancel transitions with explicit `409 CONFLICT` responses for non-pending/non-cancellable states.
+7. `1cbfe37` - Hardened booking acceptance consistency with guarded pending-only transitions, seat-decrement conflict handling, and compensating rollback when seat updates lose races.
+8. `bf1a256` - Guarded payment webhook transitions to prevent terminal-state downgrades (for example `paid -> failed/canceled`) and added regression coverage.
+9. `d6a7f7b` - Enforced server-side payment fare integrity by rejecting tampered `/api/payments/intent` amounts that do not match persisted trip fare.
+10. `9cac544` - Added webhook abuse-path integration contracts for missing signature and missing-metadata events (`succeeded`, `payment_failed`, `canceled`) and asserted no DB mutation on ignored events.
+11. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
+12. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
+13. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
+14. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
+15. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
+16. `88d1608` - Resolved lint-blocking errors across services and routes.
+17. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
+18. `37b9168` - Improved migration docs, tightened test scope, updated deps.
 
 Functional status:
 - Application compiles and builds.
@@ -128,6 +129,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 04:56 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 04:56 UTC` | codex | commit | `06a4016` | enforced monitoring route auth/authz contracts and added integration coverage for monitoring access boundaries
+- `2026-02-18 04:55 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (72 tests)
+- `2026-02-18 04:54 UTC` | codex | action | monitoring-auth-hardening | secured monitoring endpoints per documented contracts (`auth` for operational views, `admin` for security telemetry)
 - `2026-02-18 04:49 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-18 04:49 UTC` | codex | commit | `0cfe8b2` | hardened match confirm/reject integrity with pending-state guards and payload-context mismatch protection
 - `2026-02-18 04:49 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (70 tests)
