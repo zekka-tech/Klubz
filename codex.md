@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 11:34:49 UTC  
+Last updated: 2026-02-18 11:45:55 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (127/127)
+- `npm test`: PASS (130/130)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
@@ -35,14 +35,14 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `b54a306` - Hardened payment webhook trust boundaries by binding state transitions to canonical `trip_participants.payment_intent_id` + booking context, enforcing metadata-to-booking consistency on success events, and expanding abuse-path integration contracts for spoofed metadata and intent mismatch handling.
-2. `cd5bb88` - Consolidated operational documentation to current production standards: replaced stale deployment/migration guidance, added `docs/OPERATIONS_RUNBOOK.md` for incident response and on-call procedures, and introduced standardized verification scripts (`verify`, `verify:ci`).
-3. `5f64e92` - Introduced shared query-integer validation helper (`src/lib/validation.ts`) and unified pagination/query integer parsing across admin, matching, and user routes to reduce duplicated validation logic and drift risk while preserving existing contracts.
-4. `9b6b1e1` - Expanded admin authorization matrix integration coverage with additional negative-role contracts across admin read/mutation/export subroutes (`/stats`, `/users`, `/users/:id`, `PUT /users/:id`, `POST /users/:id/export`) plus super-admin allow-path pass-through assertions.
-5. `2819b2c` - Added route-level observability contract assertions for global error telemetry classification, validating `handled` (`VALIDATION_ERROR`) and `unhandled` (`CONFIGURATION_ERROR`) structured log emissions on representative payment webhook paths.
-6. `82a1048` - Added non-critical transition audit persistence for matching confirm/reject and payment webhook succeeded/failed/canceled state transitions, with integration contracts enforcing `MATCH_CONFIRMED`, `MATCH_REJECTED`, `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, and `PAYMENT_CANCELED`.
-7. `e8a818b` - Added dedicated audit taxonomy integration contracts for critical auth/privacy flows, asserting expected audit actions on successful operations: `USER_LOGIN`, `USER_REGISTER`, `USER_LOGOUT`, `DATA_EXPORT`, and `ACCOUNT_DELETED`.
-8. `4038d19` - Updated codex ledger for authz matrix expansion batch.
+1. `42af5f9` - Added formal payment webhook threat-model artifact (`docs/PAYMENT_WEBHOOK_THREAT_MODEL.md`) and expanded integration abuse-path contracts to assert non-mutation for unknown-booking and payment-intent-mismatch failed/canceled webhook events.
+2. `b54a306` - Hardened payment webhook trust boundaries by binding state transitions to canonical `trip_participants.payment_intent_id` + booking context, enforcing metadata-to-booking consistency on success events, and expanding abuse-path integration contracts for spoofed metadata and intent mismatch handling.
+3. `cd5bb88` - Consolidated operational documentation to current production standards: replaced stale deployment/migration guidance, added `docs/OPERATIONS_RUNBOOK.md` for incident response and on-call procedures, and introduced standardized verification scripts (`verify`, `verify:ci`).
+4. `5f64e92` - Introduced shared query-integer validation helper (`src/lib/validation.ts`) and unified pagination/query integer parsing across admin, matching, and user routes to reduce duplicated validation logic and drift risk while preserving existing contracts.
+5. `9b6b1e1` - Expanded admin authorization matrix integration coverage with additional negative-role contracts across admin read/mutation/export subroutes (`/stats`, `/users`, `/users/:id`, `PUT /users/:id`, `POST /users/:id/export`) plus super-admin allow-path pass-through assertions.
+6. `2819b2c` - Added route-level observability contract assertions for global error telemetry classification, validating `handled` (`VALIDATION_ERROR`) and `unhandled` (`CONFIGURATION_ERROR`) structured log emissions on representative payment webhook paths.
+7. `82a1048` - Added non-critical transition audit persistence for matching confirm/reject and payment webhook succeeded/failed/canceled state transitions, with integration contracts enforcing `MATCH_CONFIRMED`, `MATCH_REJECTED`, `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, and `PAYMENT_CANCELED`.
+8. `e8a818b` - Added dedicated audit taxonomy integration contracts for critical auth/privacy flows, asserting expected audit actions on successful operations: `USER_LOGIN`, `USER_REGISTER`, `USER_LOGOUT`, `DATA_EXPORT`, and `ACCOUNT_DELETED`.
 
 Functional status:
 - Application compiles and builds.
@@ -120,6 +120,9 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 11:45 UTC` | codex | commit | `42af5f9` | added payment webhook threat-model document and expanded abuse-path integration contracts for unknown booking and intent mismatch handling
+- `2026-02-18 11:45 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, full `test`, and `build` all passing (130 tests)
+- `2026-02-18 11:43 UTC` | codex | action | webhook-threat-model-formalization | documented Stripe webhook threats/controls and linked artifact into deployment/operations docs
 - `2026-02-18 11:34 UTC` | codex | commit | `b54a306` | hardened webhook booking-intent binding and metadata trust checks with expanded integration coverage
 - `2026-02-18 11:33 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, targeted webhook suites, full `test`, and `build` all passing (127 tests)
 - `2026-02-18 11:31 UTC` | codex | action | webhook-trust-boundary-hardening | constrained payment webhook transitions to canonical booking+intent context and added spoofed-metadata abuse-path assertions
@@ -335,9 +338,8 @@ Latest entries:
 
 ## Next Active Tasks
 1. High: complete route-by-route security review and close any remaining authz/data-exposure gaps not yet covered by contracts.
-2. High: formalize payment webhook threat-model artifacts (replay, metadata trust boundaries, incident controls) in docs.
-3. Medium: add correlation ID propagation consistency checks across modules and related observability assertions.
-4. Medium: expand caching invalidation contracts/tests for user/admin/matching read models.
+2. Medium: add correlation ID propagation consistency checks across modules and related observability assertions.
+3. Medium: expand caching invalidation contracts/tests for user/admin/matching read models.
 
 Owner guidance:
 - Keep this file authoritative.
