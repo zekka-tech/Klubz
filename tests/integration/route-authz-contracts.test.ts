@@ -93,13 +93,18 @@ const baseEnv = {
   RATE_LIMIT_KV: new MockKV(),
 } as const;
 
-async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' = 'user') {
+async function authToken(
+  userId: number,
+  role: 'user' | 'admin' | 'super_admin' = 'user',
+  orgId?: string,
+) {
   const now = Math.floor(Date.now() / 1000);
   const payload: JWTPayload = {
     sub: userId,
     email: `user${userId}@example.com`,
     name: `User ${userId}`,
     role,
+    orgId,
     iat: now,
     exp: now + 3600,
     type: 'access',
@@ -178,5 +183,89 @@ describe('Route authz contracts', () => {
       baseEnv,
     );
     expect(monitoringSecurity.status).toBe(200);
+  });
+
+  test('matching routes enforce organization scope for admin and allow super admin override', async () => {
+    const adminToken = await authToken(1, 'admin', 'org-a');
+    const superAdminToken = await authToken(2, 'super_admin');
+
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM rider_requests') && kind === 'first') {
+        return {
+          id: 'rider-request-1',
+          rider_id: 88,
+          organization_id: 'org-b',
+          pickup_lat: -26.2,
+          pickup_lng: 28.0,
+          dropoff_lat: -26.1,
+          dropoff_lng: 28.1,
+          earliest_departure: 1700000000000,
+          latest_departure: 1700003600000,
+          seats_needed: 1,
+          preferences_json: null,
+          status: 'pending',
+          matched_driver_trip_id: null,
+          matched_at: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        };
+      }
+      if (query.includes('FROM match_results') && kind === 'first') {
+        return {
+          id: 'match-1',
+          driver_trip_id: 'driver-trip-1',
+          rider_request_id: 'rider-request-1',
+          driver_id: 77,
+          rider_id: 88,
+          status: 'pending',
+        };
+      }
+      if (query.includes('SELECT * FROM driver_trips') && kind === 'all') {
+        return [];
+      }
+      if (query.includes('SELECT * FROM match_results') && kind === 'all') {
+        return [];
+      }
+      return null;
+    });
+
+    const env = { ...baseEnv, DB: db, CACHE: new MockKV() };
+
+    const adminCases: Array<{ method: 'GET' | 'POST'; path: string; body?: Record<string, unknown> }> = [
+      { method: 'GET', path: '/api/matching/rider-requests/rider-request-1' },
+      { method: 'GET', path: '/api/matching/results/rider-request-1' },
+      { method: 'POST', path: '/api/matching/find', body: { riderRequestId: 'rider-request-1' } },
+      { method: 'POST', path: '/api/matching/find-pool', body: { riderRequestId: 'rider-request-1' } },
+      { method: 'POST', path: '/api/matching/reject', body: { matchId: 'match-1' } },
+    ];
+
+    for (const tcase of adminCases) {
+      const res = await app.request(
+        tcase.path,
+        {
+          method: tcase.method,
+          headers: {
+            Authorization: `Bearer ${adminToken}`,
+            ...(tcase.body ? { 'Content-Type': 'application/json' } : {}),
+          },
+          ...(tcase.body ? { body: JSON.stringify(tcase.body) } : {}),
+        },
+        env,
+      );
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+    }
+
+    const superAdminFind = await app.request(
+      '/api/matching/find',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${superAdminToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ riderRequestId: 'rider-request-1' }),
+      },
+      env,
+    );
+    expect(superAdminFind.status).toBe(200);
   });
 });
