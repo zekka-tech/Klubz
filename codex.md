@@ -289,6 +289,8 @@ Latest entries:
 - `2026-02-18 05:26 UTC` | codex | action | admin-query-hardening | enforced strict validation for `/api/admin/users` and `/api/admin/logs` query params (`page`, `limit`, role/status/level filters) with explicit `400 VALIDATION_ERROR` contracts
 - `2026-02-18 05:26 UTC` | codex | action | integration-tests | expanded `tests/integration/admin-routes-hardening.test.ts` with invalid-query contract coverage for admin users/logs endpoints
 - `2026-02-18 05:26 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (89 tests)
+- `2026-02-18 05:26 UTC` | codex | commit | `8d68c48` | hardened admin list query validation and expanded integration contracts
+- `2026-02-18 05:26 UTC` | codex | push | `main -> origin/main` | success
 
 ---
 
