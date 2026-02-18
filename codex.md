@@ -309,6 +309,8 @@ Latest entries:
 - `2026-02-18 06:00 UTC` | codex | action | transactional-consistency-hardening | implemented atomic matching seat reservation (`reserveDriverTripSeat`) with compensation (`releaseDriverTripSeat`) in `/api/matching/confirm` to prevent over-confirmation under seat contention
 - `2026-02-18 06:00 UTC` | codex | action | integration-tests | expanded `tests/integration/security-hardening.test.ts` with booking/payment race-path contracts (distinct webhook-event idempotency for success side effects; sequential seat-contention confirm flow)
 - `2026-02-18 06:00 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (108 tests)
+- `2026-02-18 06:00 UTC` | codex | commit | `b9802b2` | hardened matching seat reservation consistency and expanded booking/payment race-path integration contracts
+- `2026-02-18 06:00 UTC` | codex | push | `main -> origin/main` | success
 
 ---
 
