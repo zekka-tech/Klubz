@@ -34,6 +34,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../types';
+import { authMiddleware } from '../middleware/auth';
 import {
   matchRiderToDrivers,
   optimizePool,
@@ -128,6 +129,11 @@ const rejectMatchSchema = z.object({
 
 export function createMatchingRoutes() {
   const app = new Hono<AppEnv>();
+  app.use('*', authMiddleware());
+
+  function isAdminRole(user: AuthUser): boolean {
+    return user.role === 'admin' || user.role === 'super_admin';
+  }
 
   function parseDriverTripStatus(status?: string): DriverTripStatus | undefined {
     if (!status) return undefined;
@@ -225,11 +231,15 @@ export function createMatchingRoutes() {
    */
   app.get('/driver-trips/:id', async (c) => {
     const id = c.req.param('id');
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
     const trip = await repo.getDriverTrip(id);
 
     if (!trip) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Driver trip not found' } }, 404);
+    }
+    if (!isAdminRole(user) && trip.driverId !== String(user.id)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to access this driver trip' } }, 403);
     }
 
     return c.json({ trip });
@@ -240,12 +250,16 @@ export function createMatchingRoutes() {
    */
   app.put('/driver-trips/:id', async (c) => {
     const id = c.req.param('id');
+    const user = c.get('user') as AuthUser;
     const body = await c.req.json();
     const repo = getRepo(c);
 
     const trip = await repo.getDriverTrip(id);
     if (!trip) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Driver trip not found' } }, 404);
+    }
+    if (!isAdminRole(user) && trip.driverId !== String(user.id)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to update this driver trip' } }, 403);
     }
 
     if (body.availableSeats !== undefined) {
@@ -264,11 +278,15 @@ export function createMatchingRoutes() {
    */
   app.delete('/driver-trips/:id', async (c) => {
     const id = c.req.param('id');
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
 
     const trip = await repo.getDriverTrip(id);
     if (!trip) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Driver trip not found' } }, 404);
+    }
+    if (!isAdminRole(user) && trip.driverId !== String(user.id)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to cancel this driver trip' } }, 403);
     }
 
     await repo.updateDriverTripStatus(id, 'cancelled');
@@ -347,11 +365,15 @@ export function createMatchingRoutes() {
    */
   app.get('/rider-requests/:id', async (c) => {
     const id = c.req.param('id');
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
     const request = await repo.getRiderRequest(id);
 
     if (!request) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
+    }
+    if (!isAdminRole(user) && request.riderId !== String(user.id)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to access this rider request' } }, 403);
     }
 
     return c.json({ request });
@@ -362,11 +384,15 @@ export function createMatchingRoutes() {
    */
   app.delete('/rider-requests/:id', async (c) => {
     const id = c.req.param('id');
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
 
     const request = await repo.getRiderRequest(id);
     if (!request) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
+    }
+    if (!isAdminRole(user) && request.riderId !== String(user.id)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to cancel this rider request' } }, 403);
     }
 
     await repo.updateRiderRequestStatus(id, 'cancelled');
@@ -405,6 +431,9 @@ export function createMatchingRoutes() {
       const existing = await repo.getRiderRequest(data.riderRequestId);
       if (!existing) {
         return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
+      }
+      if (!isAdminRole(user) && existing.riderId !== String(user.id)) {
+        return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to match this rider request' } }, 403);
       }
       riderRequest = existing;
     } else if (data.pickup && data.dropoff && data.earliestDeparture && data.latestDeparture) {
@@ -490,6 +519,9 @@ export function createMatchingRoutes() {
       if (!existing) {
         return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
       }
+      if (!isAdminRole(user) && existing.riderId !== String(user.id)) {
+        return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to match this rider request' } }, 403);
+      }
       riderRequest = existing;
     } else if (data.pickup && data.dropoff && data.earliestDeparture && data.latestDeparture) {
       riderRequest = {
@@ -572,7 +604,15 @@ export function createMatchingRoutes() {
    */
   app.get('/results/:riderRequestId', async (c) => {
     const riderRequestId = c.req.param('riderRequestId');
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
+    const request = await repo.getRiderRequest(riderRequestId);
+    if (!request) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
+    }
+    if (!isAdminRole(user) && request.riderId !== String(user.id)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to view match results for this rider request' } }, 403);
+    }
 
     const matches = await repo.getMatchesForRider(riderRequestId);
     return c.json({ matches, count: matches.length });
@@ -593,7 +633,21 @@ export function createMatchingRoutes() {
     }
 
     const { matchId, driverTripId, riderRequestId } = parsed.data;
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
+    const riderRequest = await repo.getRiderRequest(riderRequestId);
+    if (!riderRequest) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
+    }
+    const driverTrip = await repo.getDriverTrip(driverTripId);
+    if (!driverTrip) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Driver trip not found' } }, 404);
+    }
+    const ownsRiderRequest = riderRequest.riderId === String(user.id);
+    const ownsDriverTrip = driverTrip.driverId === String(user.id);
+    if (!isAdminRole(user) && !ownsRiderRequest && !ownsDriverTrip) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to confirm this match' } }, 403);
+    }
 
     // Confirm the match
     await repo.confirmMatch(matchId);
@@ -625,7 +679,16 @@ export function createMatchingRoutes() {
     }
 
     const { matchId, reason } = parsed.data;
+    const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
+    const match = await repo.getMatchResult(matchId);
+    if (!match) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Match not found' } }, 404);
+    }
+    const ownsMatch = match.riderId === String(user.id) || match.driverId === String(user.id);
+    if (!isAdminRole(user) && !ownsMatch) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to reject this match' } }, 403);
+    }
 
     await repo.rejectMatch(matchId, reason);
     return c.json({ message: 'Match rejected', matchId });
@@ -636,6 +699,10 @@ export function createMatchingRoutes() {
    * (Admin or cron endpoint)
    */
   app.post('/batch', async (c) => {
+    const user = c.get('user') as AuthUser;
+    if (!isAdminRole(user)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Admin access required for batch matching' } }, 403);
+    }
     const repo = getRepo(c);
     const t0 = Date.now();
 
@@ -699,6 +766,9 @@ export function createMatchingRoutes() {
    */
   app.put('/config', async (c) => {
     const user = c.get('user') as AuthUser;
+    if (!isAdminRole(user)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Admin access required to update matching config' } }, 403);
+    }
 
     if (!user?.organizationId) {
       return c.json(
@@ -722,6 +792,10 @@ export function createMatchingRoutes() {
    * GET /stats - Matching statistics
    */
   app.get('/stats', async (c) => {
+    const user = c.get('user') as AuthUser;
+    if (!isAdminRole(user)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Admin access required for matching stats' } }, 403);
+    }
     // These would be real aggregation queries in production
     const stats = {
       totalDriverTrips: 0,

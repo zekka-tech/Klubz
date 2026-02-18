@@ -332,11 +332,49 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.message).toBe('Booking is no longer pending');
   });
 
+  test('trip booking reject is idempotent with Idempotency-Key replay', async () => {
+    const token = await authToken(10, 'user');
+    const sharedCache = new MockKV();
+    let rejectUpdates = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'rejected'") && kind === 'run') {
+        rejectUpdates += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'reject-dup-1',
+    };
+    const first = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      { method: 'POST', headers, body: JSON.stringify({ reason: 'No seats left' }) },
+      { ...baseEnv, DB: db, CACHE: sharedCache },
+    );
+    expect(first.status).toBe(200);
+
+    const second = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      { method: 'POST', headers, body: JSON.stringify({ reason: 'No seats left' }) },
+      { ...baseEnv, DB: db, CACHE: sharedCache },
+    );
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { replay?: boolean };
+    expect(secondBody.replay).toBe(true);
+    expect(rejectUpdates).toBe(1);
+  });
+
   test('trip cancel rejects non-owner driver', async () => {
     const token = await authToken(12, 'user');
     const db = new MockDB((query, _params, kind) => {
-      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
-        return { id: 1, driver_id: 44 };
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 44, status: 'scheduled' };
       }
       return null;
     });
@@ -359,11 +397,8 @@ describe('Security hardening integration flows', () => {
   test('trip cancel returns conflict when trip is already cancelled', async () => {
     const token = await authToken(12, 'user');
     const db = new MockDB((query, _params, kind) => {
-      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
-        return { id: 1, driver_id: 12 };
-      }
-      if (query.includes("SET status = 'cancelled'") && kind === 'run') {
-        return { changes: 0 };
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 12, status: 'cancelled' };
       }
       return null;
     });
@@ -384,13 +419,38 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.message).toBe('Trip is already cancelled');
   });
 
+  test('trip cancel returns conflict when trip is completed', async () => {
+    const token = await authToken(12, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 12, status: 'completed' };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Too late' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+    expect(body.error?.message).toBe('Completed trips cannot be cancelled');
+  });
+
   test('trip cancel is idempotent with Idempotency-Key replay', async () => {
     const token = await authToken(12, 'user');
     const sharedCache = new MockKV();
     let cancelUpdates = 0;
     const db = new MockDB((query, _params, kind) => {
-      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
-        return { id: 1, driver_id: 12 };
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 12, status: 'scheduled' };
       }
       if (query.includes("SET status = 'cancelled'") && kind === 'run') {
         cancelUpdates += 1;
@@ -760,5 +820,99 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { received?: boolean };
     expect(body.received).toBe(true);
     expect(bookingLookupCount).toBe(0);
+  });
+
+  test('matching routes require authentication', async () => {
+    const res = await app.request('/api/matching/config', { method: 'GET' }, { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() });
+
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHENTICATION_ERROR');
+  });
+
+  test('matching driver trip update rejects non-owner user', async () => {
+    const token = await authToken(12, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT * FROM driver_trips WHERE id = ?1') && kind === 'first') {
+        return {
+          id: 'trip-1',
+          driver_id: 77,
+          organization_id: null,
+          departure_lat: -26.2,
+          departure_lng: 28.0,
+          destination_lat: -26.1,
+          destination_lng: 28.1,
+          shift_lat: null,
+          shift_lng: null,
+          departure_time: 1700000000000,
+          arrival_time: null,
+          available_seats: 3,
+          total_seats: 4,
+          bbox_min_lat: null,
+          bbox_max_lat: null,
+          bbox_min_lng: null,
+          bbox_max_lng: null,
+          route_polyline_encoded: null,
+          route_distance_km: null,
+          status: 'offered',
+          driver_rating: null,
+          vehicle_json: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/matching/driver-trips/trip-1',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ availableSeats: 2 }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('matching batch endpoint requires admin role', async () => {
+    const token = await authToken(33, 'user');
+    const res = await app.request(
+      '/api/matching/batch',
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('matching reject endpoint blocks users outside the match participants', async () => {
+    const token = await authToken(55, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM match_results') && kind === 'first') {
+        return { id: 'match-1', driver_id: 77, rider_id: 88 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/matching/reject',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId: 'match-1', reason: 'not suitable' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
   });
 });

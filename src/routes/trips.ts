@@ -59,6 +59,7 @@ interface TripSeatRow {
 interface TripOwnerRow {
   id: number;
   driver_id: number;
+  status?: string;
 }
 
 interface TripParticipantOwnerRow {
@@ -849,21 +850,27 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
   if (db) {
     try {
       const trip = await db
-        .prepare('SELECT id, driver_id FROM trips WHERE id = ?')
+        .prepare('SELECT id, driver_id, status FROM trips WHERE id = ?')
         .bind(tripId)
         .first<TripOwnerRow>();
       if (!trip) return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
       if (trip.driver_id !== user.id) {
         return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can cancel this trip' } }, 403);
       }
+      if (trip.status === 'cancelled') {
+        return c.json({ error: { code: 'CONFLICT', message: 'Trip is already cancelled' } }, 409);
+      }
+      if (trip.status === 'completed') {
+        return c.json({ error: { code: 'CONFLICT', message: 'Completed trips cannot be cancelled' } }, 409);
+      }
 
       const cancelUpdate = await db
-        .prepare("UPDATE trips SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'cancelled'")
+        .prepare("UPDATE trips SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('scheduled', 'active')")
         .bind(tripId)
         .run();
       const cancelRows = getAffectedRows(cancelUpdate);
       if (cancelRows === 0) {
-        return c.json({ error: { code: 'CONFLICT', message: 'Trip is already cancelled' } }, 409);
+        return c.json({ error: { code: 'CONFLICT', message: 'Trip cannot be cancelled from current status' } }, 409);
       }
 
       // Emit real-time event

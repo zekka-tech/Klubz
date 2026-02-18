@@ -86,6 +86,12 @@ interface RiderRequestRow {
   updated_at: string;
 }
 
+interface MatchResultAuthRow {
+  id: string;
+  driver_id: number;
+  rider_id: number;
+}
+
 // ---------------------------------------------------------------------------
 // Row ↔ Domain Object Mappers
 // ---------------------------------------------------------------------------
@@ -664,6 +670,24 @@ export class MatchingRepository {
       )
       .bind(reason ?? null, matchId)
       .run();
+  }
+
+  async getMatchResult(matchId: string): Promise<{ id: string; driverId: string; riderId: string } | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT id, driver_id, rider_id
+         FROM match_results
+         WHERE id = ?1`,
+      )
+      .bind(matchId)
+      .first<MatchResultAuthRow>();
+
+    if (!row) return null;
+    return {
+      id: row.id,
+      driverId: String(row.driver_id),
+      riderId: String(row.rider_id),
+    };
   }
 
   async getMatchesForRider(riderRequestId: string): Promise<MatchResult[]> {
