@@ -147,6 +147,22 @@ export function createMatchingRoutes() {
     return allowed.includes(status as RiderRequestStatus) ? (status as RiderRequestStatus) : undefined;
   }
 
+  function parseQueryInteger(
+    value: string | undefined,
+    defaultValue: number,
+    options: { min: number; max: number },
+  ): number | null {
+    if (value === undefined) return defaultValue;
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || `${parsed}` !== value.trim()) {
+      return null;
+    }
+    if (parsed < options.min || parsed > options.max) {
+      return null;
+    }
+    return parsed;
+  }
+
   // Helper to get repository
   function getRepo(c: Context<AppEnv>): MatchingRepository {
     return new MatchingRepository(c.env.DB, c.env.CACHE);
@@ -211,9 +227,21 @@ export function createMatchingRoutes() {
    */
   app.get('/driver-trips', async (c) => {
     const user = c.get('user') as AuthUser;
-    const status = parseDriverTripStatus(c.req.query('status'));
-    const limit = parseInt(c.req.query('limit') || '50');
-    const offset = parseInt(c.req.query('offset') || '0');
+    const statusRaw = c.req.query('status');
+    const status = parseDriverTripStatus(statusRaw);
+    if (statusRaw && !status) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid status query parameter' } }, 400);
+    }
+
+    const limit = parseQueryInteger(c.req.query('limit'), 50, { min: 1, max: 100 });
+    if (limit === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid limit query parameter' } }, 400);
+    }
+
+    const offset = parseQueryInteger(c.req.query('offset'), 0, { min: 0, max: 100000 });
+    if (offset === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid offset query parameter' } }, 400);
+    }
 
     const repo = getRepo(c);
     const trips = await repo.listDriverTrips(
@@ -345,9 +373,21 @@ export function createMatchingRoutes() {
    */
   app.get('/rider-requests', async (c) => {
     const user = c.get('user') as AuthUser;
-    const status = parseRiderRequestStatus(c.req.query('status'));
-    const limit = parseInt(c.req.query('limit') || '50');
-    const offset = parseInt(c.req.query('offset') || '0');
+    const statusRaw = c.req.query('status');
+    const status = parseRiderRequestStatus(statusRaw);
+    if (statusRaw && !status) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid status query parameter' } }, 400);
+    }
+
+    const limit = parseQueryInteger(c.req.query('limit'), 50, { min: 1, max: 100 });
+    if (limit === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid limit query parameter' } }, 400);
+    }
+
+    const offset = parseQueryInteger(c.req.query('offset'), 0, { min: 0, max: 100000 });
+    if (offset === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid offset query parameter' } }, 400);
+    }
 
     const repo = getRepo(c);
     const requests = await repo.listRiderRequests(

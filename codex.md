@@ -296,11 +296,14 @@ Latest entries:
 - `2026-02-18 05:33 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (97 tests)
 - `2026-02-18 05:34 UTC` | codex | commit | `398d49a` | removed silent DB fallbacks and enforced fail-closed contracts across admin/user endpoints with expanded integration coverage
 - `2026-02-18 05:34 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 05:41 UTC` | codex | action | validation-hardening | enforced strict query/body validation across `/api/matching` list endpoints (`status`, `limit`, `offset`), `/api/users/trips` filters (`page`, `limit`, `status`), `/api/users/trips` create payload seat/price constraints, and `/api/trips/available` coordinate/maxDetour bounds
+- `2026-02-18 05:41 UTC` | codex | action | integration-tests | added `tests/integration/query-validation-hardening.test.ts` to lock validation contracts across matching/user/trip routes
+- `2026-02-18 05:41 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (102 tests)
 
 ---
 
 ## Next Active Tasks
-1. Critical: enforce strict query/body schema validation on remaining mutable routes (`/api/users`, `/api/trips`, `/api/matching`) for invalid numeric ranges and enum filters.
+1. Critical: complete strict query/body schema validation on remaining mutable endpoints not yet normalized (notably matching mutation payload guards and remaining trip write-path constraints) with explicit `400 VALIDATION_ERROR` contracts.
 2. High: add transactional consistency tests for booking/payment race paths under concurrent requests to verify conflict/idempotency guarantees.
 3. High: add security-event audit coverage for remaining privileged operations (monitoring, organization/admin management) with non-critical write-failure handling.
 4. Medium: align route-level validation/error contract style across modules (single helper pattern) to reduce drift and simplify long-term maintenance.

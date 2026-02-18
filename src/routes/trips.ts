@@ -184,6 +184,22 @@ function parseMaybeJsonLocation(value: string, fallback: { lat: number; lng: num
   }
 }
 
+function parseBoundedNumber(value: string, label: string, min: number, max: number): number {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new ValidationError(`${label} must be a number between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
+function parseBoundedInteger(value: string, label: string, min: number, max: number): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || `${parsed}` !== value.trim() || parsed < min || parsed > max) {
+    throw new ValidationError(`${label} must be an integer between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
 // ---------------------------------------------------------------------------
 // GET /available - search for trips
 // ---------------------------------------------------------------------------
@@ -196,6 +212,12 @@ tripRoutes.get('/available', async (c) => {
   if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
     throw new ValidationError('Pickup and dropoff coordinates are required');
   }
+
+  const pickupLatNum = parseBoundedNumber(pickupLat, 'pickupLat', -90, 90);
+  const pickupLngNum = parseBoundedNumber(pickupLng, 'pickupLng', -180, 180);
+  const dropoffLatNum = parseBoundedNumber(dropoffLat, 'dropoffLat', -90, 90);
+  const dropoffLngNum = parseBoundedNumber(dropoffLng, 'dropoffLng', -180, 180);
+  const maxDetourNum = parseBoundedInteger(maxDetour, 'maxDetour', 1, 120);
 
   const db = getDB(c);
   const cache = getCacheService(c);
@@ -232,14 +254,14 @@ tripRoutes.get('/available', async (c) => {
     const riderRequest: RiderRequest = {
       id: `search-${user.id}-${Date.now()}`,
       riderId: String(user.id),
-      pickup: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
-      dropoff: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
+      pickup: { lat: pickupLatNum, lng: pickupLngNum },
+      dropoff: { lat: dropoffLatNum, lng: dropoffLngNum },
       earliestDeparture: departureTime.getTime(),
       latestDeparture: departureTime.getTime() + 2 * 60 * 60 * 1000,
       seatsNeeded: 1,
       status: 'pending',
       preferences: {
-        maxDetourMinutes: parseInt(maxDetour),
+        maxDetourMinutes: maxDetourNum,
         maxWalkDistanceKm: 0.5,
       },
       createdAt: new Date().toISOString(),
@@ -248,14 +270,14 @@ tripRoutes.get('/available', async (c) => {
     // Convert DB results to DriverTrip format (simplified)
     const drivers: DriverTrip[] = (driverTrips ?? []).map((t) => {
       // Parse coordinates from origin/destination strings (simplified)
-      const originCoords = parseMaybeJsonLocation(t.origin, { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) });
-      const destCoords = parseMaybeJsonLocation(t.destination, { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) });
+      const originCoords = parseMaybeJsonLocation(t.origin, { lat: pickupLatNum, lng: pickupLngNum });
+      const destCoords = parseMaybeJsonLocation(t.destination, { lat: dropoffLatNum, lng: dropoffLngNum });
 
       return {
         id: String(t.id),
         driverId: String(t.driver_id),
-        departure: { lat: originCoords.lat || parseFloat(pickupLat), lng: originCoords.lng || parseFloat(pickupLng) },
-        destination: { lat: destCoords.lat || parseFloat(dropoffLat), lng: destCoords.lng || parseFloat(dropoffLng) },
+        departure: { lat: originCoords.lat || pickupLatNum, lng: originCoords.lng || pickupLngNum },
+        destination: { lat: destCoords.lat || dropoffLatNum, lng: destCoords.lng || dropoffLngNum },
         departureTime: new Date(t.departure_time).getTime(),
         availableSeats: t.available_seats,
         totalSeats: t.available_seats,
@@ -307,7 +329,7 @@ tripRoutes.get('/available', async (c) => {
       searchCriteria: {
         pickupLocation: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
         dropoffLocation: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
-        maxDetour: parseInt(maxDetour), date, time,
+        maxDetour: maxDetourNum, date, time,
       },
       totalResults: trips.length,
     };
@@ -328,7 +350,7 @@ tripRoutes.get('/available', async (c) => {
       searchCriteria: {
         pickupLocation: { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng) },
         dropoffLocation: { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng) },
-        maxDetour: parseInt(maxDetour), date, time,
+        maxDetour: maxDetourNum, date, time,
       },
       totalResults: 0,
     });

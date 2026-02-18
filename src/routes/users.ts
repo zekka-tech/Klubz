@@ -5,6 +5,7 @@
  */
 
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
@@ -68,17 +69,6 @@ interface UserTripRow {
   created_at: string;
 }
 
-interface CreateTripBody {
-  title?: string;
-  notes?: string;
-  pickupLocation?: { address?: string; [key: string]: unknown };
-  dropoffLocation?: { address?: string; [key: string]: unknown };
-  scheduledTime?: string;
-  availableSeats?: number;
-  totalSeats?: number;
-  price?: number;
-}
-
 interface PreferencesBody {
   notifications?: Record<string, unknown>;
   privacy?: Record<string, unknown>;
@@ -105,6 +95,39 @@ interface ExportUserRow {
 
 interface CountRow {
   count: number;
+}
+
+const userTripStatusFilters = new Set(['scheduled', 'active', 'completed', 'cancelled']);
+
+const createTripSchema = z.object({
+  title: z.string().trim().min(1).max(120).optional(),
+  notes: z.string().trim().max(1000).optional(),
+  pickupLocation: z.object({
+    address: z.string().trim().min(1).optional(),
+  }).passthrough(),
+  dropoffLocation: z.object({
+    address: z.string().trim().min(1).optional(),
+  }).passthrough(),
+  scheduledTime: z.string().min(1),
+  availableSeats: z.number().int().min(1).max(6).optional(),
+  totalSeats: z.number().int().min(1).max(8).optional(),
+  price: z.number().min(0).max(10000).optional(),
+});
+
+function parseQueryInteger(
+  value: string | undefined,
+  defaultValue: number,
+  options: { min: number; max: number },
+): number | null {
+  if (value === undefined) return defaultValue;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || `${parsed}` !== value.trim()) {
+    return null;
+  }
+  if (parsed < options.min || parsed > options.max) {
+    return null;
+  }
+  return parsed;
 }
 
 function parseError(err: unknown): { message: string } {
@@ -239,9 +262,18 @@ userRoutes.put('/profile', async (c) => {
 
 userRoutes.get('/trips', async (c) => {
   const user = c.get('user') as AuthUser;
-  const page = parseInt(c.req.query('page') || '1');
-  const limit = Math.min(parseInt(c.req.query('limit') || '10'), 50);
+  const page = parseQueryInteger(c.req.query('page'), 1, { min: 1, max: 100000 });
+  if (page === null) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid page query parameter' } }, 400);
+  }
+  const limit = parseQueryInteger(c.req.query('limit'), 10, { min: 1, max: 50 });
+  if (limit === null) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid limit query parameter' } }, 400);
+  }
   const status = c.req.query('status');
+  if (status && !userTripStatusFilters.has(status)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid status filter' } }, 400);
+  }
   const db = getDB(c);
 
   try {
@@ -322,15 +354,20 @@ userRoutes.post('/trips', async (c) => {
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
-  const payload = body as CreateTripBody;
-
-  if (!payload.pickupLocation || !payload.dropoffLocation || !payload.scheduledTime) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Pickup, dropoff, and scheduledTime required' } }, 400);
+  const parsed = createTripSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.issues.map((i) => i.message).join(', ') } }, 400);
   }
+  const payload = parsed.data;
 
   const scheduledTime = new Date(payload.scheduledTime);
-  if (scheduledTime <= new Date()) {
+  if (Number.isNaN(scheduledTime.getTime()) || scheduledTime <= new Date()) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Scheduled time must be in the future' } }, 400);
+  }
+  const totalSeats = payload.totalSeats ?? 4;
+  const availableSeats = payload.availableSeats ?? 3;
+  if (availableSeats > totalSeats) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Available seats cannot exceed total seats' } }, 400);
   }
 
   const db = getDB(c);
@@ -348,8 +385,8 @@ userRoutes.post('/trips', async (c) => {
         'hash_' + Date.now(),
         'hash_' + (Date.now() + 1),
         payload.scheduledTime,
-        payload.availableSeats || 3,
-        payload.totalSeats || 4,
+        availableSeats,
+        totalSeats,
         payload.price || 35.00,
         'ZAR',
         user.id,
