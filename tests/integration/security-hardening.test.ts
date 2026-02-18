@@ -990,4 +990,32 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('CONFLICT');
     expect(body.error?.message).toBe('Match is no longer pending');
   });
+
+  test('monitoring sla endpoint requires authentication', async () => {
+    const res = await app.request('/api/monitoring/sla', { method: 'GET' }, { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() });
+
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHENTICATION_ERROR');
+  });
+
+  test('monitoring security endpoint requires admin role', async () => {
+    const userToken = await authToken(21, 'user');
+    const forbidden = await app.request(
+      '/api/monitoring/security',
+      { method: 'GET', headers: { Authorization: `Bearer ${userToken}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+    expect(forbidden.status).toBe(403);
+    const forbiddenBody = (await forbidden.json()) as { error?: { code?: string } };
+    expect(forbiddenBody.error?.code).toBe('AUTHORIZATION_ERROR');
+
+    const adminToken = await authToken(1, 'admin');
+    const allowed = await app.request(
+      '/api/monitoring/security',
+      { method: 'GET', headers: { Authorization: `Bearer ${adminToken}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+    expect(allowed.status).toBe(200);
+  });
 });

@@ -144,7 +144,7 @@ monitoringRoutes.get('/metrics', authMiddleware(['admin', 'super_admin']), async
 // GET /sla - Authenticated
 // ---------------------------------------------------------------------------
 
-monitoringRoutes.get('/sla', async (c) => {
+monitoringRoutes.get('/sla', authMiddleware(), async (c) => {
   return c.json({
     targets: {
       availability: { target: 99.8, current: 99.85, status: 'meeting' },
@@ -159,7 +159,7 @@ monitoringRoutes.get('/sla', async (c) => {
 // GET /performance - Authenticated
 // ---------------------------------------------------------------------------
 
-monitoringRoutes.get('/performance', async (c) => {
+monitoringRoutes.get('/performance', authMiddleware(), async (c) => {
   const db = getDB(c);
   const timeframe = c.req.query('timeframe') || '1h';
   let endpoints: EndpointMetric[] = [];
@@ -209,7 +209,7 @@ monitoringRoutes.get('/performance', async (c) => {
 // GET /security - Admin
 // ---------------------------------------------------------------------------
 
-monitoringRoutes.get('/security', async (c) => {
+monitoringRoutes.get('/security', authMiddleware(['admin', 'super_admin']), async (c) => {
   const db = getDB(c);
   let failedLogins = 0;
   let successfulLogins = 0;
@@ -271,7 +271,7 @@ monitoringRoutes.get('/security', async (c) => {
 // GET /errors - Authenticated
 // ---------------------------------------------------------------------------
 
-monitoringRoutes.get('/errors', async (c) => {
+monitoringRoutes.get('/errors', authMiddleware(), async (c) => {
   return c.json({
     timeframe: c.req.query('timeframe') || '24h',
     summary: { total: 0, resolved: 0, unresolved: 0, rate: 0 },
@@ -285,7 +285,7 @@ monitoringRoutes.get('/errors', async (c) => {
 // GET /carbon - Authenticated
 // ---------------------------------------------------------------------------
 
-monitoringRoutes.get('/carbon', async (c) => {
+monitoringRoutes.get('/carbon', authMiddleware(), async (c) => {
   const db = getDB(c);
   let totalSaved = 0;
   let totalTrips = 0;
@@ -312,7 +312,7 @@ monitoringRoutes.get('/carbon', async (c) => {
 // GET /alerts - Authenticated
 // ---------------------------------------------------------------------------
 
-monitoringRoutes.get('/alerts', async (c) => {
+monitoringRoutes.get('/alerts', authMiddleware(), async (c) => {
   return c.json({ active: [], recent: [] });
 });
 
