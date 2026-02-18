@@ -167,6 +167,35 @@ describe('Route authz contracts', () => {
     }
   });
 
+  test('extended admin subroutes reject authenticated non-admin users', async () => {
+    const userToken = await authToken(21, 'user');
+    const cases: Array<{ method: 'GET' | 'PUT' | 'POST'; path: string; body?: Record<string, unknown> }> = [
+      { method: 'GET', path: '/api/admin/stats' },
+      { method: 'GET', path: '/api/admin/users' },
+      { method: 'GET', path: '/api/admin/users/1' },
+      { method: 'PUT', path: '/api/admin/users/1', body: { role: 'user' } },
+      { method: 'POST', path: '/api/admin/users/1/export' },
+    ];
+
+    for (const tcase of cases) {
+      const res = await app.request(
+        tcase.path,
+        {
+          method: tcase.method,
+          headers: {
+            Authorization: `Bearer ${userToken}`,
+            ...(tcase.body ? { 'Content-Type': 'application/json' } : {}),
+          },
+          ...(tcase.body ? { body: JSON.stringify(tcase.body) } : {}),
+        },
+        baseEnv,
+      );
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+    }
+  });
+
   test('admin-only routes allow admin users', async () => {
     const adminToken = await authToken(1, 'admin');
 
@@ -183,6 +212,34 @@ describe('Route authz contracts', () => {
       baseEnv,
     );
     expect(monitoringSecurity.status).toBe(200);
+  });
+
+  test('extended admin subroutes allow super admin users past authz middleware', async () => {
+    const superAdminToken = await authToken(2, 'super_admin');
+    const cases: Array<{ method: 'GET' | 'PUT' | 'POST'; path: string; body?: Record<string, unknown> }> = [
+      { method: 'GET', path: '/api/admin/stats' },
+      { method: 'GET', path: '/api/admin/users' },
+      { method: 'GET', path: '/api/admin/users/1' },
+      { method: 'PUT', path: '/api/admin/users/1', body: { role: 'user' } },
+      { method: 'POST', path: '/api/admin/users/1/export' },
+    ];
+
+    for (const tcase of cases) {
+      const res = await app.request(
+        tcase.path,
+        {
+          method: tcase.method,
+          headers: {
+            Authorization: `Bearer ${superAdminToken}`,
+            ...(tcase.body ? { 'Content-Type': 'application/json' } : {}),
+          },
+          ...(tcase.body ? { body: JSON.stringify(tcase.body) } : {}),
+        },
+        baseEnv,
+      );
+      expect(res.status).not.toBe(401);
+      expect(res.status).not.toBe(403);
+    }
   });
 
   test('matching routes enforce organization scope for admin and allow super admin override', async () => {
