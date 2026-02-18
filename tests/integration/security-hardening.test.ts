@@ -171,6 +171,75 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
   });
 
+  test('trip booking accept returns conflict when booking is not pending', async () => {
+    const token = await authToken(10, 'user');
+    let seatUpdateCalls = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'accepted'") && kind === 'run') {
+        return { changes: 0 };
+      }
+      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+        seatUpdateCalls += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+    expect(body.error?.message).toBe('Booking is no longer pending');
+    expect(seatUpdateCalls).toBe(0);
+  });
+
+  test('trip booking accept rolls back when seat decrement fails', async () => {
+    const token = await authToken(10, 'user');
+    let compensationCalls = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'accepted'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+        return { changes: 0 };
+      }
+      if (query.includes("SET status = 'requested', accepted_at = NULL") && kind === 'run') {
+        compensationCalls += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+    expect(body.error?.message).toBe('No seats available');
+    expect(compensationCalls).toBe(1);
+  });
+
   test('trip booking reject rejects non-owner driver', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {

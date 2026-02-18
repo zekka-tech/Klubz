@@ -136,8 +136,21 @@ interface CancelParticipantRow {
   destination: string;
 }
 
+interface D1RunResult {
+  meta?: {
+    changes?: number;
+  };
+}
+
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
+}
+
+function getAffectedRows(result: unknown): number | null {
+  if (!result || typeof result !== 'object') return null;
+  const meta = (result as D1RunResult).meta;
+  if (!meta || typeof meta !== 'object' || typeof meta.changes !== 'number') return null;
+  return meta.changes;
 }
 
 function getIdempotencyKey(c: Context<AppEnv>, userId: number, scope: string): string | null {
@@ -583,13 +596,29 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
         return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can accept bookings' } }, 403);
       }
 
-      await db
-        .prepare("UPDATE trip_participants SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP WHERE id = ? AND trip_id = ?")
+      const bookingUpdate = await db
+        .prepare("UPDATE trip_participants SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP WHERE id = ? AND trip_id = ? AND status = 'requested'")
         .bind(bookingId, tripId)
         .run();
+      const bookingRows = getAffectedRows(bookingUpdate);
+      if (bookingRows === 0) {
+        return c.json({ error: { code: 'CONFLICT', message: 'Booking is no longer pending' } }, 409);
+      }
 
-      // Decrement seats
-      await db.prepare('UPDATE trips SET available_seats = available_seats - 1 WHERE id = ? AND available_seats > 0').bind(tripId).run();
+      // Decrement seats only if availability exists.
+      const seatUpdate = await db
+        .prepare('UPDATE trips SET available_seats = available_seats - 1 WHERE id = ? AND available_seats > 0')
+        .bind(tripId)
+        .run();
+      const seatRows = getAffectedRows(seatUpdate);
+      if (seatRows === 0) {
+        // Compensate booking transition when seat decrement loses a race.
+        await db
+          .prepare("UPDATE trip_participants SET status = 'requested', accepted_at = NULL WHERE id = ? AND trip_id = ? AND status = 'accepted'")
+          .bind(bookingId, tripId)
+          .run();
+        return c.json({ error: { code: 'CONFLICT', message: 'No seats available' } }, 409);
+      }
 
       // Emit real-time event
       eventBus.emit('booking:accepted', { bookingId, tripId, acceptedBy: user.id }, user.id);
