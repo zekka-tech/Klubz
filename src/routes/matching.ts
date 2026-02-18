@@ -212,6 +212,17 @@ export function createMatchingRoutes() {
     return crypto.randomUUID();
   }
 
+  async function parseJsonBody(c: Context<AppEnv>): Promise<{ ok: true; body: unknown } | { ok: false; response: Response }> {
+    try {
+      return { ok: true, body: await c.req.json() };
+    } catch {
+      return {
+        ok: false,
+        response: c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400),
+      };
+    }
+  }
+
   // =========================================================================
   // Driver Trip Routes
   // =========================================================================
@@ -220,7 +231,9 @@ export function createMatchingRoutes() {
    * POST /driver-trips - Create a driver trip offer
    */
   app.post('/driver-trips', async (c) => {
-    const body = await c.req.json();
+    const parsedBody = await parseJsonBody(c);
+    if (!parsedBody.ok) return parsedBody.response;
+    const body = parsedBody.body;
     const parsed = createDriverTripSchema.safeParse(body);
 
     if (!parsed.success) {
@@ -386,7 +399,9 @@ export function createMatchingRoutes() {
    * POST /rider-requests - Create a rider request
    */
   app.post('/rider-requests', async (c) => {
-    const body = await c.req.json();
+    const parsedBody = await parseJsonBody(c);
+    if (!parsedBody.ok) return parsedBody.response;
+    const body = parsedBody.body;
     const parsed = createRiderRequestSchema.safeParse(body);
 
     if (!parsed.success) {
@@ -507,7 +522,9 @@ export function createMatchingRoutes() {
    * Runs the full 3-phase matching engine against SQL-filtered candidates.
    */
   app.post('/find', async (c) => {
-    const body = await c.req.json();
+    const parsedBody = await parseJsonBody(c);
+    if (!parsedBody.ok) return parsedBody.response;
+    const body = parsedBody.body;
     const parsed = findMatchesSchema.safeParse(body);
 
     if (!parsed.success) {
@@ -595,7 +612,9 @@ export function createMatchingRoutes() {
    * POST /find-pool - Find matches with multi-rider pool optimization
    */
   app.post('/find-pool', async (c) => {
-    const body = await c.req.json();
+    const parsedBody = await parseJsonBody(c);
+    if (!parsedBody.ok) return parsedBody.response;
+    const body = parsedBody.body;
     const parsed = findMatchesSchema.safeParse(body);
 
     if (!parsed.success) {
@@ -719,7 +738,9 @@ export function createMatchingRoutes() {
    * POST /confirm - Confirm a match (rider or driver accepts)
    */
   app.post('/confirm', async (c) => {
-    const body = await c.req.json();
+    const parsedBody = await parseJsonBody(c);
+    if (!parsedBody.ok) return parsedBody.response;
+    const body = parsedBody.body;
     const parsed = confirmMatchSchema.safeParse(body);
 
     if (!parsed.success) {
@@ -779,7 +800,9 @@ export function createMatchingRoutes() {
    * POST /reject - Reject a match
    */
   app.post('/reject', async (c) => {
-    const body = await c.req.json();
+    const parsedBody = await parseJsonBody(c);
+    if (!parsedBody.ok) return parsedBody.response;
+    const body = parsedBody.body;
     const parsed = rejectMatchSchema.safeParse(body);
 
     if (!parsed.success) {

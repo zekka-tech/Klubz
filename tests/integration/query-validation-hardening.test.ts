@@ -273,6 +273,56 @@ describe('Query and payload validation hardening', () => {
     expect(invalidBody.error?.code).toBe('VALIDATION_ERROR');
   });
 
+  test('matching find endpoints reject malformed JSON payloads', async () => {
+    const token = await authToken(10, 'user');
+    const env = { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() };
+
+    const findRes = await app.request('/api/matching/find', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: '{"pickup":{"lat":-26.2',
+    }, env);
+    expect(findRes.status).toBe(400);
+    const findBody = (await findRes.json()) as { error?: { code?: string; message?: string } };
+    expect(findBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(findBody.error?.message).toBe('Invalid JSON');
+
+    const poolRes = await app.request('/api/matching/find-pool', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: '{"pickup":{"lat":-26.2',
+    }, env);
+    expect(poolRes.status).toBe(400);
+    const poolBody = (await poolRes.json()) as { error?: { code?: string; message?: string } };
+    expect(poolBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(poolBody.error?.message).toBe('Invalid JSON');
+  });
+
+  test('matching confirm and reject reject malformed JSON payloads', async () => {
+    const token = await authToken(10, 'user');
+    const env = { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() };
+
+    const confirmRes = await app.request('/api/matching/confirm', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: '{"matchId":"match-1"',
+    }, env);
+    expect(confirmRes.status).toBe(400);
+    const confirmBody = (await confirmRes.json()) as { error?: { code?: string; message?: string } };
+    expect(confirmBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(confirmBody.error?.message).toBe('Invalid JSON');
+
+    const rejectRes = await app.request('/api/matching/reject', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: '{"matchId":"match-1"',
+    }, env);
+    expect(rejectRes.status).toBe(400);
+    const rejectBody = (await rejectRes.json()) as { error?: { code?: string; message?: string } };
+    expect(rejectBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(rejectBody.error?.message).toBe('Invalid JSON');
+  });
+
   test('user trips rejects invalid page, limit, and status filters', async () => {
     const token = await authToken(10, 'user');
     const env = { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() };
