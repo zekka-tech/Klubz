@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 04:00:00 UTC  
+Last updated: 2026-02-18 04:02:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (53/53)
+- `npm test`: PASS (54/54)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -34,15 +34,16 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `9cac544` - Added webhook abuse-path integration contracts for missing signature and missing-metadata events (`succeeded`, `payment_failed`, `canceled`) and asserted no DB mutation on ignored events.
-2. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
-3. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
-4. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
-5. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
-6. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
-7. `88d1608` - Resolved lint-blocking errors across services and routes.
-8. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
-9. `37b9168` - Improved migration docs, tightened test scope, updated deps.
+1. `d6a7f7b` - Enforced server-side payment fare integrity by rejecting tampered `/api/payments/intent` amounts that do not match persisted trip fare.
+2. `9cac544` - Added webhook abuse-path integration contracts for missing signature and missing-metadata events (`succeeded`, `payment_failed`, `canceled`) and asserted no DB mutation on ignored events.
+3. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
+4. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
+5. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
+6. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
+7. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
+8. `88d1608` - Resolved lint-blocking errors across services and routes.
+9. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
+10. `37b9168` - Improved migration docs, tightened test scope, updated deps.
 
 Functional status:
 - Application compiles and builds.
@@ -120,6 +121,12 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 04:02 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 04:02 UTC` | codex | commit | `d6a7f7b` | enforced server-side payment amount integrity for `/api/payments/intent` and added tampering-rejection integration coverage
+- `2026-02-18 04:02 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (54 tests)
+- `2026-02-18 04:02 UTC` | codex | action | payment-integrity-hardening | validated client-provided payment amount against persisted trip fare and rejected mismatches with `VALIDATION_ERROR`
+- `2026-02-18 04:00 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 04:00 UTC` | codex | commit | `5dbb35d` | updated codex ledger for webhook abuse-path hardening batch
 - `2026-02-18 04:00 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-18 04:00 UTC` | codex | commit | `9cac544` | added payment webhook abuse-path coverage (missing signature + metadata) with no-mutation assertions
 - `2026-02-18 04:00 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (53 tests)
