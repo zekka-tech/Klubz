@@ -13,6 +13,8 @@
 - Notification indexes were moved into `0005_notifications.sql` together with table creation.
 - Session token index uses `sessions.token_hash` (present in base schema).
 - Legacy duplicate prefix (`0003_*`) is retained for backward compatibility with already-applied environments.
+- CI now enforces migration filename/order policy via `npm run db:check-migrations`.
+- New migrations must use the next unique numeric prefix (current expected next: `0007_*`).
 
 ## Apply Migrations
 
@@ -125,6 +127,11 @@ npx wrangler d1 execute klubz-production --remote \
 ### Check Applied Migrations
 ```bash
 npx wrangler d1 migrations list klubz-production --remote
+```
+
+### Check Filename/Version Policy
+```bash
+npm run db:check-migrations
 ```
 
 ### Verify Tables

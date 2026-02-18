@@ -36,6 +36,7 @@
     "logs": "pm2 logs --nostream",
     "db:migrate": "wrangler d1 migrations apply klubz-db-prod",
     "db:migrate:local": "wrangler d1 migrations apply klubz-db-prod --local",
+    "db:check-migrations": "node scripts/check-migration-order.js",
     "db:smoke": "bash scripts/db-smoke.sh klubz-db-prod",
     "db:seed": "wrangler d1 execute klubz-db-prod --file=./migrations/0002_sample_data.sql",
     "db:reset": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed"
