@@ -41,8 +41,21 @@ interface StripeWebhookEvent {
   };
 }
 
+interface D1RunResult {
+  meta?: {
+    changes?: number;
+  };
+}
+
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
+}
+
+function getAffectedRows(result: unknown): number | null {
+  if (!result || typeof result !== 'object') return null;
+  const meta = (result as D1RunResult).meta;
+  if (!meta || typeof meta !== 'object' || typeof meta.changes !== 'number') return null;
+  return meta.changes;
 }
 
 async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boolean> {
@@ -249,11 +262,20 @@ paymentRoutes.post('/webhook', async (c) => {
       const { tripId, userId, bookingId } = metadata;
 
       try {
-        await db.prepare(`
+        const updateResult = await db.prepare(`
           UPDATE trip_participants
           SET payment_status = 'paid', payment_completed_at = CURRENT_TIMESTAMP
           WHERE id = ?
+            AND COALESCE(payment_status, 'pending') IN ('pending', 'failed', 'canceled')
         `).bind(bookingId).run();
+        const affectedRows = getAffectedRows(updateResult);
+        if (affectedRows === 0) {
+          logger.warn('Ignoring payment succeeded transition for non-updatable booking state', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+          });
+          break;
+        }
 
         logger.info('Payment succeeded', {
           paymentIntentId: paymentIntent.id,
@@ -317,11 +339,20 @@ paymentRoutes.post('/webhook', async (c) => {
       const { bookingId } = metadata;
 
       try {
-        await db.prepare(`
+        const updateResult = await db.prepare(`
           UPDATE trip_participants
           SET payment_status = 'failed'
           WHERE id = ?
+            AND COALESCE(payment_status, 'pending') = 'pending'
         `).bind(bookingId).run();
+        const affectedRows = getAffectedRows(updateResult);
+        if (affectedRows === 0) {
+          logger.warn('Ignoring payment failed transition for non-pending booking state', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+          });
+          break;
+        }
 
         logger.warn('Payment failed', {
           paymentIntentId: paymentIntent.id,
@@ -380,11 +411,20 @@ paymentRoutes.post('/webhook', async (c) => {
       const { bookingId } = metadata;
 
       try {
-        await db.prepare(`
+        const updateResult = await db.prepare(`
           UPDATE trip_participants
           SET payment_status = 'canceled'
           WHERE id = ?
+            AND COALESCE(payment_status, 'pending') = 'pending'
         `).bind(bookingId).run();
+        const affectedRows = getAffectedRows(updateResult);
+        if (affectedRows === 0) {
+          logger.warn('Ignoring payment canceled transition for non-pending booking state', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+          });
+          break;
+        }
 
         logger.info('Payment canceled', {
           paymentIntentId: paymentIntent.id,

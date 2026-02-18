@@ -468,4 +468,44 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.status).toBe(400);
     expect(body.error?.message).toBe('amount does not match trip fare');
   });
+
+  test('payment failed webhook does not downgrade already-finalized paid booking', async () => {
+    let bookingLookupCount = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes("SET payment_status = 'failed'") && kind === 'run') {
+        return { changes: 0 };
+      }
+      if (query.includes('SELECT user_id, trip_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        bookingLookupCount += 1;
+        return { user_id: 44, trip_id: 10 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify({
+          id: 'evt_no_downgrade_1',
+          type: 'payment_intent.payment_failed',
+          data: {
+            object: {
+              id: 'pi_paid_guard_1',
+              amount: 1200,
+              metadata: { bookingId: '77' },
+              last_payment_error: { message: 'Card declined' },
+            },
+          },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { received?: boolean };
+    expect(body.received).toBe(true);
+    expect(bookingLookupCount).toBe(0);
+  });
 });
