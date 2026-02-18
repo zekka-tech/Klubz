@@ -5,10 +5,12 @@
  */
 
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { AppEnv } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { getDB } from '../lib/db';
+import { getIP, getUserAgent } from '../lib/http';
 
 export const monitoringRoutes = new Hono<AppEnv>();
 
@@ -45,6 +47,24 @@ interface CountRow {
 
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
+}
+
+async function writeMonitoringAudit(c: Context<AppEnv>, action: string): Promise<void> {
+  const db = getDB(c);
+  const user = c.get('user') as { id?: number } | undefined;
+  if (!db || !user?.id) return;
+
+  try {
+    await db.prepare(`
+      INSERT INTO audit_logs (user_id, action, entity_type, ip_address, user_agent, created_at)
+      VALUES (?, ?, 'monitoring', ?, ?, CURRENT_TIMESTAMP)
+    `).bind(user.id, action, getIP(c), getUserAgent(c)).run();
+  } catch (err: unknown) {
+    logger.warn('Audit log insert failed (non-critical)', {
+      error: err instanceof Error ? err.message : String(err),
+      action,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +146,8 @@ monitoringRoutes.get('/metrics', authMiddleware(['admin', 'super_admin']), async
       appMetrics.requests.last24h = (logsLast24h.results?.[0] as CountRow | undefined)?.count ?? 0;
       appMetrics.errors.total = totalErrs;
       appMetrics.errors.rate = totalReqs > 0 ? ((totalErrs / totalReqs) * 100).toFixed(2) : 0;
+
+      await writeMonitoringAudit(c, 'ADMIN_MONITORING_METRICS_VIEWED');
     } catch (err: unknown) {
       const parsed = parseError(err);
       logger.error('Metrics DB error', err instanceof Error ? err : undefined, { error: parsed.message });
@@ -239,6 +261,8 @@ monitoringRoutes.get('/security', authMiddleware(['admin', 'super_admin']), asyn
       mfaEnabled = (mfaEnabledRes.results?.[0] as CountRow | undefined)?.count ?? 0;
       mfaDisabled = (mfaDisabledRes.results?.[0] as CountRow | undefined)?.count ?? 0;
       suspiciousIPs = (suspiciousRes.results?.length ?? 0);
+
+      await writeMonitoringAudit(c, 'ADMIN_MONITORING_SECURITY_VIEWED');
     } catch (err: unknown) {
       const parsed = parseError(err);
       logger.error('Security metrics error', err instanceof Error ? err : undefined, { error: parsed.message });

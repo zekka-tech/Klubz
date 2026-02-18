@@ -446,4 +446,60 @@ describe('Admin route hardening contracts', () => {
     expect(body.error?.code).toBe('INTERNAL_ERROR');
     expect(body.error?.message).toBe('Failed to export user data');
   });
+
+  test('admin read endpoints write audit logs on success', async () => {
+    const token = await authToken(1, 'admin');
+    const auditActions: string[] = [];
+
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes("INSERT INTO audit_logs") && kind === 'run') {
+        auditActions.push(String(params[1]));
+        return { changes: 1 };
+      }
+      if (query.includes('COUNT(*) as total FROM users') && kind === 'first') {
+        return { total: 0 };
+      }
+      if (query.includes('FROM users u WHERE u.id = ?') && kind === 'first') {
+        return {
+          id: 10,
+          email: 'user10@example.com',
+          first_name_encrypted: 'Test',
+          last_name_encrypted: 'User',
+          role: 'user',
+          phone_encrypted: '+1234567890',
+          is_active: 1,
+          email_verified: 1,
+          mfa_enabled: 0,
+          total_trips: 1,
+          avg_rating: 4.5,
+          created_at: '2026-01-01T00:00:00.000Z',
+          last_login_at: null,
+        };
+      }
+      if (query.includes('COUNT(*) as total FROM audit_logs') && kind === 'first') {
+        return { total: 0 };
+      }
+      return null;
+    });
+
+    const env = { ...baseEnv, DB: db, CACHE: new MockKV() };
+    const statsRes = await app.request('/api/admin/stats', { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, env);
+    const usersRes = await app.request('/api/admin/users', { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, env);
+    const userDetailRes = await app.request('/api/admin/users/10', { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, env);
+    const orgRes = await app.request('/api/admin/organizations', { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, env);
+    const logsRes = await app.request('/api/admin/logs', { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, env);
+
+    expect(statsRes.status).toBe(200);
+    expect(usersRes.status).toBe(200);
+    expect(userDetailRes.status).toBe(200);
+    expect(orgRes.status).toBe(200);
+    expect(logsRes.status).toBe(200);
+    expect(auditActions).toEqual(expect.arrayContaining([
+      'ADMIN_STATS_VIEWED',
+      'ADMIN_USERS_LIST_VIEWED',
+      'ADMIN_USER_DETAIL_VIEWED',
+      'ADMIN_ORGANIZATIONS_VIEWED',
+      'ADMIN_LOGS_VIEWED',
+    ]));
+  });
 });

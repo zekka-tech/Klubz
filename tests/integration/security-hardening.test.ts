@@ -1230,6 +1230,48 @@ describe('Security hardening integration flows', () => {
     expect(allowed.status).toBe(200);
   });
 
+  test('monitoring metrics endpoint writes admin audit log on success', async () => {
+    const adminToken = await authToken(1, 'admin');
+    let auditWrites = 0;
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('INSERT INTO audit_logs') && params[1] === 'ADMIN_MONITORING_METRICS_VIEWED' && kind === 'run') {
+        auditWrites += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/monitoring/metrics',
+      { method: 'GET', headers: { Authorization: `Bearer ${adminToken}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(auditWrites).toBe(1);
+  });
+
+  test('monitoring security endpoint writes admin audit log on success', async () => {
+    const adminToken = await authToken(1, 'admin');
+    let auditWrites = 0;
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('INSERT INTO audit_logs') && params[1] === 'ADMIN_MONITORING_SECURITY_VIEWED' && kind === 'run') {
+        auditWrites += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/monitoring/security',
+      { method: 'GET', headers: { Authorization: `Bearer ${adminToken}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(auditWrites).toBe(1);
+  });
+
   test('account deletion is blocked when user is driving active trips', async () => {
     const token = await authToken(33, 'user');
     const db = new MockDB((query, _params, kind) => {

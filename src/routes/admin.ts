@@ -5,6 +5,7 @@
  */
 
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
@@ -108,6 +109,36 @@ function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
 }
 
+async function writeAdminAudit(
+  c: Context<AppEnv>,
+  action: string,
+  entityType?: string,
+  entityId?: number | string | null,
+): Promise<void> {
+  const db = getDB(c);
+  const adminUser = c.get('user') as AuthUser | undefined;
+  if (!db || !adminUser?.id) return;
+
+  try {
+    await db.prepare(`
+      INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).bind(
+      adminUser.id,
+      action,
+      entityType ?? null,
+      entityId === undefined ? null : Number(entityId),
+      getIP(c),
+      getUserAgent(c),
+    ).run();
+  } catch (err: unknown) {
+    logger.warn('Audit log insert failed (non-critical)', {
+      error: err instanceof Error ? err.message : String(err),
+      action,
+    });
+  }
+}
+
 // Admin-only routes - require authentication unconditionally
 adminRoutes.use('*', authMiddleware(['admin', 'super_admin']));
 
@@ -134,6 +165,8 @@ adminRoutes.get('/stats', async (c) => {
     const completedTrips = (completedRes.results?.[0] as CountRow | undefined)?.count ?? 0;
     const activeDrivers = (driversRes.results?.[0] as CountRow | undefined)?.count ?? 0;
     const revenue = (carbonRes.results?.[0] as TotalRow | undefined)?.total ?? 0;
+
+    await writeAdminAudit(c, 'ADMIN_STATS_VIEWED', 'admin_dashboard');
 
     return c.json({
       totalUsers,
@@ -231,6 +264,8 @@ adminRoutes.get('/users', async (c) => {
       }
     }));
 
+    await writeAdminAudit(c, 'ADMIN_USERS_LIST_VIEWED', 'user_list');
+
     return c.json({
       users,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
@@ -262,6 +297,8 @@ adminRoutes.get('/users/:userId', async (c) => {
       .first<AdminUserDetailRow>();
 
     if (!user) return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
+
+    await writeAdminAudit(c, 'ADMIN_USER_DETAIL_VIEWED', 'user', user.id);
 
     return c.json({
       id: user.id,
@@ -378,6 +415,7 @@ adminRoutes.put('/users/:userId', async (c) => {
 // ---------------------------------------------------------------------------
 
 adminRoutes.get('/organizations', async (c) => {
+  await writeAdminAudit(c, 'ADMIN_ORGANIZATIONS_VIEWED', 'organization');
   // Organizations not in current schema - return placeholder
   return c.json({
     organizations: [],
@@ -433,6 +471,8 @@ adminRoutes.get('/logs', async (c) => {
       action: r.action,
       metadata: { entityType: r.entity_type, entityId: r.entity_id, ip: r.ip_address },
     }));
+
+    await writeAdminAudit(c, 'ADMIN_LOGS_VIEWED', 'audit_log');
 
     return c.json({ logs, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   } catch (err: unknown) {
