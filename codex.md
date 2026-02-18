@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 10:44:39 UTC  
+Last updated: 2026-02-18 10:54:18 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -35,14 +35,14 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `5f64e92` - Introduced shared query-integer validation helper (`src/lib/validation.ts`) and unified pagination/query integer parsing across admin, matching, and user routes to reduce duplicated validation logic and drift risk while preserving existing contracts.
-2. `9b6b1e1` - Expanded admin authorization matrix integration coverage with additional negative-role contracts across admin read/mutation/export subroutes (`/stats`, `/users`, `/users/:id`, `PUT /users/:id`, `POST /users/:id/export`) plus super-admin allow-path pass-through assertions.
-3. `2819b2c` - Added route-level observability contract assertions for global error telemetry classification, validating `handled` (`VALIDATION_ERROR`) and `unhandled` (`CONFIGURATION_ERROR`) structured log emissions on representative payment webhook paths.
-4. `82a1048` - Added non-critical transition audit persistence for matching confirm/reject and payment webhook succeeded/failed/canceled state transitions, with integration contracts enforcing `MATCH_CONFIRMED`, `MATCH_REJECTED`, `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, and `PAYMENT_CANCELED`.
-5. `e8a818b` - Added dedicated audit taxonomy integration contracts for critical auth/privacy flows, asserting expected audit actions on successful operations: `USER_LOGIN`, `USER_REGISTER`, `USER_LOGOUT`, `DATA_EXPORT`, and `ACCOUNT_DELETED`.
-6. `4038d19` - Updated codex ledger for authz matrix expansion batch.
-7. `96fe130` - Expanded route authorization matrix integration coverage with explicit organization-scope contracts for matching routes: cross-org admin denial on rider-request access, results retrieval, find/find-pool by `riderRequestId`, and reject; plus super-admin override allow-path verification.
-8. `923e092` - Updated codex ledger for org-scope authz hardening batch.
+1. `cd5bb88` - Consolidated operational documentation to current production standards: replaced stale deployment/migration guidance, added `docs/OPERATIONS_RUNBOOK.md` for incident response and on-call procedures, and introduced standardized verification scripts (`verify`, `verify:ci`).
+2. `5f64e92` - Introduced shared query-integer validation helper (`src/lib/validation.ts`) and unified pagination/query integer parsing across admin, matching, and user routes to reduce duplicated validation logic and drift risk while preserving existing contracts.
+3. `9b6b1e1` - Expanded admin authorization matrix integration coverage with additional negative-role contracts across admin read/mutation/export subroutes (`/stats`, `/users`, `/users/:id`, `PUT /users/:id`, `POST /users/:id/export`) plus super-admin allow-path pass-through assertions.
+4. `2819b2c` - Added route-level observability contract assertions for global error telemetry classification, validating `handled` (`VALIDATION_ERROR`) and `unhandled` (`CONFIGURATION_ERROR`) structured log emissions on representative payment webhook paths.
+5. `82a1048` - Added non-critical transition audit persistence for matching confirm/reject and payment webhook succeeded/failed/canceled state transitions, with integration contracts enforcing `MATCH_CONFIRMED`, `MATCH_REJECTED`, `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, and `PAYMENT_CANCELED`.
+6. `e8a818b` - Added dedicated audit taxonomy integration contracts for critical auth/privacy flows, asserting expected audit actions on successful operations: `USER_LOGIN`, `USER_REGISTER`, `USER_LOGOUT`, `DATA_EXPORT`, and `ACCOUNT_DELETED`.
+7. `4038d19` - Updated codex ledger for authz matrix expansion batch.
+8. `96fe130` - Expanded route authorization matrix integration coverage with explicit organization-scope contracts for matching routes: cross-org admin denial on rider-request access, results retrieval, find/find-pool by `riderRequestId`, and reject; plus super-admin override allow-path verification.
 
 Functional status:
 - Application compiles and builds.
@@ -120,6 +120,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 10:54 UTC` | codex | commit | `cd5bb88` | consolidated deployment/migration/readme docs, added operations runbook, and added `verify`/`verify:ci` scripts
+- `2026-02-18 10:52 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (pass) and `npm run verify` (`type-check`, `lint`, `test`, `build` all passing with 126 tests)
+- `2026-02-18 10:53 UTC` | codex | action | migration-smoke-local | attempted `npm run db:smoke`; blocked in sandbox (`listen EPERM 127.0.0.1`), CI migration-smoke remains authoritative
+- `2026-02-18 10:51 UTC` | codex | action | docs-ops-consolidation | replaced stale deployment/migration guidance and added centralized incident response/runbook documentation
 - `2026-02-18 10:44 UTC` | codex | commit | `5f64e92` | centralized query integer validation helper and wired admin/matching/users routes to shared parser
 - `2026-02-18 10:42 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, and `build` all passing (126 tests)
 - `2026-02-18 10:41 UTC` | codex | action | validation-contract-alignment | extracted shared query integer parser and removed route-local duplicate implementations
@@ -327,7 +331,10 @@ Latest entries:
 ---
 
 ## Next Active Tasks
-1. Lower: refresh deployment and operations docs to reflect current hardening guarantees, migration checks, and incident playbooks.
+1. High: complete route-by-route security review and close any remaining authz/data-exposure gaps not yet covered by contracts.
+2. High: formalize payment webhook threat-model artifacts (replay, metadata trust boundaries, incident controls) in docs/tests.
+3. Medium: add correlation ID propagation consistency checks across modules and related observability assertions.
+4. Medium: expand caching invalidation contracts/tests for user/admin/matching read models.
 
 Owner guidance:
 - Keep this file authoritative.
