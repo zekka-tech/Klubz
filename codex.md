@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 10:32:50 UTC  
+Last updated: 2026-02-18 10:37:20 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (122/122)
+- `npm test`: PASS (124/124)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
@@ -35,14 +35,14 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `82a1048` - Added non-critical transition audit persistence for matching confirm/reject and payment webhook succeeded/failed/canceled state transitions, with integration contracts enforcing `MATCH_CONFIRMED`, `MATCH_REJECTED`, `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, and `PAYMENT_CANCELED`.
-2. `e8a818b` - Added dedicated audit taxonomy integration contracts for critical auth/privacy flows, asserting expected audit actions on successful operations: `USER_LOGIN`, `USER_REGISTER`, `USER_LOGOUT`, `DATA_EXPORT`, and `ACCOUNT_DELETED`.
-3. `4038d19` - Updated codex ledger for authz matrix expansion batch.
-4. `96fe130` - Expanded route authorization matrix integration coverage with explicit organization-scope contracts for matching routes: cross-org admin denial on rider-request access, results retrieval, find/find-pool by `riderRequestId`, and reject; plus super-admin override allow-path verification.
-5. `923e092` - Updated codex ledger for org-scope authz hardening batch.
-6. `3e6ab19` - Enforced organization-scoped authorization for `admin` users across matching read/write paths (driver trips, rider requests, find/find-pool by request ID, results, confirm, reject) while preserving global `super_admin` behavior; scoped batch matching to admin organization; added cross-org integration contracts.
-7. `cec6b6e` - Updated codex ledger for matching JSON contract hardening batch.
-8. `4778fb4` - Normalized malformed JSON contracts on matching write endpoints (`driver-trips` create, `rider-requests` create, `find`, `find-pool`, `confirm`, `reject`) to consistently return `400 VALIDATION_ERROR` with `Invalid JSON`; added integration coverage for `find/find-pool/confirm/reject`.
+1. `2819b2c` - Added route-level observability contract assertions for global error telemetry classification, validating `handled` (`VALIDATION_ERROR`) and `unhandled` (`CONFIGURATION_ERROR`) structured log emissions on representative payment webhook paths.
+2. `82a1048` - Added non-critical transition audit persistence for matching confirm/reject and payment webhook succeeded/failed/canceled state transitions, with integration contracts enforcing `MATCH_CONFIRMED`, `MATCH_REJECTED`, `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, and `PAYMENT_CANCELED`.
+3. `e8a818b` - Added dedicated audit taxonomy integration contracts for critical auth/privacy flows, asserting expected audit actions on successful operations: `USER_LOGIN`, `USER_REGISTER`, `USER_LOGOUT`, `DATA_EXPORT`, and `ACCOUNT_DELETED`.
+4. `4038d19` - Updated codex ledger for authz matrix expansion batch.
+5. `96fe130` - Expanded route authorization matrix integration coverage with explicit organization-scope contracts for matching routes: cross-org admin denial on rider-request access, results retrieval, find/find-pool by `riderRequestId`, and reject; plus super-admin override allow-path verification.
+6. `923e092` - Updated codex ledger for org-scope authz hardening batch.
+7. `3e6ab19` - Enforced organization-scoped authorization for `admin` users across matching read/write paths (driver trips, rider requests, find/find-pool by request ID, results, confirm, reject) while preserving global `super_admin` behavior; scoped batch matching to admin organization; added cross-org integration contracts.
+8. `cec6b6e` - Updated codex ledger for matching JSON contract hardening batch.
 
 Functional status:
 - Application compiles and builds.
@@ -120,6 +120,9 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 10:37 UTC` | codex | commit | `2819b2c` | added route-level observability contracts asserting handled/unhandled structured telemetry on validation vs server-error webhook paths
+- `2026-02-18 10:36 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, targeted integration suite, full `test`, and `build` all passing (124 tests)
+- `2026-02-18 10:35 UTC` | codex | action | observability-metrics-contracts | added integration assertions for global error classification logs (`type=handled` and `type=unhandled`) on key payment webhook failure paths
 - `2026-02-18 10:32 UTC` | codex | commit | `82a1048` | added transition audit persistence for matching confirm/reject and payment webhook success/failure/cancel paths with integration contract coverage
 - `2026-02-18 10:32 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (122 tests)
 - `2026-02-18 10:32 UTC` | codex | action | observability-transition-audit-hardening | implemented best-effort audit writes on critical matching/payment state transitions and extended taxonomy contract tests
@@ -318,10 +321,9 @@ Latest entries:
 ---
 
 ## Next Active Tasks
-1. High: harden observability by adding route-level metrics assertions in tests for handled vs unhandled failures on key paths.
-2. High: expand integration authz matrix for all admin subroutes and negative role cases introduced in future features.
-3. Medium: align route-level validation/error contract style across modules (single helper pattern) to reduce drift and simplify long-term maintenance.
-4. Lower: refresh deployment and operations docs to reflect current hardening guarantees, migration checks, and incident playbooks.
+1. High: expand integration authz matrix for all admin subroutes and negative role cases introduced in future features.
+2. Medium: align route-level validation/error contract style across modules (single helper pattern) to reduce drift and simplify long-term maintenance.
+3. Lower: refresh deployment and operations docs to reflect current hardening guarantees, migration checks, and incident playbooks.
 
 Owner guidance:
 - Keep this file authoritative.
