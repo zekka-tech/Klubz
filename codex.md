@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 03:39:05 UTC  
+Last updated: 2026-02-18 03:47:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (48/48)
+- `npm test`: PASS (49/49)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -34,13 +34,14 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
-2. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
-3. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
-4. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
-5. `88d1608` - Resolved lint-blocking errors across services and routes.
-6. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
-7. `37b9168` - Improved migration docs, tightened test scope, updated deps.
+1. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
+2. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
+3. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
+4. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
+5. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
+6. `88d1608` - Resolved lint-blocking errors across services and routes.
+7. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
+8. `37b9168` - Improved migration docs, tightened test scope, updated deps.
 
 Functional status:
 - Application compiles and builds.
@@ -118,6 +119,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 03:47 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 03:47 UTC` | codex | commit | `5e84015` | scoped payment auth to `/intent` only and expanded integration contract coverage for payment auth + webhook behavior
+- `2026-02-18 03:46 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (49 tests)
+- `2026-02-18 03:45 UTC` | codex | action | payment-webhook-contract-hardening | removed JWT auth requirement from Stripe webhook endpoint, preserved auth on payment intent creation, and updated security tests to assert both contracts
 - `2026-02-18 03:39 UTC` | codex | commit | `17bb25d` | reduced expected-error log noise by classifying known client/auth/validation failures as handled warnings
 - `2026-02-18 03:39 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-18 03:38 UTC` | codex | action | logging-hardening | refined global error logging to classify expected 4xx/auth/validation paths as `type: handled` warnings while keeping 5xx/internal failures as `type: unhandled` errors
