@@ -174,6 +174,15 @@ export function createMatchingRoutes() {
     return user.role === 'admin' || user.role === 'super_admin';
   }
 
+  function isSuperAdmin(user: AuthUser): boolean {
+    return user.role === 'super_admin';
+  }
+
+  function hasOrganizationScope(user: AuthUser, resourceOrganizationId?: string): boolean {
+    if (isSuperAdmin(user)) return true;
+    return user.organizationId === resourceOrganizationId;
+  }
+
   function parseDriverTripStatus(status?: string): DriverTripStatus | undefined {
     if (!status) return undefined;
     const allowed: DriverTripStatus[] = ['offered', 'active', 'completed', 'cancelled', 'expired'];
@@ -321,6 +330,9 @@ export function createMatchingRoutes() {
     if (!isAdminRole(user) && trip.driverId !== String(user.id)) {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to access this driver trip' } }, 403);
     }
+    if (isAdminRole(user) && !hasOrganizationScope(user, trip.organizationId)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to access this driver trip' } }, 403);
+    }
 
     return c.json({ trip });
   });
@@ -355,6 +367,9 @@ export function createMatchingRoutes() {
     if (!isAdminRole(user) && trip.driverId !== String(user.id)) {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to update this driver trip' } }, 403);
     }
+    if (isAdminRole(user) && !hasOrganizationScope(user, trip.organizationId)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to update this driver trip' } }, 403);
+    }
 
     if (data.availableSeats !== undefined && data.availableSeats > trip.totalSeats) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'availableSeats cannot exceed trip totalSeats' } }, 400);
@@ -384,6 +399,9 @@ export function createMatchingRoutes() {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Driver trip not found' } }, 404);
     }
     if (!isAdminRole(user) && trip.driverId !== String(user.id)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to cancel this driver trip' } }, 403);
+    }
+    if (isAdminRole(user) && !hasOrganizationScope(user, trip.organizationId)) {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to cancel this driver trip' } }, 403);
     }
 
@@ -487,6 +505,9 @@ export function createMatchingRoutes() {
     if (!isAdminRole(user) && request.riderId !== String(user.id)) {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to access this rider request' } }, 403);
     }
+    if (isAdminRole(user) && !hasOrganizationScope(user, request.organizationId)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to access this rider request' } }, 403);
+    }
 
     return c.json({ request });
   });
@@ -504,6 +525,9 @@ export function createMatchingRoutes() {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
     }
     if (!isAdminRole(user) && request.riderId !== String(user.id)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to cancel this rider request' } }, 403);
+    }
+    if (isAdminRole(user) && !hasOrganizationScope(user, request.organizationId)) {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to cancel this rider request' } }, 403);
     }
 
@@ -547,6 +571,9 @@ export function createMatchingRoutes() {
         return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
       }
       if (!isAdminRole(user) && existing.riderId !== String(user.id)) {
+        return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to match this rider request' } }, 403);
+      }
+      if (isAdminRole(user) && !hasOrganizationScope(user, existing.organizationId)) {
         return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to match this rider request' } }, 403);
       }
       riderRequest = existing;
@@ -636,6 +663,9 @@ export function createMatchingRoutes() {
         return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
       }
       if (!isAdminRole(user) && existing.riderId !== String(user.id)) {
+        return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to match this rider request' } }, 403);
+      }
+      if (isAdminRole(user) && !hasOrganizationScope(user, existing.organizationId)) {
         return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to match this rider request' } }, 403);
       }
       riderRequest = existing;
@@ -729,6 +759,9 @@ export function createMatchingRoutes() {
     if (!isAdminRole(user) && request.riderId !== String(user.id)) {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to view match results for this rider request' } }, 403);
     }
+    if (isAdminRole(user) && !hasOrganizationScope(user, request.organizationId)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to view match results for this rider request' } }, 403);
+    }
 
     const matches = await repo.getMatchesForRider(riderRequestId);
     return c.json({ matches, count: matches.length });
@@ -771,6 +804,9 @@ export function createMatchingRoutes() {
     const riderRequest = await repo.getRiderRequest(match.riderRequestId);
     if (!riderRequest) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
+    }
+    if (isAdminRole(user) && !hasOrganizationScope(user, riderRequest.organizationId)) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to confirm this match' } }, 403);
     }
     const driverTrip = await repo.getDriverTrip(match.driverTripId);
     if (!driverTrip) {
@@ -826,6 +862,15 @@ export function createMatchingRoutes() {
     if (!isAdminRole(user) && !ownsMatch) {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to reject this match' } }, 403);
     }
+    if (isAdminRole(user)) {
+      const riderRequest = await repo.getRiderRequest(match.riderRequestId);
+      if (!riderRequest) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
+      }
+      if (!hasOrganizationScope(user, riderRequest.organizationId)) {
+        return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to reject this match' } }, 403);
+      }
+    }
 
     await repo.rejectMatch(matchId, reason);
     return c.json({ message: 'Match rejected', matchId });
@@ -844,7 +889,10 @@ export function createMatchingRoutes() {
     const t0 = Date.now();
 
     // Get all pending rider requests
-    const pendingRiders = await repo.getPendingRiderRequests(100);
+    const pendingRidersAll = await repo.getPendingRiderRequests(100);
+    const pendingRiders = isSuperAdmin(user)
+      ? pendingRidersAll
+      : pendingRidersAll.filter((rider) => hasOrganizationScope(user, rider.organizationId));
     if (pendingRiders.length === 0) {
       return c.json({ message: 'No pending rider requests', matched: 0 });
     }

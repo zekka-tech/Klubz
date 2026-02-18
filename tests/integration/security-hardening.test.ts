@@ -103,13 +103,14 @@ const baseEnv = {
   RATE_LIMIT_KV: new MockKV(),
 } as const;
 
-async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' = 'user') {
+async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' = 'user', orgId?: string) {
   const now = Math.floor(Date.now() / 1000);
   const payload: JWTPayload = {
     sub: userId,
     email: `user${userId}@example.com`,
     name: `User ${userId}`,
     role,
+    orgId,
     iat: now,
     exp: now + 3600,
     type: 'access',
@@ -951,6 +952,59 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
   });
 
+  test('matching driver trip read blocks cross-org admin and allows super admin', async () => {
+    const adminToken = await authToken(1, 'admin', 'org-a');
+    const superAdminToken = await authToken(2, 'super_admin');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT * FROM driver_trips WHERE id = ?1') && kind === 'first') {
+        return {
+          id: 'trip-1',
+          driver_id: 77,
+          organization_id: 'org-b',
+          departure_lat: -26.2,
+          departure_lng: 28.0,
+          destination_lat: -26.1,
+          destination_lng: 28.1,
+          shift_lat: null,
+          shift_lng: null,
+          departure_time: 1700000000000,
+          arrival_time: null,
+          available_seats: 3,
+          total_seats: 4,
+          bbox_min_lat: null,
+          bbox_max_lat: null,
+          bbox_min_lng: null,
+          bbox_max_lng: null,
+          route_polyline_encoded: null,
+          route_distance_km: null,
+          status: 'offered',
+          driver_rating: null,
+          vehicle_json: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        };
+      }
+      return null;
+    });
+
+    const env = { ...baseEnv, DB: db, CACHE: new MockKV() };
+    const forbidden = await app.request(
+      '/api/matching/driver-trips/trip-1',
+      { method: 'GET', headers: { Authorization: `Bearer ${adminToken}` } },
+      env,
+    );
+    expect(forbidden.status).toBe(403);
+    const forbiddenBody = (await forbidden.json()) as { error?: { code?: string } };
+    expect(forbiddenBody.error?.code).toBe('AUTHORIZATION_ERROR');
+
+    const allowed = await app.request(
+      '/api/matching/driver-trips/trip-1',
+      { method: 'GET', headers: { Authorization: `Bearer ${superAdminToken}` } },
+      env,
+    );
+    expect(allowed.status).toBe(200);
+  });
+
   test('matching batch endpoint requires admin role', async () => {
     const token = await authToken(33, 'user');
     const res = await app.request(
@@ -962,6 +1016,66 @@ describe('Security hardening integration flows', () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('matching batch endpoint scopes admin processing to own organization', async () => {
+    const token = await authToken(33, 'admin', 'org-a');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM rider_requests') && query.includes("status = 'pending'") && kind === 'all') {
+        return [
+          {
+            id: 'rider-request-org-a',
+            rider_id: 101,
+            organization_id: 'org-a',
+            pickup_lat: -26.2,
+            pickup_lng: 28.0,
+            dropoff_lat: -26.1,
+            dropoff_lng: 28.1,
+            earliest_departure: 1700000000000,
+            latest_departure: 1700003600000,
+            seats_needed: 1,
+            preferences_json: null,
+            status: 'pending',
+            matched_driver_trip_id: null,
+            matched_at: null,
+            created_at: '2026-01-01T00:00:00.000Z',
+            updated_at: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            id: 'rider-request-org-b',
+            rider_id: 102,
+            organization_id: 'org-b',
+            pickup_lat: -26.2,
+            pickup_lng: 28.0,
+            dropoff_lat: -26.1,
+            dropoff_lng: 28.1,
+            earliest_departure: 1700000000000,
+            latest_departure: 1700003600000,
+            seats_needed: 1,
+            preferences_json: null,
+            status: 'pending',
+            matched_driver_trip_id: null,
+            matched_at: null,
+            created_at: '2026-01-01T00:00:00.000Z',
+            updated_at: '2026-01-01T00:00:00.000Z',
+          },
+        ];
+      }
+      if (query.includes('SELECT * FROM driver_trips') && kind === 'all') {
+        return [];
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/matching/batch',
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { totalRiders?: number };
+    expect(body.totalRiders).toBe(1);
   });
 
   test('matching reject endpoint blocks users outside the match participants', async () => {
@@ -1029,6 +1143,65 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('CONFLICT');
     expect(body.error?.message).toBe('Match context does not match request payload');
+  });
+
+  test('matching confirm blocks cross-org admin access', async () => {
+    const token = await authToken(1, 'admin', 'org-a');
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('FROM match_results') && kind === 'first') {
+        return {
+          id: 'match-1',
+          driver_trip_id: 'driver-trip-1',
+          rider_request_id: 'rider-request-1',
+          driver_id: 77,
+          rider_id: 88,
+          status: 'pending',
+        };
+      }
+      if (query.includes('FROM rider_requests') && kind === 'first') {
+        return {
+          id: String(params[0] ?? 'rider-request-1'),
+          rider_id: 88,
+          organization_id: 'org-b',
+          pickup_lat: -26.2,
+          pickup_lng: 28.0,
+          dropoff_lat: -26.1,
+          dropoff_lng: 28.1,
+          earliest_departure: 1700000000000,
+          latest_departure: 1700003600000,
+          seats_needed: 1,
+          preferences_json: null,
+          status: 'pending',
+          matched_driver_trip_id: null,
+          matched_at: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        };
+      }
+      if (query.includes('available_seats = available_seats - 1') && kind === 'run') {
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/matching/confirm',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matchId: 'match-1',
+          driverTripId: 'driver-trip-1',
+          riderRequestId: 'rider-request-1',
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+    expect(body.error?.message).toBe('Not allowed to confirm this match');
   });
 
   test('matching confirm enforces seat reservation under sequential race on same driver trip', async () => {
