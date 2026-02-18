@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import app from '../../src/index';
 import { createToken } from '../../src/middleware/auth';
 import type { JWTPayload } from '../../src/types';
@@ -550,6 +550,47 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('CONFIGURATION_ERROR');
     expect(body.error?.message).toBe('Internal server error');
+  });
+
+  test('handled validation failures emit handled observability log contract', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await app.request(
+        '/api/payments/webhook',
+        {
+          method: 'POST',
+          body: JSON.stringify({ id: 'evt_missing_sig_handled', type: 'payment_intent.succeeded', data: { object: {} } }),
+        },
+        { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+      );
+
+      expect(res.status).toBe(400);
+      const warnLines = warnSpy.mock.calls.map((call) => String(call[0] ?? ''));
+      expect(warnLines.some((line) => line.includes('"type":"handled"') && line.includes('"code":"VALIDATION_ERROR"'))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('unexpected server failures emit unhandled observability log contract', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await app.request(
+        '/api/payments/webhook',
+        {
+          method: 'POST',
+          headers: { 'stripe-signature': 'dummy' },
+          body: JSON.stringify({ id: 'evt_missing_secret_unhandled', type: 'payment_intent.succeeded', data: { object: {} } }),
+        },
+        { ...baseEnv, ENVIRONMENT: 'production', DB: new MockDB(() => null), CACHE: new MockKV() },
+      );
+
+      expect(res.status).toBe(500);
+      const errorLines = errorSpy.mock.calls.map((call) => String(call[0] ?? ''));
+      expect(errorLines.some((line) => line.includes('"type":"unhandled"') && line.includes('"code":"CONFIGURATION_ERROR"'))).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test('webhook replay is ignored on second identical event', async () => {
