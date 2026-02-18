@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 03:38:09 UTC  
+Last updated: 2026-02-18 03:39:05 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -118,6 +118,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 03:39 UTC` | codex | commit | `17bb25d` | reduced expected-error log noise by classifying known client/auth/validation failures as handled warnings
+- `2026-02-18 03:39 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-18 03:38 UTC` | codex | action | logging-hardening | refined global error logging to classify expected 4xx/auth/validation paths as `type: handled` warnings while keeping 5xx/internal failures as `type: unhandled` errors
 - `2026-02-18 03:37 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (48 tests); verified handled-vs-unhandled logging behavior in integration output
 - `2026-02-17 19:14 UTC` | codex | commit | `f6537ef` | added notifications auth contract integration coverage and updated quality status
