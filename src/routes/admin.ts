@@ -82,6 +82,28 @@ interface TargetUserRow {
   role: string;
 }
 
+interface PaginationQueryOptions {
+  min: number;
+  max: number;
+}
+
+function parseIntegerQueryParam(
+  value: string | undefined,
+  defaultValue: number,
+  options: PaginationQueryOptions,
+): number | null {
+  if (value === undefined) return defaultValue;
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || `${parsed}` !== value.trim()) {
+    return null;
+  }
+  if (parsed < options.min || parsed > options.max) {
+    return null;
+  }
+  return parsed;
+}
+
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
 }
@@ -150,11 +172,25 @@ adminRoutes.get('/stats', async (c) => {
 // ---------------------------------------------------------------------------
 
 adminRoutes.get('/users', async (c) => {
-  const page = parseInt(c.req.query('page') || '1');
-  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100);
+  const page = parseIntegerQueryParam(c.req.query('page'), 1, { min: 1, max: 100000 });
+  if (page === null) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid page query parameter' } }, 400);
+  }
+
+  const limit = parseIntegerQueryParam(c.req.query('limit'), 20, { min: 1, max: 100 });
+  if (limit === null) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid limit query parameter' } }, 400);
+  }
+
   const search = c.req.query('search') || '';
   const role = c.req.query('role');
   const status = c.req.query('status');
+  if (role && !['user', 'admin', 'super_admin'].includes(role)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid role filter' } }, 400);
+  }
+  if (status && !['active', 'inactive'].includes(status)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid status filter' } }, 400);
+  }
 
   const db = getDB(c);
   if (db) {
@@ -374,9 +410,20 @@ adminRoutes.get('/organizations', async (c) => {
 // ---------------------------------------------------------------------------
 
 adminRoutes.get('/logs', async (c) => {
-  const page = parseInt(c.req.query('page') || '1');
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
+  const page = parseIntegerQueryParam(c.req.query('page'), 1, { min: 1, max: 100000 });
+  if (page === null) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid page query parameter' } }, 400);
+  }
+
+  const limit = parseIntegerQueryParam(c.req.query('limit'), 50, { min: 1, max: 200 });
+  if (limit === null) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid limit query parameter' } }, 400);
+  }
+
   const level = c.req.query('level') || 'all';
+  if (!/^[a-z_]{1,32}$/i.test(level)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid level filter' } }, 400);
+  }
 
   const db = getDB(c);
   if (db) {

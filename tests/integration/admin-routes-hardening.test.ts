@@ -106,6 +106,90 @@ async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' 
 }
 
 describe('Admin route hardening contracts', () => {
+  test('admin users list rejects invalid page query', async () => {
+    const token = await authToken(1, 'admin');
+    const res = await app.request(
+      '/api/admin/users?page=0',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.message).toBe('Invalid page query parameter');
+  });
+
+  test('admin users list rejects invalid limit query', async () => {
+    const token = await authToken(1, 'admin');
+    const res = await app.request(
+      '/api/admin/users?limit=1000',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.message).toBe('Invalid limit query parameter');
+  });
+
+  test('admin users list rejects invalid role/status filters', async () => {
+    const token = await authToken(1, 'admin');
+    const roleRes = await app.request(
+      '/api/admin/users?role=owner',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+    expect(roleRes.status).toBe(400);
+    const roleBody = (await roleRes.json()) as { error?: { code?: string; message?: string } };
+    expect(roleBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(roleBody.error?.message).toBe('Invalid role filter');
+
+    const statusRes = await app.request(
+      '/api/admin/users?status=blocked',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+    expect(statusRes.status).toBe(400);
+    const statusBody = (await statusRes.json()) as { error?: { code?: string; message?: string } };
+    expect(statusBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(statusBody.error?.message).toBe('Invalid status filter');
+  });
+
+  test('admin logs list rejects invalid pagination and level filters', async () => {
+    const token = await authToken(1, 'admin');
+    const pageRes = await app.request(
+      '/api/admin/logs?page=-1',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+    expect(pageRes.status).toBe(400);
+    const pageBody = (await pageRes.json()) as { error?: { code?: string; message?: string } };
+    expect(pageBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(pageBody.error?.message).toBe('Invalid page query parameter');
+
+    const limitRes = await app.request(
+      '/api/admin/logs?limit=500',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+    expect(limitRes.status).toBe(400);
+    const limitBody = (await limitRes.json()) as { error?: { code?: string; message?: string } };
+    expect(limitBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(limitBody.error?.message).toBe('Invalid limit query parameter');
+
+    const levelRes = await app.request(
+      '/api/admin/logs?level=error*',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+    expect(levelRes.status).toBe(400);
+    const levelBody = (await levelRes.json()) as { error?: { code?: string; message?: string } };
+    expect(levelBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(levelBody.error?.message).toBe('Invalid level filter');
+  });
+
   test('admin update requires authentication', async () => {
     const res = await app.request(
       '/api/admin/users/10',

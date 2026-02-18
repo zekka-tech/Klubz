@@ -286,13 +286,21 @@ Latest entries:
 - `2026-02-17 18:42 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-17 18:33 UTC` | codex | commit | `3e0f272` | auth/middleware strict typing hardening
 - `2026-02-17 18:33 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 05:26 UTC` | codex | action | admin-query-hardening | enforced strict validation for `/api/admin/users` and `/api/admin/logs` query params (`page`, `limit`, role/status/level filters) with explicit `400 VALIDATION_ERROR` contracts
+- `2026-02-18 05:26 UTC` | codex | action | integration-tests | expanded `tests/integration/admin-routes-hardening.test.ts` with invalid-query contract coverage for admin users/logs endpoints
+- `2026-02-18 05:26 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (89 tests)
 
 ---
 
 ## Next Active Tasks
-1. Build and execute full authz/security review checklist against route set.
-2. Implement idempotency controls for booking/payment write operations.
-3. Add integration test suite for critical workflows.
+1. Critical: remove silent fallback responses on authenticated admin/user data paths (return structured 5xx where DB errors occur) and add regression tests per endpoint.
+2. Critical: enforce strict query/body schema validation on remaining mutable routes (`/api/users`, `/api/trips`, `/api/matching`) for invalid numeric ranges and enum filters.
+3. High: add transactional consistency tests for booking/payment race paths under concurrent requests to verify conflict/idempotency guarantees.
+4. High: add security-event audit coverage for remaining privileged operations (monitoring, organization/admin management) with non-critical write-failure handling.
+5. Medium: align route-level validation/error contract style across modules (single helper pattern) to reduce drift and simplify long-term maintenance.
+6. Medium: expand integration authz matrix for all admin subroutes and negative role cases introduced in future features.
+7. Medium: harden observability by adding route-level metrics assertions in tests for handled vs unhandled failures on key paths.
+8. Lower: refresh deployment and operations docs to reflect current hardening guarantees, migration checks, and incident playbooks.
 
 Owner guidance:
 - Keep this file authoritative.
