@@ -442,4 +442,30 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('AUTHENTICATION_ERROR');
     expect(body.error?.status).toBe(401);
   });
+
+  test('payment intent rejects amount tampering when it does not match trip fare', async () => {
+    const token = await authToken(44, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM trip_participants tp') && kind === 'first') {
+        return { id: 77, title: 'Morning commute', price_per_seat: 120 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/intent',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tripId: 10, amount: 1 }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string; message?: string; status?: number } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.status).toBe(400);
+    expect(body.error?.message).toBe('amount does not match trip fare');
+  });
 });

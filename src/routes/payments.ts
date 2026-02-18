@@ -20,6 +20,7 @@ interface CreateIntentBody {
 interface BookingRow {
   id: number;
   title: string;
+  price_per_seat: number;
 }
 
 interface StripeWebhookEvent {
@@ -121,10 +122,20 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
     throw new NotFoundError('Accepted booking for this trip');
   }
 
+  const expectedAmount = Number(booking.price_per_seat);
+  if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) {
+    throw new AppError('Trip fare is invalid or unavailable', 'CONFIGURATION_ERROR', 500);
+  }
+  const expectedAmountCents = Math.round(expectedAmount * 100);
+  const requestedAmountCents = Math.round(amount * 100);
+  if (requestedAmountCents !== expectedAmountCents) {
+    throw new ValidationError('amount does not match trip fare');
+  }
+
   try {
     // Create Stripe payment intent
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100), // Convert to cents
+      amount: expectedAmountCents,
       currency: 'zar',
       metadata: {
         tripId: tripId.toString(),
@@ -148,7 +159,7 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
       paymentIntentId: paymentIntent.id,
       userId: user.id,
       tripId,
-      amount,
+      amount: expectedAmount,
     });
 
     return c.json({
