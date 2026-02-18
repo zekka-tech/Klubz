@@ -35,6 +35,7 @@ import { z } from 'zod';
 import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
+import { logger } from '../lib/logger';
 import {
   matchRiderToDrivers,
   optimizePool,
@@ -229,6 +230,28 @@ export function createMatchingRoutes() {
         ok: false,
         response: c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400),
       };
+    }
+  }
+
+  async function writeMatchingAudit(
+    c: Context<AppEnv>,
+    action: string,
+    entityId: string,
+  ): Promise<void> {
+    const db = c.env?.DB;
+    const user = c.get('user') as AuthUser | undefined;
+    if (!db || !user?.id) return;
+
+    try {
+      await db.prepare(`
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, created_at)
+        VALUES (?, ?, 'match', ?, CURRENT_TIMESTAMP)
+      `).bind(user.id, action, entityId).run();
+    } catch (err: unknown) {
+      logger.warn('Audit log insert failed (non-critical)', {
+        error: err instanceof Error ? err.message : String(err),
+        action,
+      });
     }
   }
 
@@ -823,6 +846,7 @@ export function createMatchingRoutes() {
 
       // Update rider request status
       await repo.updateRiderRequestStatus(match.riderRequestId, 'confirmed', match.driverTripId);
+      await writeMatchingAudit(c, 'MATCH_CONFIRMED', matchId);
     } catch (err: unknown) {
       // Best-effort compensation if confirm transition fails after seat reservation.
       await repo.releaseDriverTripSeat(match.driverTripId);
@@ -873,6 +897,7 @@ export function createMatchingRoutes() {
     }
 
     await repo.rejectMatch(matchId, reason);
+    await writeMatchingAudit(c, 'MATCH_REJECTED', matchId);
     return c.json({ message: 'Match rejected', matchId });
   });
 

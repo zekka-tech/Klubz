@@ -258,4 +258,220 @@ describe('Audit taxonomy contracts', () => {
     expect(exportAuditWrites).toBe(1);
     expect(deleteAuditWrites).toBe(1);
   });
+
+  test('matching confirm and reject write MATCH_CONFIRMED and MATCH_REJECTED audit actions', async () => {
+    const token = await authToken(88, 'user');
+    let confirmAuditWrites = 0;
+    let rejectAuditWrites = 0;
+
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('FROM match_results') && kind === 'first') {
+        return {
+          id: String(params[0] ?? 'match-1'),
+          driver_trip_id: 'driver-trip-1',
+          rider_request_id: 'rider-request-1',
+          driver_id: 77,
+          rider_id: 88,
+          status: 'pending',
+        };
+      }
+      if (query.includes('FROM rider_requests') && kind === 'first') {
+        return {
+          id: String(params[0] ?? 'rider-request-1'),
+          rider_id: 88,
+          organization_id: null,
+          pickup_lat: -26.2,
+          pickup_lng: 28.0,
+          dropoff_lat: -26.1,
+          dropoff_lng: 28.1,
+          earliest_departure: 1700000000000,
+          latest_departure: 1700003600000,
+          seats_needed: 1,
+          preferences_json: null,
+          status: 'pending',
+          matched_driver_trip_id: null,
+          matched_at: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        };
+      }
+      if (query.includes('FROM driver_trips') && kind === 'first') {
+        return {
+          id: 'driver-trip-1',
+          driver_id: 77,
+          organization_id: null,
+          departure_lat: -26.2,
+          departure_lng: 28.0,
+          destination_lat: -26.1,
+          destination_lng: 28.1,
+          shift_lat: null,
+          shift_lng: null,
+          departure_time: 1700000000000,
+          arrival_time: null,
+          available_seats: 1,
+          total_seats: 4,
+          bbox_min_lat: null,
+          bbox_max_lat: null,
+          bbox_min_lng: null,
+          bbox_max_lng: null,
+          route_polyline_encoded: null,
+          route_distance_km: null,
+          status: 'offered',
+          driver_rating: null,
+          vehicle_json: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        };
+      }
+      if (query.includes('available_seats = available_seats - 1') && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes("SET status = 'confirmed'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('UPDATE rider_requests') && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes("SET status = 'rejected'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('INSERT INTO audit_logs') && params[1] === 'MATCH_CONFIRMED' && kind === 'run') {
+        confirmAuditWrites += 1;
+        return { changes: 1 };
+      }
+      if (query.includes('INSERT INTO audit_logs') && params[1] === 'MATCH_REJECTED' && kind === 'run') {
+        rejectAuditWrites += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+    const env = { ...baseEnv, DB: db, CACHE: new MockKV() };
+
+    const confirmRes = await app.request(
+      '/api/matching/confirm',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matchId: 'match-1',
+          driverTripId: 'driver-trip-1',
+          riderRequestId: 'rider-request-1',
+        }),
+      },
+      env,
+    );
+    expect(confirmRes.status).toBe(200);
+
+    const rejectRes = await app.request(
+      '/api/matching/reject',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId: 'match-2', reason: 'not suitable' }),
+      },
+      env,
+    );
+    expect(rejectRes.status).toBe(200);
+
+    expect(confirmAuditWrites).toBe(1);
+    expect(rejectAuditWrites).toBe(1);
+  });
+
+  test('payments webhook writes PAYMENT_SUCCEEDED, PAYMENT_FAILED, and PAYMENT_CANCELED audit actions', async () => {
+    let successAuditWrites = 0;
+    let failedAuditWrites = 0;
+    let canceledAuditWrites = 0;
+
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes("SET payment_status = 'paid'") && kind === 'run') return { changes: 1 };
+      if (query.includes("SET payment_status = 'failed'") && kind === 'run') return { changes: 1 };
+      if (query.includes("SET payment_status = 'canceled'") && kind === 'run') return { changes: 1 };
+      if (query.includes('SELECT user_id, trip_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return { user_id: 44, trip_id: 10 };
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') return { changes: 1 };
+      if (query.includes('INSERT INTO audit_logs') && params[1] === 'PAYMENT_SUCCEEDED' && kind === 'run') {
+        successAuditWrites += 1;
+        return { changes: 1 };
+      }
+      if (query.includes('INSERT INTO audit_logs') && params[1] === 'PAYMENT_FAILED' && kind === 'run') {
+        failedAuditWrites += 1;
+        return { changes: 1 };
+      }
+      if (query.includes('INSERT INTO audit_logs') && params[1] === 'PAYMENT_CANCELED' && kind === 'run') {
+        canceledAuditWrites += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+    const env = { ...baseEnv, DB: db, CACHE: new MockKV() };
+
+    const successRes = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'stripe-signature': 'sig_test' },
+        body: JSON.stringify({
+          id: 'evt_obs_success_1',
+          type: 'payment_intent.succeeded',
+          data: {
+            object: {
+              id: 'pi_obs_success_1',
+              amount: 2500,
+              metadata: { tripId: '10', userId: '44', bookingId: '77' },
+            },
+          },
+        }),
+      },
+      env,
+    );
+    expect(successRes.status).toBe(200);
+
+    const failedRes = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'stripe-signature': 'sig_test' },
+        body: JSON.stringify({
+          id: 'evt_obs_failed_1',
+          type: 'payment_intent.payment_failed',
+          data: {
+            object: {
+              id: 'pi_obs_failed_1',
+              amount: 2500,
+              metadata: { bookingId: '77' },
+              last_payment_error: { message: 'card declined' },
+            },
+          },
+        }),
+      },
+      env,
+    );
+    expect(failedRes.status).toBe(200);
+
+    const canceledRes = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'stripe-signature': 'sig_test' },
+        body: JSON.stringify({
+          id: 'evt_obs_canceled_1',
+          type: 'payment_intent.canceled',
+          data: {
+            object: {
+              id: 'pi_obs_canceled_1',
+              amount: 2500,
+              metadata: { bookingId: '77' },
+            },
+          },
+        }),
+      },
+      env,
+    );
+    expect(canceledRes.status).toBe(200);
+
+    expect(successAuditWrites).toBe(1);
+    expect(failedAuditWrites).toBe(1);
+    expect(canceledAuditWrites).toBe(1);
+  });
 });

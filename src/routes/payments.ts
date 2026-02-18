@@ -121,6 +121,30 @@ function getRequiredMetadata(
   return out;
 }
 
+async function writePaymentAudit(
+  c: Context<AppEnv>,
+  action: string,
+  bookingId: string,
+  userId?: string,
+): Promise<void> {
+  const db = getDB(c);
+  if (!db) return;
+
+  const parsedUserId = userId ? Number.parseInt(userId, 10) : Number.NaN;
+  try {
+    await db.prepare(`
+      INSERT INTO audit_logs (user_id, action, entity_type, entity_id, created_at)
+      VALUES (?, ?, 'booking', ?, CURRENT_TIMESTAMP)
+    `).bind(Number.isFinite(parsedUserId) ? parsedUserId : null, action, Number.parseInt(bookingId, 10)).run();
+  } catch (err: unknown) {
+    logger.warn('Audit log insert failed (non-critical)', {
+      error: err instanceof Error ? err.message : String(err),
+      action,
+      bookingId,
+    });
+  }
+}
+
 /**
  * Get Stripe instance if configured
  */
@@ -380,6 +404,8 @@ paymentRoutes.post('/webhook', async (c) => {
           amount: paymentIntent.amount / 100,
         });
 
+        await writePaymentAudit(c, 'PAYMENT_SUCCEEDED', bookingId, userId);
+
         const recipientId = Number.parseInt(userId, 10);
         const tripIdNum = Number.parseInt(tripId, 10);
         if (Number.isFinite(recipientId)) {
@@ -454,6 +480,7 @@ paymentRoutes.post('/webhook', async (c) => {
         });
 
         const booking = await db.prepare('SELECT user_id, trip_id FROM trip_participants WHERE id = ?').bind(bookingId).first<{ user_id: number; trip_id: number }>();
+        await writePaymentAudit(c, 'PAYMENT_FAILED', bookingId, booking?.user_id ? String(booking.user_id) : undefined);
         if (booking) {
           try {
             const notificationPrefs = await getUserNotificationPreferences(db, booking.user_id);
@@ -518,6 +545,7 @@ paymentRoutes.post('/webhook', async (c) => {
           paymentIntentId: paymentIntent.id,
           bookingId,
         });
+        await writePaymentAudit(c, 'PAYMENT_CANCELED', bookingId);
       } catch (err: unknown) {
         const parsed = parseError(err);
         logger.error('Failed to update payment status', {
