@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 03:47:00 UTC  
+Last updated: 2026-02-18 04:00:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (49/49)
+- `npm test`: PASS (53/53)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -34,14 +34,15 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
-2. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
-3. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
-4. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
-5. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
-6. `88d1608` - Resolved lint-blocking errors across services and routes.
-7. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
-8. `37b9168` - Improved migration docs, tightened test scope, updated deps.
+1. `9cac544` - Added webhook abuse-path integration contracts for missing signature and missing-metadata events (`succeeded`, `payment_failed`, `canceled`) and asserted no DB mutation on ignored events.
+2. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
+3. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
+4. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
+5. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
+6. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
+7. `88d1608` - Resolved lint-blocking errors across services and routes.
+8. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
+9. `37b9168` - Improved migration docs, tightened test scope, updated deps.
 
 Functional status:
 - Application compiles and builds.
@@ -119,6 +120,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 04:00 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 04:00 UTC` | codex | commit | `9cac544` | added payment webhook abuse-path coverage (missing signature + metadata) with no-mutation assertions
+- `2026-02-18 04:00 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (53 tests)
+- `2026-02-18 03:59 UTC` | codex | action | integration-hardening | expanded webhook contract suite for missing signature and missing metadata handling across Stripe event variants
 - `2026-02-18 03:47 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-18 03:47 UTC` | codex | commit | `5e84015` | scoped payment auth to `/intent` only and expanded integration contract coverage for payment auth + webhook behavior
 - `2026-02-18 03:46 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (49 tests)
