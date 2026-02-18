@@ -646,6 +646,56 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.status).toBe(401);
   });
 
+  test('payment intent replays cached idempotent response without creating a new intent', async () => {
+    const token = await authToken(44, 'user');
+    const cache = new MockKV();
+    const idempotencyKey = 'pi-replay-1';
+    await cache.put(
+      `idempotency:payment-intent:44:10:${idempotencyKey}`,
+      JSON.stringify({
+        clientSecret: 'cs_test_existing',
+        paymentIntentId: 'pi_existing_1',
+        amount: 120,
+        currency: 'zar',
+      }),
+    );
+
+    let dbCalls = 0;
+    const db = new MockDB(() => {
+      dbCalls += 1;
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/intent',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify({ tripId: 10, amount: 120 }),
+      },
+      { ...baseEnv, DB: db, CACHE: cache },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      replay?: boolean;
+      paymentIntentId?: string;
+      clientSecret?: string;
+      amount?: number;
+      currency?: string;
+    };
+    expect(body.replay).toBe(true);
+    expect(body.paymentIntentId).toBe('pi_existing_1');
+    expect(body.clientSecret).toBe('cs_test_existing');
+    expect(body.amount).toBe(120);
+    expect(body.currency).toBe('zar');
+    expect(dbCalls).toBe(0);
+  });
+
   test('payment intent rejects amount tampering when it does not match trip fare', async () => {
     const token = await authToken(44, 'user');
     const db = new MockDB((query, _params, kind) => {

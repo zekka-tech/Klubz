@@ -21,6 +21,8 @@ interface BookingRow {
   id: number;
   title: string;
   price_per_seat: number;
+  payment_intent_id: string | null;
+  payment_status: string | null;
 }
 
 interface StripeWebhookEvent {
@@ -47,6 +49,14 @@ interface D1RunResult {
   };
 }
 
+interface PaymentIntentResponse {
+  clientSecret: string | null;
+  paymentIntentId: string;
+  amount: number;
+  currency: string;
+  replay?: boolean;
+}
+
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
 }
@@ -56,6 +66,29 @@ function getAffectedRows(result: unknown): number | null {
   const meta = (result as D1RunResult).meta;
   if (!meta || typeof meta !== 'object' || typeof meta.changes !== 'number') return null;
   return meta.changes;
+}
+
+function getIdempotencyKey(c: Context<AppEnv>, userId: number, tripId: number | string): string | null {
+  const requestKey = c.req.header('Idempotency-Key') || c.req.header('idempotency-key');
+  if (!requestKey) return null;
+  return `idempotency:payment-intent:${userId}:${tripId}:${requestKey}`;
+}
+
+async function getIdempotentPaymentIntentResponse(c: Context<AppEnv>, key: string): Promise<PaymentIntentResponse | null> {
+  const cache = c.env?.CACHE;
+  if (!cache) return null;
+
+  const cached = await cache.get(key, 'json');
+  if (!cached || typeof cached !== 'object') return null;
+  const response = cached as PaymentIntentResponse;
+  if (!response.paymentIntentId || typeof response.paymentIntentId !== 'string') return null;
+  return response;
+}
+
+async function setIdempotentPaymentIntentResponse(c: Context<AppEnv>, key: string, response: PaymentIntentResponse): Promise<void> {
+  const cache = c.env?.CACHE;
+  if (!cache) return;
+  await cache.put(key, JSON.stringify(response), { expirationTtl: 10 * 60 });
 }
 
 async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boolean> {
@@ -108,6 +141,7 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
   const user = c.get('user') as AuthUser;
   const body = await c.req.json<CreateIntentBody>();
   const { tripId, amount } = body;
+  const idempotencyKey = getIdempotencyKey(c, user.id, tripId);
 
   if (!tripId || typeof amount !== 'number') {
     throw new ValidationError('tripId and amount are required');
@@ -121,11 +155,18 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
     throw new AppError('Payment processing not configured', 'PAYMENT_UNAVAILABLE', 503);
   }
 
+  if (idempotencyKey) {
+    const cachedResponse = await getIdempotentPaymentIntentResponse(c, idempotencyKey);
+    if (cachedResponse) {
+      return c.json({ ...cachedResponse, replay: true });
+    }
+  }
+
   const db = getDB(c);
 
   // Verify trip exists and user has an accepted booking
   const booking = await db.prepare(`
-    SELECT tp.id, t.price_per_seat, t.title, t.driver_id
+    SELECT tp.id, t.price_per_seat, t.title, t.driver_id, tp.payment_intent_id, tp.payment_status
     FROM trip_participants tp
     JOIN trips t ON tp.trip_id = t.id
     WHERE tp.trip_id = ? AND tp.user_id = ? AND tp.status = 'accepted'
@@ -145,6 +186,30 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
     throw new ValidationError('amount does not match trip fare');
   }
 
+  if (booking.payment_intent_id && booking.payment_status === 'pending') {
+    try {
+      const existingIntent = await stripe.paymentIntents.retrieve(booking.payment_intent_id);
+      if (existingIntent?.id) {
+        const existingResponse: PaymentIntentResponse = {
+          clientSecret: existingIntent.client_secret,
+          paymentIntentId: existingIntent.id,
+          amount: existingIntent.amount / 100,
+          currency: existingIntent.currency,
+        };
+        if (idempotencyKey) {
+          await setIdempotentPaymentIntentResponse(c, idempotencyKey, existingResponse);
+        }
+        return c.json({ ...existingResponse, replay: true });
+      }
+    } catch (err: unknown) {
+      logger.warn('Failed to retrieve existing pending payment intent; creating a new one', {
+        bookingId: booking.id,
+        paymentIntentId: booking.payment_intent_id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   try {
     // Create Stripe payment intent
     const paymentIntent = await stripe.paymentIntents.create({
@@ -162,11 +227,30 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
     });
 
     // Store payment intent ID in booking
-    await db.prepare(`
+    const updateResult = await db.prepare(`
       UPDATE trip_participants
       SET payment_intent_id = ?, payment_status = 'pending'
       WHERE id = ?
+        AND (payment_intent_id IS NULL OR payment_status != 'pending')
     `).bind(paymentIntent.id, booking.id).run();
+    const updatedRows = getAffectedRows(updateResult);
+    if (updatedRows === 0) {
+      const existing = await db.prepare('SELECT payment_intent_id FROM trip_participants WHERE id = ?').bind(booking.id).first<{ payment_intent_id: string | null }>();
+      if (existing?.payment_intent_id) {
+        const existingIntent = await stripe.paymentIntents.retrieve(existing.payment_intent_id);
+        const existingResponse: PaymentIntentResponse = {
+          clientSecret: existingIntent.client_secret,
+          paymentIntentId: existingIntent.id,
+          amount: existingIntent.amount / 100,
+          currency: existingIntent.currency,
+          replay: true,
+        };
+        if (idempotencyKey) {
+          await setIdempotentPaymentIntentResponse(c, idempotencyKey, existingResponse);
+        }
+        return c.json(existingResponse);
+      }
+    }
 
     logger.info('Payment intent created', {
       paymentIntentId: paymentIntent.id,
@@ -175,12 +259,16 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
       amount: expectedAmount,
     });
 
-    return c.json({
+    const response: PaymentIntentResponse = {
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       amount: paymentIntent.amount / 100,
       currency: paymentIntent.currency,
-    });
+    };
+    if (idempotencyKey) {
+      await setIdempotentPaymentIntentResponse(c, idempotencyKey, response);
+    }
+    return c.json(response);
   } catch (err: unknown) {
     const parsed = parseError(err);
     logger.error('Payment intent creation failed', {
