@@ -27,15 +27,38 @@ function buildErrorResponse(c: Context<AppEnv>, err: unknown) {
     ? String((err as { code?: unknown }).code || 'INTERNAL_ERROR')
     : 'INTERNAL_ERROR'
   const isProd = c.env?.ENVIRONMENT === 'production'
+  const expectedCodes = new Set([
+    'AUTHENTICATION_ERROR',
+    'AUTHORIZATION_ERROR',
+    'VALIDATION_ERROR',
+    'RATE_LIMIT_EXCEEDED',
+    'NOT_FOUND',
+    'CONFLICT',
+  ])
+  const isHandledClientError = status < 500 || expectedCodes.has(code)
 
-  console.error(JSON.stringify({
-    level: 'error',
-    type: 'unhandled',
-    requestId,
-    error: message,
-    stack,
-    ts: new Date().toISOString(),
-  }))
+  if (isHandledClientError) {
+    console.warn(JSON.stringify({
+      level: 'warn',
+      type: 'handled',
+      requestId,
+      code,
+      status,
+      error: message,
+      ts: new Date().toISOString(),
+    }))
+  } else {
+    console.error(JSON.stringify({
+      level: 'error',
+      type: 'unhandled',
+      requestId,
+      code,
+      status,
+      error: message,
+      stack,
+      ts: new Date().toISOString(),
+    }))
+  }
 
   return {
     status: status as AppJsonInit,
