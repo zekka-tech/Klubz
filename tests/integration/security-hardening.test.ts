@@ -1064,8 +1064,8 @@ describe('Security hardening integration flows', () => {
   test('admin cannot modify existing super admin account', async () => {
     const token = await authToken(1, 'admin');
     const db = new MockDB((query, _params, kind) => {
-      if (query.includes('SELECT role FROM users WHERE id = ?') && kind === 'first') {
-        return { role: 'super_admin' };
+      if (query.includes('SELECT id, role FROM users WHERE id = ?') && kind === 'first') {
+        return { id: 2, role: 'super_admin' };
       }
       return null;
     });

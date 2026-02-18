@@ -9,6 +9,7 @@ import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { getDB } from '../lib/db';
+import { getIP, getUserAgent } from '../lib/http';
 
 export const adminRoutes = new Hono<AppEnv>();
 
@@ -76,7 +77,8 @@ interface UpdateUserBody {
   name?: string;
 }
 
-interface RoleRow {
+interface TargetUserRow {
+  id: number;
   role: string;
 }
 
@@ -290,53 +292,69 @@ adminRoutes.put('/users/:userId', async (c) => {
   if (payload.role === 'super_admin' && adminUser.role !== 'super_admin') {
     return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only super admins can assign super admin role' } }, 403);
   }
+  if (payload.email !== undefined) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Email updates are not supported via admin endpoint' } }, 400);
+  }
 
   const db = getDB(c);
   if (!db) {
     return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Database not configured' } }, 503);
   }
 
-  if (adminUser.role !== 'super_admin') {
-    const targetRole = await db
-      .prepare('SELECT role FROM users WHERE id = ?')
+  const targetUser = await db
+      .prepare('SELECT id, role FROM users WHERE id = ?')
       .bind(userId)
-      .first<RoleRow>();
-    if (!targetRole) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
-    }
-    if (targetRole.role === 'super_admin') {
+      .first<TargetUserRow>();
+  if (!targetUser) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
+  }
+
+  if (adminUser.role !== 'super_admin') {
+    if (targetUser.role === 'super_admin') {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only super admins can modify super admin accounts' } }, 403);
     }
   }
 
-  if (db) {
-    try {
-      const parts: string[] = [];
-      const values: unknown[] = [];
+  try {
+    const parts: string[] = [];
+    const values: unknown[] = [];
 
-      if (payload.role) { parts.push('role = ?'); values.push(payload.role); }
-      if (payload.status === 'active') { parts.push('is_active = 1'); }
-      else if (payload.status === 'inactive' || payload.status === 'suspended') { parts.push('is_active = 0'); }
-      if (payload.name) {
-        const [first, ...rest] = payload.name.split(' ');
-        parts.push('first_name_encrypted = ?', 'last_name_encrypted = ?');
-        values.push(first, rest.join(' ') || null);
-      }
-      parts.push('updated_at = CURRENT_TIMESTAMP');
-      values.push(userId);
-
-      if (parts.length > 1) {
-        await db.prepare(`UPDATE users SET ${parts.join(', ')} WHERE id = ?`).bind(...values).run();
-      }
-
-      return c.json({ message: 'User updated successfully', user: { id: userId, updatedAt: new Date().toISOString() } });
-    } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('Admin user update error', err instanceof Error ? err : undefined, { error: parsed.message });
+    if (payload.role) { parts.push('role = ?'); values.push(payload.role); }
+    if (payload.status === 'active') { parts.push('is_active = 1'); }
+    else if (payload.status === 'inactive' || payload.status === 'suspended') { parts.push('is_active = 0'); }
+    if (payload.name) {
+      const [first, ...rest] = payload.name.split(' ');
+      parts.push('first_name_encrypted = ?', 'last_name_encrypted = ?');
+      values.push(first, rest.join(' ') || null);
     }
-  }
 
-  return c.json({ message: 'User updated successfully', user: { id: userId, updatedAt: new Date().toISOString() } });
+    if (parts.length === 0) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'No supported fields provided for update' } }, 400);
+    }
+    parts.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(userId);
+
+    await db.prepare(`UPDATE users SET ${parts.join(', ')} WHERE id = ?`).bind(...values).run();
+
+    // Best-effort admin audit trail for user-management actions.
+    try {
+      await db.prepare(`
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent, created_at)
+        VALUES (?, 'ADMIN_USER_UPDATED', 'user', ?, ?, ?, CURRENT_TIMESTAMP)
+      `).bind(adminUser.id, targetUser.id, getIP(c), getUserAgent(c)).run();
+    } catch (err: unknown) {
+      logger.warn('Audit log insert failed (non-critical)', {
+        error: err instanceof Error ? err.message : String(err),
+        action: 'ADMIN_USER_UPDATED',
+      });
+    }
+
+    return c.json({ message: 'User updated successfully', user: { id: userId, updatedAt: new Date().toISOString() } });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Admin user update error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update user' } }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -406,46 +424,57 @@ adminRoutes.get('/logs', async (c) => {
 
 adminRoutes.post('/users/:userId/export', async (c) => {
   const userId = c.req.param('userId');
+  const adminUser = c.get('user') as AuthUser;
   const db = getDB(c);
   if (!db) {
     return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Database not configured' } }, 503);
   }
 
-  if (db) {
+  try {
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first<ExportUserRow>();
+    if (!user) return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
+
+    const { results: trips } = await db
+      .prepare('SELECT t.* FROM trips t JOIN trip_participants tp ON tp.trip_id = t.id WHERE tp.user_id = ?')
+      .bind(userId)
+      .all();
+
+    // Create export request record
+    await db
+      .prepare("INSERT INTO data_export_requests (user_id, request_type, status) VALUES (?, 'export', 'completed')")
+      .bind(userId)
+      .run();
+
+    // Best-effort admin audit trail for data export requests.
     try {
-      const user = await db.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first<ExportUserRow>();
-      if (!user) return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
-
-      const { results: trips } = await db
-        .prepare('SELECT t.* FROM trips t JOIN trip_participants tp ON tp.trip_id = t.id WHERE tp.user_id = ?')
-        .bind(userId)
-        .all();
-
-      // Create export request record
-      await db
-        .prepare("INSERT INTO data_export_requests (user_id, request_type, status) VALUES (?, 'export', 'completed')")
-        .bind(userId)
-        .run();
-
-      return c.json({
-        message: 'User data export initiated',
-        export: {
-          exportId: crypto.randomUUID(),
-          userId,
-          exportedAt: new Date().toISOString(),
-          data: {
-            profile: { email: user.email, firstName: user.first_name_encrypted, lastName: user.last_name_encrypted, role: user.role, createdAt: user.created_at },
-            trips: trips || [],
-          },
-        },
-      });
+      await db.prepare(`
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent, created_at)
+        VALUES (?, 'ADMIN_USER_EXPORT', 'user', ?, ?, ?, CURRENT_TIMESTAMP)
+      `).bind(adminUser.id, Number(userId), getIP(c), getUserAgent(c)).run();
     } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('Data export error', err instanceof Error ? err : undefined, { error: parsed.message });
+      logger.warn('Audit log insert failed (non-critical)', {
+        error: err instanceof Error ? err.message : String(err),
+        action: 'ADMIN_USER_EXPORT',
+      });
     }
-  }
 
-  return c.json({ message: 'User data export initiated', export: { exportId: crypto.randomUUID(), userId, exportedAt: new Date().toISOString(), data: {} } });
+    return c.json({
+      message: 'User data export initiated',
+      export: {
+        exportId: crypto.randomUUID(),
+        userId,
+        exportedAt: new Date().toISOString(),
+        data: {
+          profile: { email: user.email, firstName: user.first_name_encrypted, lastName: user.last_name_encrypted, role: user.role, createdAt: user.created_at },
+          trips: trips || [],
+        },
+      },
+    });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Data export error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to export user data' } }, 500);
+  }
 });
 
 export default adminRoutes;
