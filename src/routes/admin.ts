@@ -118,53 +118,39 @@ adminRoutes.use('*', authMiddleware(['admin', 'super_admin']));
 adminRoutes.get('/stats', async (c) => {
   const db = getDB(c);
 
-  if (db) {
-    try {
-      const [usersRes, activeUsersRes, tripsRes, completedRes, driversRes, carbonRes] = await db.batch([
-        db.prepare('SELECT COUNT(*) as count FROM users WHERE deleted_at IS NULL'),
-        db.prepare("SELECT COUNT(*) as count FROM users WHERE is_active = 1 AND deleted_at IS NULL"),
-        db.prepare('SELECT COUNT(*) as count FROM trips'),
-        db.prepare("SELECT COUNT(*) as count FROM trips WHERE status = 'completed'"),
-        db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'user' AND deleted_at IS NULL"),
-        db.prepare("SELECT COALESCE(SUM(price_per_seat), 0) as total FROM trips WHERE status = 'completed'"),
-      ]);
+  try {
+    const [usersRes, activeUsersRes, tripsRes, completedRes, driversRes, carbonRes] = await db.batch([
+      db.prepare('SELECT COUNT(*) as count FROM users WHERE deleted_at IS NULL'),
+      db.prepare("SELECT COUNT(*) as count FROM users WHERE is_active = 1 AND deleted_at IS NULL"),
+      db.prepare('SELECT COUNT(*) as count FROM trips'),
+      db.prepare("SELECT COUNT(*) as count FROM trips WHERE status = 'completed'"),
+      db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'user' AND deleted_at IS NULL"),
+      db.prepare("SELECT COALESCE(SUM(price_per_seat), 0) as total FROM trips WHERE status = 'completed'"),
+    ]);
 
-      const totalUsers = (usersRes.results?.[0] as CountRow | undefined)?.count ?? 0;
-      const activeUsers = (activeUsersRes.results?.[0] as CountRow | undefined)?.count ?? 0;
-      const totalTrips = (tripsRes.results?.[0] as CountRow | undefined)?.count ?? 0;
-      const completedTrips = (completedRes.results?.[0] as CountRow | undefined)?.count ?? 0;
-      const activeDrivers = (driversRes.results?.[0] as CountRow | undefined)?.count ?? 0;
-      const revenue = (carbonRes.results?.[0] as TotalRow | undefined)?.total ?? 0;
+    const totalUsers = (usersRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+    const activeUsers = (activeUsersRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+    const totalTrips = (tripsRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+    const completedTrips = (completedRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+    const activeDrivers = (driversRes.results?.[0] as CountRow | undefined)?.count ?? 0;
+    const revenue = (carbonRes.results?.[0] as TotalRow | undefined)?.total ?? 0;
 
-      return c.json({
-        totalUsers,
-        activeUsers,
-        totalTrips,
-        completedTrips,
-        activeDrivers,
-        revenue: { total: revenue, currency: 'ZAR' },
-        carbonSaved: { total: (completedTrips as number) * 2.1, unit: 'kg CO2' },
-        sla: { uptime: 99.85, avgResponseTime: 145 },
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('Admin stats DB error', err instanceof Error ? err : undefined, { error: parsed.message });
-    }
+    return c.json({
+      totalUsers,
+      activeUsers,
+      totalTrips,
+      completedTrips,
+      activeDrivers,
+      revenue: { total: revenue, currency: 'ZAR' },
+      carbonSaved: { total: (completedTrips as number) * 2.1, unit: 'kg CO2' },
+      sla: { uptime: 99.85, avgResponseTime: 145 },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Admin stats DB error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load admin statistics' } }, 500);
   }
-
-  // ── Fallback (dev) ──
-  return c.json({
-    totalUsers: 0,
-    activeUsers: 0,
-    totalTrips: 0,
-    completedTrips: 0,
-    activeDrivers: 0,
-    revenue: { total: 0, currency: 'ZAR' },
-    carbonSaved: { total: 0, unit: 'kg CO2' },
-    sla: { uptime: 99.85, avgResponseTime: 145 },
-    timestamp: new Date().toISOString(),
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -193,26 +179,25 @@ adminRoutes.get('/users', async (c) => {
   }
 
   const db = getDB(c);
-  if (db) {
-    try {
-      let where = 'WHERE deleted_at IS NULL';
-      const params: unknown[] = [];
+  try {
+    let where = 'WHERE deleted_at IS NULL';
+    const params: unknown[] = [];
 
-      if (search) {
-        where += ' AND (email LIKE ? OR first_name_encrypted LIKE ? OR last_name_encrypted LIKE ?)';
-        const pat = `%${search}%`;
-        params.push(pat, pat, pat);
-      }
-      if (role) { where += ' AND role = ?'; params.push(role); }
-      if (status === 'active') { where += ' AND is_active = 1'; }
-      else if (status === 'inactive') { where += ' AND is_active = 0'; }
+    if (search) {
+      where += ' AND (email LIKE ? OR first_name_encrypted LIKE ? OR last_name_encrypted LIKE ?)';
+      const pat = `%${search}%`;
+      params.push(pat, pat, pat);
+    }
+    if (role) { where += ' AND role = ?'; params.push(role); }
+    if (status === 'active') { where += ' AND is_active = 1'; }
+    else if (status === 'inactive') { where += ' AND is_active = 0'; }
 
-      const countRes = await db.prepare(`SELECT COUNT(*) as total FROM users ${where}`).bind(...params).first<TotalRow>();
-      const total = countRes?.total ?? 0;
+    const countRes = await db.prepare(`SELECT COUNT(*) as total FROM users ${where}`).bind(...params).first<TotalRow>();
+    const total = countRes?.total ?? 0;
 
-      const dataParams = [...params, limit, (page - 1) * limit];
-      const { results } = await db
-        .prepare(`
+    const dataParams = [...params, limit, (page - 1) * limit];
+    const { results } = await db
+      .prepare(`
           SELECT
             u.id, u.email, u.first_name_encrypted, u.last_name_encrypted, u.phone_encrypted,
             u.role, u.is_active, u.last_login_at, u.created_at,
@@ -227,36 +212,34 @@ adminRoutes.get('/users', async (c) => {
           ORDER BY u.created_at DESC
           LIMIT ? OFFSET ?
         `)
-        .bind(...dataParams)
-        .all<AdminUserRow>();
+      .bind(...dataParams)
+      .all<AdminUserRow>();
 
-      const users = (results || []).map((r) => ({
-        id: r.id,
-        email: r.email,
-        name: [r.first_name_encrypted, r.last_name_encrypted].filter(Boolean).join(' ') || r.email.split('@')[0],
-        role: r.role,
-        phone: r.phone_encrypted,
-        status: r.is_active ? 'active' : 'inactive',
-        lastLoginAt: r.last_login_at,
-        createdAt: r.created_at,
-        stats: {
-          tripCount: r.trip_count ?? 0,
-          participationCount: r.participation_count ?? 0,
-          avgRating: r.avg_driver_rating ? parseFloat(Number(r.avg_driver_rating).toFixed(1)) : 0,
-        }
-      }));
+    const users = (results || []).map((r) => ({
+      id: r.id,
+      email: r.email,
+      name: [r.first_name_encrypted, r.last_name_encrypted].filter(Boolean).join(' ') || r.email.split('@')[0],
+      role: r.role,
+      phone: r.phone_encrypted,
+      status: r.is_active ? 'active' : 'inactive',
+      lastLoginAt: r.last_login_at,
+      createdAt: r.created_at,
+      stats: {
+        tripCount: r.trip_count ?? 0,
+        participationCount: r.participation_count ?? 0,
+        avgRating: r.avg_driver_rating ? parseFloat(Number(r.avg_driver_rating).toFixed(1)) : 0,
+      }
+    }));
 
-      return c.json({
-        users,
-        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-      });
-    } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('Admin users DB error', err instanceof Error ? err : undefined, { error: parsed.message });
-    }
+    return c.json({
+      users,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Admin users DB error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load users' } }, 500);
   }
-
-  return c.json({ users: [], pagination: { page, limit, total: 0, totalPages: 0 } });
 });
 
 // ---------------------------------------------------------------------------
@@ -267,40 +250,37 @@ adminRoutes.get('/users/:userId', async (c) => {
   const userId = c.req.param('userId');
   const db = getDB(c);
 
-  if (db) {
-    try {
-      const user = await db
-        .prepare(
-          `SELECT u.*, 
-                  (SELECT COUNT(*) FROM trip_participants tp WHERE tp.user_id = u.id) as total_trips,
-                  (SELECT COALESCE(AVG(tp.rating), 0) FROM trip_participants tp WHERE tp.user_id = u.id AND tp.rating IS NOT NULL) as avg_rating
-           FROM users u WHERE u.id = ?`
-        )
-        .bind(userId)
-        .first<AdminUserDetailRow>();
+  try {
+    const user = await db
+      .prepare(
+        `SELECT u.*, 
+                (SELECT COUNT(*) FROM trip_participants tp WHERE tp.user_id = u.id) as total_trips,
+                (SELECT COALESCE(AVG(tp.rating), 0) FROM trip_participants tp WHERE tp.user_id = u.id AND tp.rating IS NOT NULL) as avg_rating
+         FROM users u WHERE u.id = ?`
+      )
+      .bind(userId)
+      .first<AdminUserDetailRow>();
 
-      if (!user) return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
+    if (!user) return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
 
-      return c.json({
-        id: user.id,
-        email: user.email,
-        name: [user.first_name_encrypted, user.last_name_encrypted].filter(Boolean).join(' '),
-        role: user.role,
-        phone: user.phone_encrypted,
-        status: user.is_active ? 'active' : 'inactive',
-        emailVerified: !!user.email_verified,
-        mfaEnabled: !!user.mfa_enabled,
-        stats: { totalTrips: user.total_trips ?? 0, avgRating: user.avg_rating ?? 0 },
-        createdAt: user.created_at,
-        lastLoginAt: user.last_login_at,
-      });
-    } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('Admin user detail error', err instanceof Error ? err : undefined, { error: parsed.message });
-    }
+    return c.json({
+      id: user.id,
+      email: user.email,
+      name: [user.first_name_encrypted, user.last_name_encrypted].filter(Boolean).join(' '),
+      role: user.role,
+      phone: user.phone_encrypted,
+      status: user.is_active ? 'active' : 'inactive',
+      emailVerified: !!user.email_verified,
+      mfaEnabled: !!user.mfa_enabled,
+      stats: { totalTrips: user.total_trips ?? 0, avgRating: user.avg_rating ?? 0 },
+      createdAt: user.created_at,
+      lastLoginAt: user.last_login_at,
+    });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Admin user detail error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load user details' } }, 500);
   }
-
-  return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
 });
 
 // ---------------------------------------------------------------------------
@@ -426,43 +406,40 @@ adminRoutes.get('/logs', async (c) => {
   }
 
   const db = getDB(c);
-  if (db) {
-    try {
-      let where = '1=1';
-      const params: unknown[] = [];
+  try {
+    let where = '1=1';
+    const params: unknown[] = [];
 
-      if (level !== 'all') {
-        where += ' AND action LIKE ?';
-        params.push(`%${level.toUpperCase()}%`);
-      }
-
-      const countRes = await db.prepare(`SELECT COUNT(*) as total FROM audit_logs WHERE ${where}`).bind(...params).first<TotalRow>();
-      const total = countRes?.total ?? 0;
-
-      const dataParams = [...params, limit, (page - 1) * limit];
-      const { results } = await db
-        .prepare(`SELECT id, user_id, action, entity_type, entity_id, ip_address, user_agent, created_at FROM audit_logs WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
-        .bind(...dataParams)
-        .all<AuditLogRow>();
-
-      const logs = (results || []).map((r) => ({
-        id: r.id,
-        timestamp: r.created_at,
-        level: r.action?.includes('ERROR') ? 'error' : r.action?.includes('SECURITY') ? 'warn' : 'info',
-        message: r.action,
-        userId: r.user_id,
-        action: r.action,
-        metadata: { entityType: r.entity_type, entityId: r.entity_id, ip: r.ip_address },
-      }));
-
-      return c.json({ logs, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
-    } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('Admin logs error', err instanceof Error ? err : undefined, { error: parsed.message });
+    if (level !== 'all') {
+      where += ' AND action LIKE ?';
+      params.push(`%${level.toUpperCase()}%`);
     }
-  }
 
-  return c.json({ logs: [], pagination: { page, limit, total: 0, totalPages: 0 } });
+    const countRes = await db.prepare(`SELECT COUNT(*) as total FROM audit_logs WHERE ${where}`).bind(...params).first<TotalRow>();
+    const total = countRes?.total ?? 0;
+
+    const dataParams = [...params, limit, (page - 1) * limit];
+    const { results } = await db
+      .prepare(`SELECT id, user_id, action, entity_type, entity_id, ip_address, user_agent, created_at FROM audit_logs WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .bind(...dataParams)
+      .all<AuditLogRow>();
+
+    const logs = (results || []).map((r) => ({
+      id: r.id,
+      timestamp: r.created_at,
+      level: r.action?.includes('ERROR') ? 'error' : r.action?.includes('SECURITY') ? 'warn' : 'info',
+      message: r.action,
+      userId: r.user_id,
+      action: r.action,
+      metadata: { entityType: r.entity_type, entityId: r.entity_id, ip: r.ip_address },
+    }));
+
+    return c.json({ logs, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Admin logs error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load audit logs' } }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -106,6 +106,88 @@ async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' 
 }
 
 describe('Admin route hardening contracts', () => {
+  test('admin stats returns 500 when DB batch fails', async () => {
+    const token = await authToken(1, 'admin');
+    const db = new MockDB((_query, _params, kind) => {
+      if (kind === 'all') throw new Error('db unavailable');
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/admin/stats',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Failed to load admin statistics');
+  });
+
+  test('admin users list returns 500 when DB read fails', async () => {
+    const token = await authToken(1, 'admin');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('COUNT(*) as total FROM users') && kind === 'first') {
+        throw new Error('count failed');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/admin/users',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Failed to load users');
+  });
+
+  test('admin user detail returns 500 when DB read fails', async () => {
+    const token = await authToken(1, 'admin');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM users u WHERE u.id = ?') && kind === 'first') {
+        throw new Error('detail failed');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/admin/users/77',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Failed to load user details');
+  });
+
+  test('admin logs returns 500 when DB read fails', async () => {
+    const token = await authToken(1, 'admin');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('COUNT(*) as total FROM audit_logs') && kind === 'first') {
+        throw new Error('audit count failed');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/admin/logs',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Failed to load audit logs');
+  });
+
   test('admin users list rejects invalid page query', async () => {
     const token = await authToken(1, 'admin');
     const res = await app.request(

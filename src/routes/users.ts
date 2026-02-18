@@ -131,69 +131,55 @@ userRoutes.get('/profile', async (c) => {
     }
   }
 
-  if (db) {
-    try {
-      const row = await db
-        .prepare(
-          `SELECT u.id, u.email, u.first_name_encrypted, u.last_name_encrypted, u.phone_encrypted,
-                  u.avatar_url, u.role, u.is_active, u.email_verified, u.mfa_enabled,
-                  u.created_at, u.last_login_at,
-                  (SELECT COUNT(*) FROM trip_participants tp WHERE tp.user_id = u.id) as total_trips,
-                  (SELECT COALESCE(SUM(CASE WHEN tp.status = 'completed' THEN 1 ELSE 0 END), 0) FROM trip_participants tp WHERE tp.user_id = u.id) as completed_trips,
-                  (SELECT COALESCE(AVG(tp.rating), 0) FROM trip_participants tp WHERE tp.user_id = u.id AND tp.rating IS NOT NULL) as avg_rating
-           FROM users u WHERE u.id = ? AND u.deleted_at IS NULL`
-        )
-        .bind(user.id)
-        .first<UserProfileRow>();
+  try {
+    const row = await db
+      .prepare(
+        `SELECT u.id, u.email, u.first_name_encrypted, u.last_name_encrypted, u.phone_encrypted,
+                u.avatar_url, u.role, u.is_active, u.email_verified, u.mfa_enabled,
+                u.created_at, u.last_login_at,
+                (SELECT COUNT(*) FROM trip_participants tp WHERE tp.user_id = u.id) as total_trips,
+                (SELECT COALESCE(SUM(CASE WHEN tp.status = 'completed' THEN 1 ELSE 0 END), 0) FROM trip_participants tp WHERE tp.user_id = u.id) as completed_trips,
+                (SELECT COALESCE(AVG(tp.rating), 0) FROM trip_participants tp WHERE tp.user_id = u.id AND tp.rating IS NOT NULL) as avg_rating
+         FROM users u WHERE u.id = ? AND u.deleted_at IS NULL`
+      )
+      .bind(user.id)
+      .first<UserProfileRow>();
 
-      if (!row) {
-        return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
-      }
-
-      const profile = {
-        id: row.id,
-        email: row.email,
-        name: [row.first_name_encrypted, row.last_name_encrypted].filter(Boolean).join(' ') || user.name,
-        role: row.role,
-        phone: row.phone_encrypted || null,
-        avatar: row.avatar_url || null,
-        emailVerified: !!row.email_verified,
-        mfaEnabled: !!row.mfa_enabled,
-        stats: {
-          totalTrips: row.total_trips ?? 0,
-          completedTrips: row.completed_trips ?? 0,
-          totalDistance: 0, // computed from trips if needed
-          carbonSaved: (row.completed_trips ?? 0) * 2.1, // estimate
-          rating: row.avg_rating ? parseFloat(Number(row.avg_rating).toFixed(1)) : 0,
-        },
-        createdAt: row.created_at,
-        lastLoginAt: row.last_login_at,
-      };
-
-      // Cache for 10 minutes
-      if (cache) {
-        await cache.set(cacheKey, profile, 600);
-      }
-
-      return c.json(profile);
-    } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('Profile DB error', err instanceof Error ? err : undefined, { error: parsed.message });
+    if (!row) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
     }
-  }
 
-  // ── Fallback dev mode ──
-  return c.json({
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    phone: null,
-    avatar: null,
-    stats: { totalTrips: 0, completedTrips: 0, totalDistance: 0, carbonSaved: 0, rating: 0 },
-    createdAt: new Date().toISOString(),
-    lastLoginAt: new Date().toISOString(),
-  });
+    const profile = {
+      id: row.id,
+      email: row.email,
+      name: [row.first_name_encrypted, row.last_name_encrypted].filter(Boolean).join(' ') || user.name,
+      role: row.role,
+      phone: row.phone_encrypted || null,
+      avatar: row.avatar_url || null,
+      emailVerified: !!row.email_verified,
+      mfaEnabled: !!row.mfa_enabled,
+      stats: {
+        totalTrips: row.total_trips ?? 0,
+        completedTrips: row.completed_trips ?? 0,
+        totalDistance: 0, // computed from trips if needed
+        carbonSaved: (row.completed_trips ?? 0) * 2.1, // estimate
+        rating: row.avg_rating ? parseFloat(Number(row.avg_rating).toFixed(1)) : 0,
+      },
+      createdAt: row.created_at,
+      lastLoginAt: row.last_login_at,
+    };
+
+    // Cache for 10 minutes
+    if (cache) {
+      await cache.set(cacheKey, profile, 600);
+    }
+
+    return c.json(profile);
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Profile DB error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load profile' } }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -216,38 +202,35 @@ userRoutes.put('/profile', async (c) => {
   }
 
   const db = getDB(c);
-  if (db) {
-    try {
-      const parts: string[] = [];
-      const values: unknown[] = [];
+  try {
+    const parts: string[] = [];
+    const values: unknown[] = [];
 
-      if (payload.name) {
-        const [first, ...rest] = payload.name.split(' ');
-        parts.push('first_name_encrypted = ?', 'last_name_encrypted = ?');
-        values.push(first, rest.join(' ') || null);
-      }
-      if (payload.phone !== undefined) { parts.push('phone_encrypted = ?'); values.push(payload.phone || null); }
-      if (payload.avatar !== undefined) { parts.push('avatar_url = ?'); values.push(payload.avatar || null); }
-
-      parts.push('updated_at = CURRENT_TIMESTAMP');
-      values.push(user.id);
-
-      await db.prepare(`UPDATE users SET ${parts.join(', ')} WHERE id = ?`).bind(...values).run();
-
-      // Invalidate profile cache
-      const cache = getCacheService(c);
-      if (cache) {
-        await cache.delete(`user:profile:${user.id}`);
-      }
-
-      return c.json({ message: 'Profile updated', updatedAt: new Date().toISOString() });
-    } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('Profile update error', err instanceof Error ? err : undefined, { error: parsed.message });
+    if (payload.name) {
+      const [first, ...rest] = payload.name.split(' ');
+      parts.push('first_name_encrypted = ?', 'last_name_encrypted = ?');
+      values.push(first, rest.join(' ') || null);
     }
-  }
+    if (payload.phone !== undefined) { parts.push('phone_encrypted = ?'); values.push(payload.phone || null); }
+    if (payload.avatar !== undefined) { parts.push('avatar_url = ?'); values.push(payload.avatar || null); }
 
-  return c.json({ message: 'Profile updated', updatedAt: new Date().toISOString() });
+    parts.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(user.id);
+
+    await db.prepare(`UPDATE users SET ${parts.join(', ')} WHERE id = ?`).bind(...values).run();
+
+    // Invalidate profile cache
+    const cache = getCacheService(c);
+    if (cache) {
+      await cache.delete(`user:profile:${user.id}`);
+    }
+
+    return c.json({ message: 'Profile updated', updatedAt: new Date().toISOString() });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Profile update error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update profile' } }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -261,10 +244,9 @@ userRoutes.get('/trips', async (c) => {
   const status = c.req.query('status');
   const db = getDB(c);
 
-  if (db) {
-    try {
-      let countSql = 'SELECT COUNT(*) as total FROM trip_participants tp JOIN trips t ON tp.trip_id = t.id WHERE tp.user_id = ?';
-      let dataSql = `
+  try {
+    let countSql = 'SELECT COUNT(*) as total FROM trip_participants tp JOIN trips t ON tp.trip_id = t.id WHERE tp.user_id = ?';
+    let dataSql = `
         SELECT t.id, t.title, t.description, t.origin, t.destination, t.departure_time,
                t.arrival_time, t.available_seats, t.total_seats, t.price_per_seat,
                t.currency, t.status, t.vehicle_type, t.created_at,
@@ -279,77 +261,55 @@ userRoutes.get('/trips', async (c) => {
         LEFT JOIN users u ON t.driver_id = u.id
         WHERE tp.user_id = ?`;
 
-      const params: unknown[] = [user.id];
+    const params: unknown[] = [user.id];
 
-      if (status) {
-        countSql += ' AND t.status = ?';
-        dataSql += ' AND t.status = ?';
-        params.push(status);
-      }
-
-      dataSql += ' ORDER BY t.departure_time DESC LIMIT ? OFFSET ?';
-
-      const countResult = await db.prepare(countSql).bind(...params).first<{ total: number }>();
-      const total = countResult?.total ?? 0;
-
-      const dataParams = [...params, limit, (page - 1) * limit];
-      const { results } = await db.prepare(dataSql).bind(...dataParams).all<UserTripRow>();
-
-      const trips = (results || []).map((r) => ({
-        id: r.id,
-        title: r.title,
-        description: r.description,
-        pickupLocation: r.pickup_location_encrypted ? { address: r.pickup_location_encrypted } : { address: r.origin },
-        dropoffLocation: r.dropoff_location_encrypted ? { address: r.dropoff_location_encrypted } : { address: r.destination },
-        scheduledTime: r.departure_time,
-        status: r.status,
-        participantRole: r.participant_role,
-        participantStatus: r.participant_status,
-        price: r.price_per_seat,
-        currency: r.currency || 'ZAR',
-        availableSeats: r.available_seats,
-        totalSeats: r.total_seats,
-        vehicleType: r.vehicle_type,
-        rating: r.rating,
-        carbonSaved: 2.1, // estimate per trip
-        driver: {
-          name: [r.driver_first_name, r.driver_last_name].filter(Boolean).join(' ') || 'Driver',
-          avatar: r.driver_avatar || null,
-        },
-        createdAt: r.created_at,
-      }));
-
-      return c.json({
-        trips,
-        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-      });
-    } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('User trips DB error', err instanceof Error ? err : undefined, { error: parsed.message });
+    if (status) {
+      countSql += ' AND t.status = ?';
+      dataSql += ' AND t.status = ?';
+      params.push(status);
     }
+
+    dataSql += ' ORDER BY t.departure_time DESC LIMIT ? OFFSET ?';
+
+    const countResult = await db.prepare(countSql).bind(...params).first<{ total: number }>();
+    const total = countResult?.total ?? 0;
+
+    const dataParams = [...params, limit, (page - 1) * limit];
+    const { results } = await db.prepare(dataSql).bind(...dataParams).all<UserTripRow>();
+
+    const trips = (results || []).map((r) => ({
+      id: r.id,
+      title: r.title,
+      description: r.description,
+      pickupLocation: r.pickup_location_encrypted ? { address: r.pickup_location_encrypted } : { address: r.origin },
+      dropoffLocation: r.dropoff_location_encrypted ? { address: r.dropoff_location_encrypted } : { address: r.destination },
+      scheduledTime: r.departure_time,
+      status: r.status,
+      participantRole: r.participant_role,
+      participantStatus: r.participant_status,
+      price: r.price_per_seat,
+      currency: r.currency || 'ZAR',
+      availableSeats: r.available_seats,
+      totalSeats: r.total_seats,
+      vehicleType: r.vehicle_type,
+      rating: r.rating,
+      carbonSaved: 2.1, // estimate per trip
+      driver: {
+        name: [r.driver_first_name, r.driver_last_name].filter(Boolean).join(' ') || 'Driver',
+        avatar: r.driver_avatar || null,
+      },
+      createdAt: r.created_at,
+    }));
+
+    return c.json({
+      trips,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('User trips DB error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load trips' } }, 500);
   }
-
-  // ── Fallback dev mode ──
-  const mockTrips = [
-    {
-      id: 1, title: 'Morning Commute', pickupLocation: { lat: -26.2041, lng: 28.0473, address: '123 Main St, Johannesburg' },
-      dropoffLocation: { lat: -26.1076, lng: 28.0567, address: '456 Office Park, Sandton' },
-      scheduledTime: new Date(Date.now() + 3600000).toISOString(), status: 'scheduled',
-      price: 45.00, currency: 'ZAR', availableSeats: 3, carbonSaved: 2.1, createdAt: new Date().toISOString(),
-    },
-    {
-      id: 2, title: 'Evening Return', pickupLocation: { lat: -26.2041, lng: 28.0473, address: '789 Business Rd, Rosebank' },
-      dropoffLocation: { lat: -26.1076, lng: 28.0567, address: '321 Corporate Ave, Sandton' },
-      scheduledTime: new Date(Date.now() - 86400000).toISOString(), status: 'completed',
-      price: 38.50, currency: 'ZAR', availableSeats: 0, carbonSaved: 1.8, createdAt: new Date().toISOString(),
-    },
-  ];
-
-  const filtered = status ? mockTrips.filter(t => t.status === status) : mockTrips;
-  return c.json({
-    trips: filtered,
-    pagination: { page: 1, limit: 10, total: filtered.length, totalPages: 1 },
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -374,47 +334,44 @@ userRoutes.post('/trips', async (c) => {
   }
 
   const db = getDB(c);
-  if (db) {
-    try {
-      const result = await db
-        .prepare(
-          `INSERT INTO trips (title, description, origin, destination, origin_hash, destination_hash, departure_time, available_seats, total_seats, price_per_seat, currency, status, vehicle_type, driver_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', 'sedan', ?)`
-        )
-        .bind(
-          payload.title || 'Trip',
-          payload.notes || null,
-          payload.pickupLocation.address || JSON.stringify(payload.pickupLocation),
-          payload.dropoffLocation.address || JSON.stringify(payload.dropoffLocation),
-          'hash_' + Date.now(),
-          'hash_' + (Date.now() + 1),
-          payload.scheduledTime,
-          payload.availableSeats || 3,
-          payload.totalSeats || 4,
-          payload.price || 35.00,
-          'ZAR',
-          user.id,
-        )
-        .run();
+  try {
+    const result = await db
+      .prepare(
+        `INSERT INTO trips (title, description, origin, destination, origin_hash, destination_hash, departure_time, available_seats, total_seats, price_per_seat, currency, status, vehicle_type, driver_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', 'sedan', ?)`
+      )
+      .bind(
+        payload.title || 'Trip',
+        payload.notes || null,
+        payload.pickupLocation.address || JSON.stringify(payload.pickupLocation),
+        payload.dropoffLocation.address || JSON.stringify(payload.dropoffLocation),
+        'hash_' + Date.now(),
+        'hash_' + (Date.now() + 1),
+        payload.scheduledTime,
+        payload.availableSeats || 3,
+        payload.totalSeats || 4,
+        payload.price || 35.00,
+        'ZAR',
+        user.id,
+      )
+      .run();
 
-      const tripId = result?.meta?.last_row_id ?? 0;
+    const tripId = result?.meta?.last_row_id ?? 0;
 
-      // Emit real-time event
-      eventBus.emit('trip:created', {
-        tripId,
-        driverId: user.id,
-        title: payload.title || 'Trip',
-        scheduledTime: payload.scheduledTime,
-      }, user.id);
+    // Emit real-time event
+    eventBus.emit('trip:created', {
+      tripId,
+      driverId: user.id,
+      title: payload.title || 'Trip',
+      scheduledTime: payload.scheduledTime,
+    }, user.id);
 
-      return c.json({ message: 'Trip created successfully', trip: { id: tripId, status: 'scheduled', createdAt: new Date().toISOString() } });
-    } catch (err: unknown) {
-      const parsed = parseError(err);
-      logger.error('Trip create error', err instanceof Error ? err : undefined, { error: parsed.message });
-    }
+    return c.json({ message: 'Trip created successfully', trip: { id: tripId, status: 'scheduled', createdAt: new Date().toISOString() } });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Trip create error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create trip' } }, 500);
   }
-
-  return c.json({ message: 'Trip created successfully', trip: { id: Date.now(), status: 'scheduled', createdAt: new Date().toISOString() } });
 });
 
 // ---------------------------------------------------------------------------

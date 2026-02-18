@@ -291,18 +291,20 @@ Latest entries:
 - `2026-02-18 05:26 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (89 tests)
 - `2026-02-18 05:26 UTC` | codex | commit | `8d68c48` | hardened admin list query validation and expanded integration contracts
 - `2026-02-18 05:26 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 05:33 UTC` | codex | action | fallback-removal-hardening | removed silent fallback responses from authenticated admin/user read-write routes (`/api/admin/stats`, `/api/admin/users`, `/api/admin/users/:id`, `/api/admin/logs`, `/api/users/profile`, `/api/users/trips`, `/api/users/trips` create, `/api/users/profile` update) and standardized explicit `500 INTERNAL_ERROR` responses on DB failures
+- `2026-02-18 05:33 UTC` | codex | action | integration-tests | expanded `tests/integration/admin-routes-hardening.test.ts` and added `tests/integration/user-routes-hardening.test.ts` to assert fail-closed behavior for DB failure paths
+- `2026-02-18 05:33 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (97 tests)
 
 ---
 
 ## Next Active Tasks
-1. Critical: remove silent fallback responses on authenticated admin/user data paths (return structured 5xx where DB errors occur) and add regression tests per endpoint.
-2. Critical: enforce strict query/body schema validation on remaining mutable routes (`/api/users`, `/api/trips`, `/api/matching`) for invalid numeric ranges and enum filters.
-3. High: add transactional consistency tests for booking/payment race paths under concurrent requests to verify conflict/idempotency guarantees.
-4. High: add security-event audit coverage for remaining privileged operations (monitoring, organization/admin management) with non-critical write-failure handling.
-5. Medium: align route-level validation/error contract style across modules (single helper pattern) to reduce drift and simplify long-term maintenance.
-6. Medium: expand integration authz matrix for all admin subroutes and negative role cases introduced in future features.
-7. Medium: harden observability by adding route-level metrics assertions in tests for handled vs unhandled failures on key paths.
-8. Lower: refresh deployment and operations docs to reflect current hardening guarantees, migration checks, and incident playbooks.
+1. Critical: enforce strict query/body schema validation on remaining mutable routes (`/api/users`, `/api/trips`, `/api/matching`) for invalid numeric ranges and enum filters.
+2. High: add transactional consistency tests for booking/payment race paths under concurrent requests to verify conflict/idempotency guarantees.
+3. High: add security-event audit coverage for remaining privileged operations (monitoring, organization/admin management) with non-critical write-failure handling.
+4. Medium: align route-level validation/error contract style across modules (single helper pattern) to reduce drift and simplify long-term maintenance.
+5. Medium: expand integration authz matrix for all admin subroutes and negative role cases introduced in future features.
+6. Medium: harden observability by adding route-level metrics assertions in tests for handled vs unhandled failures on key paths.
+7. Lower: refresh deployment and operations docs to reflect current hardening guarantees, migration checks, and incident playbooks.
 
 Owner guidance:
 - Keep this file authoritative.
