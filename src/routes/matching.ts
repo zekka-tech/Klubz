@@ -36,6 +36,7 @@ import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
+import { parseQueryInteger } from '../lib/validation';
 import {
   matchRiderToDrivers,
   optimizePool,
@@ -194,22 +195,6 @@ export function createMatchingRoutes() {
     if (!status) return undefined;
     const allowed: RiderRequestStatus[] = ['pending', 'matched', 'confirmed', 'in_progress', 'completed', 'cancelled', 'expired'];
     return allowed.includes(status as RiderRequestStatus) ? (status as RiderRequestStatus) : undefined;
-  }
-
-  function parseQueryInteger(
-    value: string | undefined,
-    defaultValue: number,
-    options: { min: number; max: number },
-  ): number | null {
-    if (value === undefined) return defaultValue;
-    const parsed = Number.parseInt(value, 10);
-    if (!Number.isFinite(parsed) || `${parsed}` !== value.trim()) {
-      return null;
-    }
-    if (parsed < options.min || parsed > options.max) {
-      return null;
-    }
-    return parsed;
   }
 
   // Helper to get repository

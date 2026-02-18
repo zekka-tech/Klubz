@@ -16,6 +16,7 @@ import { decrypt, hashForLookup } from '../lib/encryption';
 import { AppError, ValidationError } from '../lib/errors';
 import { getCacheService } from '../lib/cache';
 import { DEFAULT_USER_PREFERENCES, getUserPreferences, upsertUserPreferences } from '../lib/userPreferences';
+import { parseQueryInteger } from '../lib/validation';
 
 export const userRoutes = new Hono<AppEnv>();
 
@@ -113,22 +114,6 @@ const createTripSchema = z.object({
   totalSeats: z.number().int().min(1).max(8).optional(),
   price: z.number().min(0).max(10000).optional(),
 });
-
-function parseQueryInteger(
-  value: string | undefined,
-  defaultValue: number,
-  options: { min: number; max: number },
-): number | null {
-  if (value === undefined) return defaultValue;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || `${parsed}` !== value.trim()) {
-    return null;
-  }
-  if (parsed < options.min || parsed > options.max) {
-    return null;
-  }
-  return parsed;
-}
 
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };

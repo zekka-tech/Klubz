@@ -11,6 +11,7 @@ import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { getDB } from '../lib/db';
 import { getIP, getUserAgent } from '../lib/http';
+import { parseQueryInteger } from '../lib/validation';
 
 export const adminRoutes = new Hono<AppEnv>();
 
@@ -81,28 +82,6 @@ interface UpdateUserBody {
 interface TargetUserRow {
   id: number;
   role: string;
-}
-
-interface PaginationQueryOptions {
-  min: number;
-  max: number;
-}
-
-function parseIntegerQueryParam(
-  value: string | undefined,
-  defaultValue: number,
-  options: PaginationQueryOptions,
-): number | null {
-  if (value === undefined) return defaultValue;
-
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || `${parsed}` !== value.trim()) {
-    return null;
-  }
-  if (parsed < options.min || parsed > options.max) {
-    return null;
-  }
-  return parsed;
 }
 
 function parseError(err: unknown): { message: string } {
@@ -191,12 +170,12 @@ adminRoutes.get('/stats', async (c) => {
 // ---------------------------------------------------------------------------
 
 adminRoutes.get('/users', async (c) => {
-  const page = parseIntegerQueryParam(c.req.query('page'), 1, { min: 1, max: 100000 });
+  const page = parseQueryInteger(c.req.query('page'), 1, { min: 1, max: 100000 });
   if (page === null) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid page query parameter' } }, 400);
   }
 
-  const limit = parseIntegerQueryParam(c.req.query('limit'), 20, { min: 1, max: 100 });
+  const limit = parseQueryInteger(c.req.query('limit'), 20, { min: 1, max: 100 });
   if (limit === null) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid limit query parameter' } }, 400);
   }
@@ -428,12 +407,12 @@ adminRoutes.get('/organizations', async (c) => {
 // ---------------------------------------------------------------------------
 
 adminRoutes.get('/logs', async (c) => {
-  const page = parseIntegerQueryParam(c.req.query('page'), 1, { min: 1, max: 100000 });
+  const page = parseQueryInteger(c.req.query('page'), 1, { min: 1, max: 100000 });
   if (page === null) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid page query parameter' } }, 400);
   }
 
-  const limit = parseIntegerQueryParam(c.req.query('limit'), 50, { min: 1, max: 200 });
+  const limit = parseQueryInteger(c.req.query('limit'), 50, { min: 1, max: 200 });
   if (limit === null) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid limit query parameter' } }, 400);
   }
