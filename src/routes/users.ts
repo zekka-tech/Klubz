@@ -586,7 +586,7 @@ userRoutes.delete('/account', async (c) => {
   const db = getDB(c);
 
   try {
-    // Check for active trips
+    // Check for active trips as participant
     const activeTrips = await db.prepare(`
       SELECT COUNT(*) as count
       FROM trip_participants
@@ -598,6 +598,21 @@ userRoutes.delete('/account', async (c) => {
       throw new ValidationError(
         'Cannot delete account with active trips. Please cancel them first.',
         { activeTripsCount: activeTrips.count }
+      );
+    }
+
+    // Check for active trips as driver
+    const activeDriverTrips = await db.prepare(`
+      SELECT COUNT(*) as count
+      FROM trips
+      WHERE driver_id = ?
+      AND status IN ('scheduled', 'active')
+    `).bind(user.id).first<CountRow>();
+
+    if (activeDriverTrips && activeDriverTrips.count > 0) {
+      throw new ValidationError(
+        'Cannot delete account while driving active trips. Please cancel your trips first.',
+        { activeDriverTripsCount: activeDriverTrips.count }
       );
     }
 

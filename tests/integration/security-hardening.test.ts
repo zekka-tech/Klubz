@@ -1018,4 +1018,28 @@ describe('Security hardening integration flows', () => {
     );
     expect(allowed.status).toBe(200);
   });
+
+  test('account deletion is blocked when user is driving active trips', async () => {
+    const token = await authToken(33, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM trip_participants') && kind === 'first') {
+        return { count: 0 };
+      }
+      if (query.includes('FROM trips') && kind === 'first') {
+        return { count: 2 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/users/account',
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.message).toBe('Cannot delete account while driving active trips. Please cancel your trips first.');
+  });
 });
