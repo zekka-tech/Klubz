@@ -827,12 +827,12 @@ describe('Security hardening integration flows', () => {
   test('payment failed webhook does not downgrade already-finalized paid booking', async () => {
     let bookingLookupCount = 0;
     const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        bookingLookupCount += 1;
+        return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_paid_guard_1' };
+      }
       if (query.includes("SET payment_status = 'failed'") && kind === 'run') {
         return { changes: 0 };
-      }
-      if (query.includes('SELECT user_id, trip_id FROM trip_participants WHERE id = ?') && kind === 'first') {
-        bookingLookupCount += 1;
-        return { user_id: 44, trip_id: 10 };
       }
       return null;
     });
@@ -861,13 +861,16 @@ describe('Security hardening integration flows', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { received?: boolean };
     expect(body.received).toBe(true);
-    expect(bookingLookupCount).toBe(0);
+    expect(bookingLookupCount).toBe(1);
   });
 
   test('payment succeeded webhook is idempotent across distinct event ids for same booking', async () => {
     let paidTransitions = 0;
     let notificationInserts = 0;
     const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_success_once_1' };
+      }
       if (query.includes("SET payment_status = 'paid'") && kind === 'run') {
         paidTransitions += 1;
         return { changes: paidTransitions === 1 ? 1 : 0 };
@@ -934,6 +937,55 @@ describe('Security hardening integration flows', () => {
     expect(second.status).toBe(200);
     expect(paidTransitions).toBe(2);
     expect(notificationInserts).toBe(1);
+  });
+
+  test('payment succeeded webhook ignores metadata mismatch against canonical booking context', async () => {
+    let paidTransitions = 0;
+    let notificationInserts = 0;
+
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_meta_guard_1' };
+      }
+      if (query.includes("SET payment_status = 'paid'") && kind === 'run') {
+        paidTransitions += 1;
+        return { changes: 1 };
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') {
+        notificationInserts += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'stripe-signature': 'sig_test',
+        },
+        body: JSON.stringify({
+          id: 'evt_meta_guard_1',
+          type: 'payment_intent.succeeded',
+          data: {
+            object: {
+              id: 'pi_meta_guard_1',
+              amount: 2500,
+              metadata: { tripId: '999', userId: '999', bookingId: '77' },
+            },
+          },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { received?: boolean };
+    expect(body.received).toBe(true);
+    expect(paidTransitions).toBe(0);
+    expect(notificationInserts).toBe(0);
   });
 
   test('matching routes require authentication', async () => {

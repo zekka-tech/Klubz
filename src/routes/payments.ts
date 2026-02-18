@@ -25,6 +25,12 @@ interface BookingRow {
   payment_status: string | null;
 }
 
+interface BookingPaymentContextRow {
+  user_id: number;
+  trip_id: number;
+  payment_intent_id: string | null;
+}
+
 interface StripeWebhookEvent {
   id: string;
   type: string;
@@ -374,12 +380,47 @@ paymentRoutes.post('/webhook', async (c) => {
       const { tripId, userId, bookingId } = metadata;
 
       try {
+        const booking = await db.prepare('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?')
+          .bind(bookingId)
+          .first<BookingPaymentContextRow>();
+        if (!booking) {
+          logger.warn('Ignoring payment succeeded event for unknown booking', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+          });
+          break;
+        }
+        if (!booking.payment_intent_id || booking.payment_intent_id !== paymentIntent.id) {
+          logger.warn('Ignoring payment succeeded event with mismatched payment intent', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+            storedPaymentIntentId: booking.payment_intent_id,
+          });
+          break;
+        }
+
+        const metadataTripId = Number.parseInt(tripId, 10);
+        const metadataUserId = Number.parseInt(userId, 10);
+        if (
+          !Number.isFinite(metadataTripId)
+          || !Number.isFinite(metadataUserId)
+          || metadataTripId !== booking.trip_id
+          || metadataUserId !== booking.user_id
+        ) {
+          logger.warn('Ignoring payment succeeded event with metadata mismatch against booking context', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+          });
+          break;
+        }
+
         const updateResult = await db.prepare(`
           UPDATE trip_participants
           SET payment_status = 'paid', payment_completed_at = CURRENT_TIMESTAMP
           WHERE id = ?
+            AND payment_intent_id = ?
             AND COALESCE(payment_status, 'pending') IN ('pending', 'failed', 'canceled')
-        `).bind(bookingId).run();
+        `).bind(bookingId, paymentIntent.id).run();
         const affectedRows = getAffectedRows(updateResult);
         if (affectedRows === 0) {
           logger.warn('Ignoring payment succeeded transition for non-updatable booking state', {
@@ -391,44 +432,40 @@ paymentRoutes.post('/webhook', async (c) => {
 
         logger.info('Payment succeeded', {
           paymentIntentId: paymentIntent.id,
-          userId,
-          tripId,
+          userId: booking.user_id,
+          tripId: booking.trip_id,
           amount: paymentIntent.amount / 100,
         });
 
         // Emit event for real-time notifications
         eventBus.emit('payment:succeeded', {
-          tripId,
-          userId,
+          tripId: String(booking.trip_id),
+          userId: String(booking.user_id),
           bookingId,
           amount: paymentIntent.amount / 100,
         });
 
-        await writePaymentAudit(c, 'PAYMENT_SUCCEEDED', bookingId, userId);
+        await writePaymentAudit(c, 'PAYMENT_SUCCEEDED', bookingId, String(booking.user_id));
 
-        const recipientId = Number.parseInt(userId, 10);
-        const tripIdNum = Number.parseInt(tripId, 10);
-        if (Number.isFinite(recipientId)) {
-          try {
-            const notificationPrefs = await getUserNotificationPreferences(db, recipientId);
-            if (notificationPrefs.tripUpdates) {
-              await createNotification(db, {
-                userId: recipientId,
-                tripId: Number.isFinite(tripIdNum) ? tripIdNum : null,
-                notificationType: 'payment_succeeded',
-                channel: 'in_app',
-                status: 'sent',
-                subject: 'Payment successful',
-                message: 'Your trip payment was successful.',
-                metadata: { bookingId, paymentIntentId: paymentIntent.id, amount: paymentIntent.amount / 100 },
-              });
-            }
-          } catch (err) {
-            logger.warn('Failed to persist payment succeeded notification', {
-              error: err instanceof Error ? err.message : String(err),
-              bookingId,
+        try {
+          const notificationPrefs = await getUserNotificationPreferences(db, booking.user_id);
+          if (notificationPrefs.tripUpdates) {
+            await createNotification(db, {
+              userId: booking.user_id,
+              tripId: booking.trip_id,
+              notificationType: 'payment_succeeded',
+              channel: 'in_app',
+              status: 'sent',
+              subject: 'Payment successful',
+              message: 'Your trip payment was successful.',
+              metadata: { bookingId, paymentIntentId: paymentIntent.id, amount: paymentIntent.amount / 100 },
             });
           }
+        } catch (err) {
+          logger.warn('Failed to persist payment succeeded notification', {
+            error: err instanceof Error ? err.message : String(err),
+            bookingId,
+          });
         }
       } catch (err: unknown) {
         const parsed = parseError(err);
@@ -453,12 +490,32 @@ paymentRoutes.post('/webhook', async (c) => {
       const { bookingId } = metadata;
 
       try {
+        const booking = await db.prepare('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?')
+          .bind(bookingId)
+          .first<BookingPaymentContextRow>();
+        if (!booking) {
+          logger.warn('Ignoring payment failed event for unknown booking', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+          });
+          break;
+        }
+        if (!booking.payment_intent_id || booking.payment_intent_id !== paymentIntent.id) {
+          logger.warn('Ignoring payment failed event with mismatched payment intent', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+            storedPaymentIntentId: booking.payment_intent_id,
+          });
+          break;
+        }
+
         const updateResult = await db.prepare(`
           UPDATE trip_participants
           SET payment_status = 'failed'
           WHERE id = ?
+            AND payment_intent_id = ?
             AND COALESCE(payment_status, 'pending') = 'pending'
-        `).bind(bookingId).run();
+        `).bind(bookingId, paymentIntent.id).run();
         const affectedRows = getAffectedRows(updateResult);
         if (affectedRows === 0) {
           logger.warn('Ignoring payment failed transition for non-pending booking state', {
@@ -479,29 +536,26 @@ paymentRoutes.post('/webhook', async (c) => {
           reason: paymentIntent.last_payment_error?.message,
         });
 
-        const booking = await db.prepare('SELECT user_id, trip_id FROM trip_participants WHERE id = ?').bind(bookingId).first<{ user_id: number; trip_id: number }>();
-        await writePaymentAudit(c, 'PAYMENT_FAILED', bookingId, booking?.user_id ? String(booking.user_id) : undefined);
-        if (booking) {
-          try {
-            const notificationPrefs = await getUserNotificationPreferences(db, booking.user_id);
-            if (notificationPrefs.tripUpdates) {
-              await createNotification(db, {
-                userId: booking.user_id,
-                tripId: booking.trip_id,
-                notificationType: 'payment_failed',
-                channel: 'in_app',
-                status: 'sent',
-                subject: 'Payment failed',
-                message: paymentIntent.last_payment_error?.message || 'Your trip payment failed. Please try again.',
-                metadata: { bookingId, paymentIntentId: paymentIntent.id },
-              });
-            }
-          } catch (err) {
-            logger.warn('Failed to persist payment failed notification', {
-              error: err instanceof Error ? err.message : String(err),
-              bookingId,
+        await writePaymentAudit(c, 'PAYMENT_FAILED', bookingId, String(booking.user_id));
+        try {
+          const notificationPrefs = await getUserNotificationPreferences(db, booking.user_id);
+          if (notificationPrefs.tripUpdates) {
+            await createNotification(db, {
+              userId: booking.user_id,
+              tripId: booking.trip_id,
+              notificationType: 'payment_failed',
+              channel: 'in_app',
+              status: 'sent',
+              subject: 'Payment failed',
+              message: paymentIntent.last_payment_error?.message || 'Your trip payment failed. Please try again.',
+              metadata: { bookingId, paymentIntentId: paymentIntent.id },
             });
           }
+        } catch (err) {
+          logger.warn('Failed to persist payment failed notification', {
+            error: err instanceof Error ? err.message : String(err),
+            bookingId,
+          });
         }
       } catch (err: unknown) {
         const parsed = parseError(err);
@@ -526,12 +580,32 @@ paymentRoutes.post('/webhook', async (c) => {
       const { bookingId } = metadata;
 
       try {
+        const booking = await db.prepare('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?')
+          .bind(bookingId)
+          .first<BookingPaymentContextRow>();
+        if (!booking) {
+          logger.warn('Ignoring payment canceled event for unknown booking', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+          });
+          break;
+        }
+        if (!booking.payment_intent_id || booking.payment_intent_id !== paymentIntent.id) {
+          logger.warn('Ignoring payment canceled event with mismatched payment intent', {
+            bookingId,
+            paymentIntentId: paymentIntent.id,
+            storedPaymentIntentId: booking.payment_intent_id,
+          });
+          break;
+        }
+
         const updateResult = await db.prepare(`
           UPDATE trip_participants
           SET payment_status = 'canceled'
           WHERE id = ?
+            AND payment_intent_id = ?
             AND COALESCE(payment_status, 'pending') = 'pending'
-        `).bind(bookingId).run();
+        `).bind(bookingId, paymentIntent.id).run();
         const affectedRows = getAffectedRows(updateResult);
         if (affectedRows === 0) {
           logger.warn('Ignoring payment canceled transition for non-pending booking state', {

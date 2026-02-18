@@ -226,6 +226,9 @@ describe('Notification preference enforcement integration', () => {
     };
 
     const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_pref_skip_1' };
+      }
       if (query.includes("SET payment_status = 'paid'") && kind === 'run') {
         return { ok: true };
       }
@@ -399,6 +402,9 @@ describe('Notification preference enforcement integration', () => {
     };
 
     const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_pref_allow_1' };
+      }
       if (query.includes("SET payment_status = 'paid'") && kind === 'run') {
         return { ok: true };
       }

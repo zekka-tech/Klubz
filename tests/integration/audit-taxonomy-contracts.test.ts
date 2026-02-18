@@ -386,8 +386,12 @@ describe('Audit taxonomy contracts', () => {
       if (query.includes("SET payment_status = 'paid'") && kind === 'run') return { changes: 1 };
       if (query.includes("SET payment_status = 'failed'") && kind === 'run') return { changes: 1 };
       if (query.includes("SET payment_status = 'canceled'") && kind === 'run') return { changes: 1 };
-      if (query.includes('SELECT user_id, trip_id FROM trip_participants WHERE id = ?') && kind === 'first') {
-        return { user_id: 44, trip_id: 10 };
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        const bookingId = String(params[0] ?? '');
+        if (bookingId === '77') return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_obs_success_1' };
+        if (bookingId === '78') return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_obs_failed_1' };
+        if (bookingId === '79') return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_obs_canceled_1' };
+        return null;
       }
       if (query.includes('INSERT INTO notifications') && kind === 'run') return { changes: 1 };
       if (query.includes('INSERT INTO audit_logs') && params[1] === 'PAYMENT_SUCCEEDED' && kind === 'run') {
@@ -439,7 +443,7 @@ describe('Audit taxonomy contracts', () => {
             object: {
               id: 'pi_obs_failed_1',
               amount: 2500,
-              metadata: { bookingId: '77' },
+              metadata: { bookingId: '78' },
               last_payment_error: { message: 'card declined' },
             },
           },
@@ -461,7 +465,7 @@ describe('Audit taxonomy contracts', () => {
             object: {
               id: 'pi_obs_canceled_1',
               amount: 2500,
-              metadata: { bookingId: '77' },
+              metadata: { bookingId: '79' },
             },
           },
         }),
