@@ -323,6 +323,109 @@ describe('Security hardening integration flows', () => {
     expect(body.replay).toBe(true);
   });
 
+  test('webhook rejects requests without stripe signature header', async () => {
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        body: JSON.stringify({ id: 'evt_no_sig', type: 'payment_intent.succeeded', data: { object: {} } }),
+      },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string; status?: number } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.status).toBe(400);
+  });
+
+  test('webhook success event with missing metadata is ignored without DB mutation', async () => {
+    let updateCalls = 0;
+    const db = new MockDB((query) => {
+      if (query.includes('UPDATE trip_participants')) updateCalls += 1;
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify({
+          id: 'evt_missing_meta_success',
+          type: 'payment_intent.succeeded',
+          data: { object: { id: 'pi_missing_meta_1', amount: 1200, metadata: { bookingId: '77' } } },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { received?: boolean; ignored?: boolean; reason?: string };
+    expect(body.received).toBe(true);
+    expect(body.ignored).toBe(true);
+    expect(body.reason).toBe('missing_metadata');
+    expect(updateCalls).toBe(0);
+  });
+
+  test('webhook payment_failed event with missing metadata is ignored without DB mutation', async () => {
+    let updateCalls = 0;
+    const db = new MockDB((query) => {
+      if (query.includes('UPDATE trip_participants')) updateCalls += 1;
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify({
+          id: 'evt_missing_meta_failed',
+          type: 'payment_intent.payment_failed',
+          data: { object: { id: 'pi_missing_meta_2', amount: 1200, metadata: {} } },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { received?: boolean; ignored?: boolean; reason?: string };
+    expect(body.received).toBe(true);
+    expect(body.ignored).toBe(true);
+    expect(body.reason).toBe('missing_metadata');
+    expect(updateCalls).toBe(0);
+  });
+
+  test('webhook canceled event with missing metadata is ignored without DB mutation', async () => {
+    let updateCalls = 0;
+    const db = new MockDB((query) => {
+      if (query.includes('UPDATE trip_participants')) updateCalls += 1;
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify({
+          id: 'evt_missing_meta_canceled',
+          type: 'payment_intent.canceled',
+          data: { object: { id: 'pi_missing_meta_3', amount: 1200, metadata: {} } },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { received?: boolean; ignored?: boolean; reason?: string };
+    expect(body.received).toBe(true);
+    expect(body.ignored).toBe(true);
+    expect(body.reason).toBe('missing_metadata');
+    expect(updateCalls).toBe(0);
+  });
+
   test('payment intent endpoint still requires auth', async () => {
     const res = await app.request(
       '/api/payments/intent',
