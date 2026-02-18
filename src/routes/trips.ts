@@ -740,10 +740,14 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
         return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can reject bookings' } }, 403);
       }
 
-      await db
-        .prepare("UPDATE trip_participants SET status = 'rejected' WHERE id = ? AND trip_id = ?")
+      const rejectUpdate = await db
+        .prepare("UPDATE trip_participants SET status = 'rejected' WHERE id = ? AND trip_id = ? AND status = 'requested'")
         .bind(bookingId, tripId)
         .run();
+      const rejectRows = getAffectedRows(rejectUpdate);
+      if (rejectRows === 0) {
+        return c.json({ error: { code: 'CONFLICT', message: 'Booking is no longer pending' } }, 409);
+      }
 
       // Emit real-time event
       eventBus.emit('booking:rejected', { bookingId, tripId, rejectedBy: user.id }, user.id);
@@ -841,10 +845,14 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
         return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can cancel this trip' } }, 403);
       }
 
-      await db
-        .prepare("UPDATE trips SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP WHERE id = ?")
+      const cancelUpdate = await db
+        .prepare("UPDATE trips SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'cancelled'")
         .bind(tripId)
         .run();
+      const cancelRows = getAffectedRows(cancelUpdate);
+      if (cancelRows === 0) {
+        return c.json({ error: { code: 'CONFLICT', message: 'Trip is already cancelled' } }, 409);
+      }
 
       // Emit real-time event
       eventBus.emit('trip:cancelled', { tripId, cancelledBy: user.id }, user.id);

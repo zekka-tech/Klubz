@@ -264,6 +264,34 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
   });
 
+  test('trip booking reject returns conflict when booking is not pending', async () => {
+    const token = await authToken(10, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'rejected'") && kind === 'run') {
+        return { changes: 0 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'No seats left' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+    expect(body.error?.message).toBe('Booking is no longer pending');
+  });
+
   test('trip cancel rejects non-owner driver', async () => {
     const token = await authToken(12, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -286,6 +314,34 @@ describe('Security hardening integration flows', () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('trip cancel returns conflict when trip is already cancelled', async () => {
+    const token = await authToken(12, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 12 };
+      }
+      if (query.includes("SET status = 'cancelled'") && kind === 'run') {
+        return { changes: 0 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Already handled' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+    expect(body.error?.message).toBe('Trip is already cancelled');
   });
 
   test('trip rating rejects non-completed participation', async () => {
