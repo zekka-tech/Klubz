@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 04:29:00 UTC  
+Last updated: 2026-02-18 04:46:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (62/62)
+- `npm test`: PASS (68/68)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -34,21 +34,22 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `31ddff2` - Added idempotent replay handling for payment intent creation using scoped cache keys, cached response reuse, and pending-intent retrieval to prevent duplicate Stripe intent creation on retries.
-2. `f328d53` - Expanded idempotency replay protection across driver write operations (`accept`, `reject`, `cancel`) to prevent duplicate state mutations under retry conditions.
-3. `91c038d` - Added conflict-safe state guards for booking reject and trip cancel transitions with explicit `409 CONFLICT` responses for non-pending/non-cancellable states.
-4. `1cbfe37` - Hardened booking acceptance consistency with guarded pending-only transitions, seat-decrement conflict handling, and compensating rollback when seat updates lose races.
-5. `bf1a256` - Guarded payment webhook transitions to prevent terminal-state downgrades (for example `paid -> failed/canceled`) and added regression coverage.
-6. `d6a7f7b` - Enforced server-side payment fare integrity by rejecting tampered `/api/payments/intent` amounts that do not match persisted trip fare.
-7. `9cac544` - Added webhook abuse-path integration contracts for missing signature and missing-metadata events (`succeeded`, `payment_failed`, `canceled`) and asserted no DB mutation on ignored events.
-8. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
-9. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
-10. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
-11. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
-12. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
-13. `88d1608` - Resolved lint-blocking errors across services and routes.
-14. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
-15. `37b9168` - Improved migration docs, tightened test scope, updated deps.
+1. `305d7dc` - Closed matching-route authz gaps by enforcing JWT auth globally, owner/admin authorization on trip/request/match resources, admin-only controls for batch/config-write/stats, and added integration coverage for unauthorized/forbidden paths.
+2. `31ddff2` - Added idempotent replay handling for payment intent creation using scoped cache keys, cached response reuse, and pending-intent retrieval to prevent duplicate Stripe intent creation on retries.
+3. `f328d53` - Expanded idempotency replay protection across driver write operations (`accept`, `reject`, `cancel`) to prevent duplicate state mutations under retry conditions.
+4. `91c038d` - Added conflict-safe state guards for booking reject and trip cancel transitions with explicit `409 CONFLICT` responses for non-pending/non-cancellable states.
+5. `1cbfe37` - Hardened booking acceptance consistency with guarded pending-only transitions, seat-decrement conflict handling, and compensating rollback when seat updates lose races.
+6. `bf1a256` - Guarded payment webhook transitions to prevent terminal-state downgrades (for example `paid -> failed/canceled`) and added regression coverage.
+7. `d6a7f7b` - Enforced server-side payment fare integrity by rejecting tampered `/api/payments/intent` amounts that do not match persisted trip fare.
+8. `9cac544` - Added webhook abuse-path integration contracts for missing signature and missing-metadata events (`succeeded`, `payment_failed`, `canceled`) and asserted no DB mutation on ignored events.
+9. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
+10. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
+11. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
+12. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
+13. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
+14. `88d1608` - Resolved lint-blocking errors across services and routes.
+15. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
+16. `37b9168` - Improved migration docs, tightened test scope, updated deps.
 
 Functional status:
 - Application compiles and builds.
@@ -126,6 +127,11 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 04:46 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 04:46 UTC` | codex | commit | `305d7dc` | hardened matching route authz boundaries, tightened trip-cancel state guards, and expanded integration security coverage
+- `2026-02-18 04:45 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (68 tests)
+- `2026-02-18 04:44 UTC` | codex | action | authz-hardening | enforced auth middleware + owner/admin checks across `/api/matching/*`, added admin gating for `batch/config/stats`, and added match-ownership reject protection
+- `2026-02-18 04:41 UTC` | codex | action | transition-hardening | tightened trip cancel transitions to cancellable states (`scheduled|active`) and added explicit conflict contracts for `cancelled/completed` states
 - `2026-02-18 04:29 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-18 04:29 UTC` | codex | commit | `31ddff2` | added payment-intent idempotent replay handling with cached response reuse and pending intent retrieval fallback
 - `2026-02-18 04:29 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (62 tests)
