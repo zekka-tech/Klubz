@@ -299,6 +299,8 @@ Latest entries:
 - `2026-02-18 05:41 UTC` | codex | action | validation-hardening | enforced strict query/body validation across `/api/matching` list endpoints (`status`, `limit`, `offset`), `/api/users/trips` filters (`page`, `limit`, `status`), `/api/users/trips` create payload seat/price constraints, and `/api/trips/available` coordinate/maxDetour bounds
 - `2026-02-18 05:41 UTC` | codex | action | integration-tests | added `tests/integration/query-validation-hardening.test.ts` to lock validation contracts across matching/user/trip routes
 - `2026-02-18 05:41 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (102 tests)
+- `2026-02-18 05:42 UTC` | codex | commit | `28e2623` | hardened matching/user/trip query+payload validation contracts and added integration coverage
+- `2026-02-18 05:42 UTC` | codex | push | `main -> origin/main` | success
 
 ---
 
