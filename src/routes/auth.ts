@@ -12,7 +12,7 @@ import type { AppEnv } from '../types';
 import { createToken, verifyToken, issueTokenPair } from '../middleware/auth';
 import { hashPassword, verifyPassword, hashForLookup, isLegacyHash } from '../lib/encryption';
 import { logger } from '../lib/logger';
-import { getDB } from '../lib/db';
+import { getDBOptional } from '../lib/db';
 import { getAnonymizedIP, getUserAgent } from '../lib/http';
 
 // ---------------------------------------------------------------------------
@@ -63,6 +63,10 @@ function getJWTSecret(c: { env?: { JWT_SECRET?: string } }): string {
   return secret;
 }
 
+function isDevelopmentEnv(c: { env?: { ENVIRONMENT?: string } }): boolean {
+  return c.env?.ENVIRONMENT === 'development';
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -85,7 +89,7 @@ authRoutes.post('/login', async (c) => {
   }
 
   const { email, password } = parsed.data;
-  const db = getDB(c);
+  const db = getDBOptional(c);
   const secret = getJWTSecret(c);
 
   // ── Real D1 path ──
@@ -181,6 +185,16 @@ authRoutes.post('/login', async (c) => {
     }
   }
 
+  if (!isDevelopmentEnv(c)) {
+    logger.error('Login denied because DB is unavailable outside development', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json(
+      { error: { code: 'CONFIGURATION_ERROR', message: 'Authentication service unavailable' } },
+      500,
+    );
+  }
+
   // ── Fallback: dev mode without D1 ──
   const userId = Math.floor(Math.random() * 100000);
   const user = { id: userId, email, name: email.split('@')[0], role: 'user' };
@@ -210,7 +224,7 @@ authRoutes.post('/register', async (c) => {
   }
 
   const { email, password, name, phone } = parsed.data;
-  const db = getDB(c);
+  const db = getDBOptional(c);
 
   // ── Real D1 path ──
   if (db) {
@@ -266,6 +280,16 @@ authRoutes.post('/register', async (c) => {
       }
       logger.warn('D1 tables not migrated, using dev fallback for register');
     }
+  }
+
+  if (!isDevelopmentEnv(c)) {
+    logger.error('Registration denied because DB is unavailable outside development', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json(
+      { error: { code: 'CONFIGURATION_ERROR', message: 'Authentication service unavailable' } },
+      500,
+    );
   }
 
   // ── Fallback: dev mode ──
@@ -344,7 +368,7 @@ authRoutes.post('/refresh', async (c) => {
 
 authRoutes.post('/logout', async (c) => {
   const authHeader = c.req.header('Authorization');
-  const db = getDB(c);
+  const db = getDBOptional(c);
   const secret = getJWTSecret(c);
 
   if (authHeader?.startsWith('Bearer ') && db) {

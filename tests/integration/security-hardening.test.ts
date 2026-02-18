@@ -149,6 +149,47 @@ describe('Security hardening integration flows', () => {
     expect(insertedRole).toBe('user');
   });
 
+  test('login fails closed in production when auth DB is unavailable', async () => {
+    const res = await app.request(
+      '/api/auth/login',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'prod-user@example.com',
+          password: 'StrongPass123!',
+        }),
+      },
+      { ...baseEnv, ENVIRONMENT: 'production', CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Authentication service unavailable');
+  });
+
+  test('register fails closed in production when auth DB is unavailable', async () => {
+    const res = await app.request(
+      '/api/auth/register',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'prod-register@example.com',
+          password: 'StrongPass123!',
+          name: 'Prod User',
+        }),
+      },
+      { ...baseEnv, ENVIRONMENT: 'production', CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Authentication service unavailable');
+  });
+
   test('trip booking accept rejects non-owner driver', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {

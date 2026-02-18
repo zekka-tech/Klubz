@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 11:45:55 UTC  
+Last updated: 2026-02-18 11:53:34 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,13 +22,13 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (130/130)
+- `npm test`: PASS (132/132)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree has pending ledger update
+- Working tree has pending auth fail-closed hardening commit
 - `main` ahead of `origin/main` by 1 commit
 
 ---
@@ -120,6 +120,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 11:53 UTC` | codex | action | auth-fail-closed-hardening | switched auth login/register/logout DB access to optional binding path and enforced explicit `CONFIGURATION_ERROR` fail-closed behavior outside development when auth DB is unavailable
+- `2026-02-18 11:53 UTC` | codex | action | quality-gates | re-ran targeted security suite plus full `type-check`, `lint`, `test`, and `build` all passing (132 tests)
 - `2026-02-18 11:45 UTC` | codex | commit | `42af5f9` | added payment webhook threat-model document and expanded abuse-path integration contracts for unknown booking and intent mismatch handling
 - `2026-02-18 11:45 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, full `test`, and `build` all passing (130 tests)
 - `2026-02-18 11:43 UTC` | codex | action | webhook-threat-model-formalization | documented Stripe webhook threats/controls and linked artifact into deployment/operations docs
