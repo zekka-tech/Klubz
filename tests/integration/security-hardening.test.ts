@@ -1042,4 +1042,47 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('VALIDATION_ERROR');
     expect(body.error?.message).toBe('Cannot delete account while driving active trips. Please cancel your trips first.');
   });
+
+  test('admin cannot assign super admin role', async () => {
+    const token = await authToken(1, 'admin');
+    const res = await app.request(
+      '/api/admin/users/55',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'super_admin' }),
+      },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+    expect(body.error?.message).toBe('Only super admins can assign super admin role');
+  });
+
+  test('admin cannot modify existing super admin account', async () => {
+    const token = await authToken(1, 'admin');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT role FROM users WHERE id = ?') && kind === 'first') {
+        return { role: 'super_admin' };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/admin/users/2',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'inactive' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+    expect(body.error?.message).toBe('Only super admins can modify super admin accounts');
+  });
 });

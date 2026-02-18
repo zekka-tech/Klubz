@@ -5,7 +5,7 @@
  */
 
 import { Hono } from 'hono';
-import type { AppEnv } from '../types';
+import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { getDB } from '../lib/db';
@@ -74,6 +74,10 @@ interface UpdateUserBody {
   role?: 'admin' | 'user' | 'super_admin';
   status?: 'active' | 'inactive' | 'suspended';
   name?: string;
+}
+
+interface RoleRow {
+  role: string;
 }
 
 function parseError(err: unknown): { message: string } {
@@ -267,6 +271,7 @@ adminRoutes.get('/users/:userId', async (c) => {
 
 adminRoutes.put('/users/:userId', async (c) => {
   const userId = c.req.param('userId');
+  const adminUser = c.get('user') as AuthUser;
   let body: unknown;
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
@@ -282,8 +287,28 @@ adminRoutes.put('/users/:userId', async (c) => {
   if (payload.status && !['active', 'inactive', 'suspended'].includes(payload.status)) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid status' } }, 400);
   }
+  if (payload.role === 'super_admin' && adminUser.role !== 'super_admin') {
+    return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only super admins can assign super admin role' } }, 403);
+  }
 
   const db = getDB(c);
+  if (!db) {
+    return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Database not configured' } }, 503);
+  }
+
+  if (adminUser.role !== 'super_admin') {
+    const targetRole = await db
+      .prepare('SELECT role FROM users WHERE id = ?')
+      .bind(userId)
+      .first<RoleRow>();
+    if (!targetRole) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
+    }
+    if (targetRole.role === 'super_admin') {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only super admins can modify super admin accounts' } }, 403);
+    }
+  }
+
   if (db) {
     try {
       const parts: string[] = [];
@@ -382,6 +407,9 @@ adminRoutes.get('/logs', async (c) => {
 adminRoutes.post('/users/:userId/export', async (c) => {
   const userId = c.req.param('userId');
   const db = getDB(c);
+  if (!db) {
+    return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Database not configured' } }, 503);
+  }
 
   if (db) {
     try {
