@@ -306,17 +306,19 @@ Latest entries:
 - `2026-02-18 05:51 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (106 tests)
 - `2026-02-18 05:52 UTC` | codex | commit | `0b94ae4` | hardened matching mutation/config validation and trip-offer payload constraints with expanded integration coverage
 - `2026-02-18 05:52 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 06:00 UTC` | codex | action | transactional-consistency-hardening | implemented atomic matching seat reservation (`reserveDriverTripSeat`) with compensation (`releaseDriverTripSeat`) in `/api/matching/confirm` to prevent over-confirmation under seat contention
+- `2026-02-18 06:00 UTC` | codex | action | integration-tests | expanded `tests/integration/security-hardening.test.ts` with booking/payment race-path contracts (distinct webhook-event idempotency for success side effects; sequential seat-contention confirm flow)
+- `2026-02-18 06:00 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (108 tests)
 
 ---
 
 ## Next Active Tasks
-1. High: add transactional consistency tests for booking/payment race paths under concurrent requests to verify conflict/idempotency guarantees.
-2. High: add security-event audit coverage for remaining privileged operations (monitoring, organization/admin management) with non-critical write-failure handling.
-3. Medium: normalize remaining JSON parse/validation contracts on matching write endpoints (`find`, `find-pool`, `confirm`, `reject`) to return explicit `400 VALIDATION_ERROR` for malformed JSON.
-4. Medium: align route-level validation/error contract style across modules (single helper pattern) to reduce drift and simplify long-term maintenance.
-5. Medium: expand integration authz matrix for all admin subroutes and negative role cases introduced in future features.
-6. Medium: harden observability by adding route-level metrics assertions in tests for handled vs unhandled failures on key paths.
-7. Lower: refresh deployment and operations docs to reflect current hardening guarantees, migration checks, and incident playbooks.
+1. High: add security-event audit coverage for remaining privileged operations (monitoring, organization/admin management) with non-critical write-failure handling.
+2. Medium: normalize remaining JSON parse/validation contracts on matching write endpoints (`find`, `find-pool`, `confirm`, `reject`) to return explicit `400 VALIDATION_ERROR` for malformed JSON.
+3. Medium: align route-level validation/error contract style across modules (single helper pattern) to reduce drift and simplify long-term maintenance.
+4. Medium: expand integration authz matrix for all admin subroutes and negative role cases introduced in future features.
+5. Medium: harden observability by adding route-level metrics assertions in tests for handled vs unhandled failures on key paths.
+6. Lower: refresh deployment and operations docs to reflect current hardening guarantees, migration checks, and incident playbooks.
 
 Owner guidance:
 - Keep this file authoritative.

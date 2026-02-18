@@ -184,6 +184,14 @@ interface D1Result<T = unknown> {
   meta?: Record<string, unknown>;
 }
 
+function getAffectedRows(result: unknown): number | null {
+  if (!result || typeof result !== 'object') return null;
+  const meta = (result as D1Result).meta;
+  if (!meta || typeof meta !== 'object') return null;
+  const changes = (meta as Record<string, unknown>).changes;
+  return typeof changes === 'number' ? changes : null;
+}
+
 // ---------------------------------------------------------------------------
 // KV interface (subset of Cloudflare KVNamespace)
 // ---------------------------------------------------------------------------
@@ -443,6 +451,36 @@ export class MatchingRepository {
          WHERE id = ?2`,
       )
       .bind(status, id)
+      .run();
+  }
+
+  /**
+   * Atomically reserve one seat on a driver trip.
+   * Returns false when the trip has no remaining seats.
+   */
+  async reserveDriverTripSeat(id: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE driver_trips
+         SET available_seats = available_seats - 1, updated_at = datetime('now')
+         WHERE id = ?1 AND available_seats > 0`,
+      )
+      .bind(id)
+      .run();
+    return (getAffectedRows(result) ?? 0) > 0;
+  }
+
+  /**
+   * Compensating seat release when downstream operations fail after reservation.
+   */
+  async releaseDriverTripSeat(id: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE driver_trips
+         SET available_seats = MIN(available_seats + 1, total_seats), updated_at = datetime('now')
+         WHERE id = ?1`,
+      )
+      .bind(id)
       .run();
   }
 

@@ -822,6 +822,78 @@ describe('Security hardening integration flows', () => {
     expect(bookingLookupCount).toBe(0);
   });
 
+  test('payment succeeded webhook is idempotent across distinct event ids for same booking', async () => {
+    let paidTransitions = 0;
+    let notificationInserts = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes("SET payment_status = 'paid'") && kind === 'run') {
+        paidTransitions += 1;
+        return { changes: paidTransitions === 1 ? 1 : 0 };
+      }
+      if (query.includes('FROM user_preferences') && kind === 'first') {
+        return null;
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') {
+        notificationInserts += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+    const cache = new MockKV();
+    const env = { ...baseEnv, DB: db, CACHE: cache };
+
+    const first = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'stripe-signature': 'sig_test',
+        },
+        body: JSON.stringify({
+          id: 'evt_success_once_1',
+          type: 'payment_intent.succeeded',
+          data: {
+            object: {
+              id: 'pi_success_once_1',
+              amount: 2500,
+              metadata: { tripId: '10', userId: '44', bookingId: '77' },
+            },
+          },
+        }),
+      },
+      env,
+    );
+
+    const second = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'stripe-signature': 'sig_test',
+        },
+        body: JSON.stringify({
+          id: 'evt_success_once_2',
+          type: 'payment_intent.succeeded',
+          data: {
+            object: {
+              id: 'pi_success_once_1',
+              amount: 2500,
+              metadata: { tripId: '10', userId: '44', bookingId: '77' },
+            },
+          },
+        }),
+      },
+      env,
+    );
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(paidTransitions).toBe(2);
+    expect(notificationInserts).toBe(1);
+  });
+
   test('matching routes require authentication', async () => {
     const res = await app.request('/api/matching/config', { method: 'GET' }, { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() });
 
@@ -957,6 +1029,145 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('CONFLICT');
     expect(body.error?.message).toBe('Match context does not match request payload');
+  });
+
+  test('matching confirm enforces seat reservation under sequential race on same driver trip', async () => {
+    const token = await authToken(88, 'user');
+    let availableSeats = 1;
+    let match1Status: 'pending' | 'confirmed' = 'pending';
+    let match2Status: 'pending' | 'confirmed' = 'pending';
+
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('FROM match_results') && kind === 'first') {
+        const id = String(params[0] ?? '');
+        if (id === 'match-1') {
+          return {
+            id: 'match-1',
+            driver_trip_id: 'driver-trip-1',
+            rider_request_id: 'rider-request-1',
+            driver_id: 77,
+            rider_id: 88,
+            status: match1Status,
+          };
+        }
+        if (id === 'match-2') {
+          return {
+            id: 'match-2',
+            driver_trip_id: 'driver-trip-1',
+            rider_request_id: 'rider-request-2',
+            driver_id: 77,
+            rider_id: 88,
+            status: match2Status,
+          };
+        }
+      }
+
+      if (query.includes('FROM rider_requests') && kind === 'first') {
+        return {
+          id: String(params[0] ?? 'rider-request-1'),
+          rider_id: 88,
+          organization_id: null,
+          pickup_lat: -26.2,
+          pickup_lng: 28.0,
+          dropoff_lat: -26.1,
+          dropoff_lng: 28.1,
+          earliest_departure: 1700000000000,
+          latest_departure: 1700003600000,
+          seats_needed: 1,
+          preferences_json: null,
+          status: 'pending',
+          matched_driver_trip_id: null,
+          matched_at: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        };
+      }
+
+      if (query.includes('FROM driver_trips') && kind === 'first') {
+        return {
+          id: 'driver-trip-1',
+          driver_id: 77,
+          organization_id: null,
+          departure_lat: -26.2,
+          departure_lng: 28.0,
+          destination_lat: -26.1,
+          destination_lng: 28.1,
+          shift_lat: null,
+          shift_lng: null,
+          departure_time: 1700000000000,
+          arrival_time: null,
+          available_seats: availableSeats,
+          total_seats: 4,
+          bbox_min_lat: null,
+          bbox_max_lat: null,
+          bbox_min_lng: null,
+          bbox_max_lng: null,
+          route_polyline_encoded: null,
+          route_distance_km: null,
+          status: 'offered',
+          driver_rating: null,
+          vehicle_json: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        };
+      }
+
+      if (query.includes('available_seats = available_seats - 1') && kind === 'run') {
+        if (availableSeats > 0) {
+          availableSeats -= 1;
+          return { changes: 1 };
+        }
+        return { changes: 0 };
+      }
+
+      if (query.includes("SET status = 'confirmed'") && kind === 'run') {
+        const id = String(params[0] ?? '');
+        if (id === 'match-1') match1Status = 'confirmed';
+        if (id === 'match-2') match2Status = 'confirmed';
+        return { changes: 1 };
+      }
+
+      if (query.includes('UPDATE rider_requests') && kind === 'run') {
+        return { changes: 1 };
+      }
+
+      return null;
+    });
+
+    const env = { ...baseEnv, DB: db, CACHE: new MockKV() };
+
+    const first = await app.request(
+      '/api/matching/confirm',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matchId: 'match-1',
+          driverTripId: 'driver-trip-1',
+          riderRequestId: 'rider-request-1',
+        }),
+      },
+      env,
+    );
+    expect(first.status).toBe(200);
+
+    const second = await app.request(
+      '/api/matching/confirm',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matchId: 'match-2',
+          driverTripId: 'driver-trip-1',
+          riderRequestId: 'rider-request-2',
+        }),
+      },
+      env,
+    );
+    expect(second.status).toBe(409);
+    const secondBody = (await second.json()) as { error?: { code?: string; message?: string } };
+    expect(secondBody.error?.code).toBe('CONFLICT');
+    expect(secondBody.error?.message).toBe('No seats available on driver trip');
   });
 
   test('matching reject endpoint returns conflict when match is not pending', async () => {

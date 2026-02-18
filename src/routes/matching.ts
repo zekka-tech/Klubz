@@ -755,16 +755,21 @@ export function createMatchingRoutes() {
     if (!driverTrip) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Driver trip not found' } }, 404);
     }
+    const seatReserved = await repo.reserveDriverTripSeat(match.driverTripId);
+    if (!seatReserved) {
+      return c.json({ error: { code: 'CONFLICT', message: 'No seats available on driver trip' } }, 409);
+    }
 
-    // Confirm the match
-    await repo.confirmMatch(matchId);
+    try {
+      // Confirm the match
+      await repo.confirmMatch(matchId);
 
-    // Update rider request status
-    await repo.updateRiderRequestStatus(match.riderRequestId, 'confirmed', match.driverTripId);
-
-    // Decrement driver's available seats
-    if (driverTrip.availableSeats > 0) {
-      await repo.updateDriverTripSeats(match.driverTripId, driverTrip.availableSeats - 1);
+      // Update rider request status
+      await repo.updateRiderRequestStatus(match.riderRequestId, 'confirmed', match.driverTripId);
+    } catch (err: unknown) {
+      // Best-effort compensation if confirm transition fails after seat reservation.
+      await repo.releaseDriverTripSeat(match.driverTripId);
+      throw err;
     }
 
     return c.json({ message: 'Match confirmed successfully', matchId });
