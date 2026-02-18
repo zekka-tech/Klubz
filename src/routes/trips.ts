@@ -5,6 +5,7 @@
  */
 
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
@@ -74,20 +75,6 @@ interface BookRequestBody {
   passengers?: number;
 }
 
-interface OfferRequestBody {
-  pickupLocation?: LocationInput;
-  dropoffLocation?: LocationInput;
-  scheduledTime?: string;
-  availableSeats?: number;
-  price?: number;
-  notes?: string;
-  vehicleInfo?: {
-    make?: string;
-    model?: string;
-    licensePlate?: string;
-  };
-}
-
 interface RateRequestBody {
   rating?: number;
   comment?: string;
@@ -142,6 +129,24 @@ interface D1RunResult {
     changes?: number;
   };
 }
+
+const offerTripSchema = z.object({
+  pickupLocation: z.object({
+    address: z.string().trim().min(1).optional(),
+  }).passthrough(),
+  dropoffLocation: z.object({
+    address: z.string().trim().min(1).optional(),
+  }).passthrough(),
+  scheduledTime: z.string().min(1),
+  availableSeats: z.number().int().min(1).max(6).optional().default(3),
+  price: z.number().positive().max(10000).optional(),
+  notes: z.string().max(1000).optional(),
+  vehicleInfo: z.object({
+    make: z.string().trim().min(1),
+    model: z.string().trim().min(1),
+    licensePlate: z.string().trim().min(1),
+  }).strict(),
+}).strict();
 
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
@@ -509,8 +514,11 @@ tripRoutes.post('/offer', async (c) => {
   try { body = await c.req.json(); } catch {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
-
-  const { pickupLocation, dropoffLocation, scheduledTime, availableSeats = 3, price, vehicleInfo, notes } = (body as OfferRequestBody);
+  const parsed = offerTripSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.issues.map((i) => i.message).join(', ') } }, 400);
+  }
+  const { pickupLocation, dropoffLocation, scheduledTime, availableSeats, price, vehicleInfo, notes } = parsed.data;
   const idempotencyKey = getIdempotencyKey(c, user.id, 'trip-offer');
   if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
     return c.json({
@@ -521,17 +529,8 @@ tripRoutes.post('/offer', async (c) => {
     }, 409);
   }
 
-  if (!pickupLocation || !dropoffLocation || !scheduledTime) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Pickup, dropoff, and scheduled time are required' } }, 400);
-  }
-  if (availableSeats < 1 || availableSeats > 6) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Available seats must be between 1 and 6' } }, 400);
-  }
-  if (new Date(scheduledTime) <= new Date()) {
+  if (new Date(scheduledTime).getTime() <= Date.now()) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Scheduled time must be in the future' } }, 400);
-  }
-  if (!vehicleInfo || !vehicleInfo.make || !vehicleInfo.model || !vehicleInfo.licensePlate) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Vehicle information is required' } }, 400);
   }
 
   const db = getDB(c);

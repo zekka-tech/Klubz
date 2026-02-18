@@ -826,7 +826,14 @@ export class MatchingRepository {
 
   async saveMatchConfig(
     organizationId: string,
-    config: Partial<MatchConfig>,
+    config: {
+      weights?: Partial<MatchConfig['weights']>;
+      thresholds?: Partial<MatchConfig['thresholds']>;
+      maxResults?: MatchConfig['maxResults'];
+      enableMultiRider?: MatchConfig['enableMultiRider'];
+      maxRidersPerPool?: MatchConfig['maxRidersPerPool'];
+      maxPoolDetourMinutes?: MatchConfig['maxPoolDetourMinutes'];
+    },
   ): Promise<void> {
     const id = `mc-${organizationId}`;
     await this.db

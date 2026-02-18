@@ -91,13 +91,14 @@ const baseEnv = {
   RATE_LIMIT_KV: new MockKV(),
 } as const;
 
-async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' = 'user') {
+async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' = 'user', orgId?: string) {
   const now = Math.floor(Date.now() / 1000);
   const payload: JWTPayload = {
     sub: userId,
     email: `user${userId}@example.com`,
     name: `User ${userId}`,
     role,
+    orgId,
     iat: now,
     exp: now + 3600,
     type: 'access',
@@ -163,6 +164,113 @@ describe('Query and payload validation hardening', () => {
     expect(offsetRes.status).toBe(400);
     const offsetBody = (await offsetRes.json()) as { error?: { code?: string; message?: string } };
     expect(offsetBody.error?.message).toBe('Invalid offset query parameter');
+  });
+
+  test('matching driver trip update rejects invalid or inconsistent payloads', async () => {
+    const token = await authToken(77, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT * FROM driver_trips WHERE id = ?1') && kind === 'first') {
+        return {
+          id: 'trip-1',
+          driver_id: 77,
+          organization_id: null,
+          departure_lat: -26.2,
+          departure_lng: 28.0,
+          destination_lat: -26.1,
+          destination_lng: 28.1,
+          shift_lat: null,
+          shift_lng: null,
+          departure_time: 1700000000000,
+          arrival_time: null,
+          available_seats: 3,
+          total_seats: 4,
+          bbox_min_lat: null,
+          bbox_max_lat: null,
+          bbox_min_lng: null,
+          bbox_max_lng: null,
+          route_polyline_encoded: null,
+          route_distance_km: null,
+          status: 'offered',
+          driver_rating: null,
+          vehicle_json: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        };
+      }
+      return null;
+    });
+    const env = { ...baseEnv, DB: db, CACHE: new MockKV() };
+
+    const emptyRes = await app.request('/api/matching/driver-trips/trip-1', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }, env);
+    expect(emptyRes.status).toBe(400);
+    const emptyBody = (await emptyRes.json()) as { error?: { code?: string } };
+    expect(emptyBody.error?.code).toBe('VALIDATION_ERROR');
+
+    const statusRes = await app.request('/api/matching/driver-trips/trip-1', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'scheduled' }),
+    }, env);
+    expect(statusRes.status).toBe(400);
+    const statusBody = (await statusRes.json()) as { error?: { code?: string } };
+    expect(statusBody.error?.code).toBe('VALIDATION_ERROR');
+
+    const seatsRes = await app.request('/api/matching/driver-trips/trip-1', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ availableSeats: 5 }),
+    }, env);
+    expect(seatsRes.status).toBe(400);
+    const seatsBody = (await seatsRes.json()) as { error?: { code?: string; message?: string } };
+    expect(seatsBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(seatsBody.error?.message).toBe('availableSeats cannot exceed trip totalSeats');
+  });
+
+  test('matching create driver trip rejects availableSeats greater than totalSeats', async () => {
+    const token = await authToken(10, 'user');
+    const res = await app.request('/api/matching/driver-trips', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        departure: { lat: -26.2, lng: 28.0 },
+        destination: { lat: -26.1, lng: 28.1 },
+        departureTime: Date.now() + 60_000,
+        availableSeats: 5,
+        totalSeats: 4,
+      }),
+    }, { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.message).toContain('availableSeats cannot exceed totalSeats');
+  });
+
+  test('matching config update rejects invalid payload', async () => {
+    const token = await authToken(1, 'admin', 'org-1');
+    const env = { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() };
+
+    const emptyRes = await app.request('/api/matching/config', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }, env);
+    expect(emptyRes.status).toBe(400);
+    const emptyBody = (await emptyRes.json()) as { error?: { code?: string } };
+    expect(emptyBody.error?.code).toBe('VALIDATION_ERROR');
+
+    const invalidRes = await app.request('/api/matching/config', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxResults: 0 }),
+    }, env);
+    expect(invalidRes.status).toBe(400);
+    const invalidBody = (await invalidRes.json()) as { error?: { code?: string } };
+    expect(invalidBody.error?.code).toBe('VALIDATION_ERROR');
   });
 
   test('user trips rejects invalid page, limit, and status filters', async () => {
@@ -238,5 +346,26 @@ describe('Query and payload validation hardening', () => {
     const detourBody = (await detourRes.json()) as { error?: { code?: string; message?: string } };
     expect(detourBody.error?.code).toBe('VALIDATION_ERROR');
     expect(detourBody.error?.message).toContain('maxDetour');
+  });
+
+  test('trip offer rejects invalid price payloads', async () => {
+    const token = await authToken(10, 'user');
+    const env = { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() };
+    const res = await app.request('/api/trips/offer', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pickupLocation: { address: 'A' },
+        dropoffLocation: { address: 'B' },
+        scheduledTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        availableSeats: 3,
+        price: -5,
+        vehicleInfo: { make: 'Toyota', model: 'Corolla', licensePlate: 'ABC123' },
+      }),
+    }, env);
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
   });
 });

@@ -301,13 +301,16 @@ Latest entries:
 - `2026-02-18 05:41 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (102 tests)
 - `2026-02-18 05:42 UTC` | codex | commit | `28e2623` | hardened matching/user/trip query+payload validation contracts and added integration coverage
 - `2026-02-18 05:42 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 05:51 UTC` | codex | action | mutation-validation-hardening | hardened matching mutation payload contracts (`PUT /api/matching/driver-trips/:id`, `PUT /api/matching/config`), added cross-field matching/trip write constraints (`availableSeats<=totalSeats`), and tightened trip offer payload validation (strict shape + positive price bounds)
+- `2026-02-18 05:51 UTC` | codex | action | integration-tests | expanded `tests/integration/query-validation-hardening.test.ts` to cover matching mutation/config validation and trip-offer payload constraints
+- `2026-02-18 05:51 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (106 tests)
 
 ---
 
 ## Next Active Tasks
-1. Critical: complete strict query/body schema validation on remaining mutable endpoints not yet normalized (notably matching mutation payload guards and remaining trip write-path constraints) with explicit `400 VALIDATION_ERROR` contracts.
-2. High: add transactional consistency tests for booking/payment race paths under concurrent requests to verify conflict/idempotency guarantees.
-3. High: add security-event audit coverage for remaining privileged operations (monitoring, organization/admin management) with non-critical write-failure handling.
+1. High: add transactional consistency tests for booking/payment race paths under concurrent requests to verify conflict/idempotency guarantees.
+2. High: add security-event audit coverage for remaining privileged operations (monitoring, organization/admin management) with non-critical write-failure handling.
+3. Medium: normalize remaining JSON parse/validation contracts on matching write endpoints (`find`, `find-pool`, `confirm`, `reject`) to return explicit `400 VALIDATION_ERROR` for malformed JSON.
 4. Medium: align route-level validation/error contract style across modules (single helper pattern) to reduce drift and simplify long-term maintenance.
 5. Medium: expand integration authz matrix for all admin subroutes and negative role cases introduced in future features.
 6. Medium: harden observability by adding route-level metrics assertions in tests for handled vs unhandled failures on key paths.

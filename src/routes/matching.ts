@@ -79,6 +79,9 @@ const createDriverTripSchema = z.object({
   routePolyline: z.array(geoPointSchema).optional(),
   routePolylineEncoded: z.string().optional(),
   vehicle: vehicleSchema.optional(),
+}).refine((value) => value.availableSeats <= value.totalSeats, {
+  message: 'availableSeats cannot exceed totalSeats',
+  path: ['availableSeats'],
 });
 
 const riderPreferencesSchema = z.object({
@@ -103,9 +106,45 @@ const findMatchesSchema = z.object({
   dropoff: geoPointSchema.optional(),
   earliestDeparture: z.number().int().positive().optional(),
   latestDeparture: z.number().int().positive().optional(),
-  seatsNeeded: z.number().int().min(1).optional(),
+  seatsNeeded: z.number().int().min(1).max(6).optional(),
   preferences: riderPreferencesSchema,
   maxResults: z.number().int().min(1).max(50).optional(),
+});
+
+const updateDriverTripSchema = z.object({
+  availableSeats: z.number().int().min(0).max(8).optional(),
+  status: z.enum(['offered', 'active', 'completed', 'cancelled', 'expired']).optional(),
+}).strict().refine((value) => value.availableSeats !== undefined || value.status !== undefined, {
+  message: 'Provide availableSeats and/or status to update',
+});
+
+const matchWeightUpdateSchema = z.object({
+  pickupDistance: z.number().min(0).max(1).optional(),
+  dropoffDistance: z.number().min(0).max(1).optional(),
+  timeMatch: z.number().min(0).max(1).optional(),
+  seatAvailability: z.number().min(0).max(1).optional(),
+  shiftAlignment: z.number().min(0).max(1).optional(),
+  detourCost: z.number().min(0).max(1).optional(),
+  driverRating: z.number().min(0).max(1).optional(),
+}).strict();
+
+const matchThresholdUpdateSchema = z.object({
+  maxPickupDistanceKm: z.number().positive().max(100).optional(),
+  maxDropoffDistanceKm: z.number().positive().max(100).optional(),
+  maxTimeDiffMinutes: z.number().int().positive().max(720).optional(),
+  maxDetourFraction: z.number().positive().max(1).optional(),
+  boundingBoxPaddingDeg: z.number().positive().max(1).optional(),
+}).strict();
+
+const updateMatchConfigSchema = z.object({
+  weights: matchWeightUpdateSchema.optional(),
+  thresholds: matchThresholdUpdateSchema.optional(),
+  maxResults: z.number().int().min(1).max(100).optional(),
+  enableMultiRider: z.boolean().optional(),
+  maxRidersPerPool: z.number().int().min(1).max(8).optional(),
+  maxPoolDetourMinutes: z.number().int().min(1).max(240).optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, {
+  message: 'Provide at least one config field to update',
 });
 
 const confirmMatchSchema = z.object({
@@ -279,7 +318,21 @@ export function createMatchingRoutes() {
   app.put('/driver-trips/:id', async (c) => {
     const id = c.req.param('id');
     const user = c.get('user') as AuthUser;
-    const body = await c.req.json();
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+    }
+    const parsed = updateDriverTripSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: parsed.error.issues.map(i => i.message).join(', ') } },
+        400,
+      );
+    }
+
+    const data = parsed.data;
     const repo = getRepo(c);
 
     const trip = await repo.getDriverTrip(id);
@@ -290,11 +343,15 @@ export function createMatchingRoutes() {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to update this driver trip' } }, 403);
     }
 
-    if (body.availableSeats !== undefined) {
-      await repo.updateDriverTripSeats(id, body.availableSeats);
+    if (data.availableSeats !== undefined && data.availableSeats > trip.totalSeats) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'availableSeats cannot exceed trip totalSeats' } }, 400);
     }
-    if (body.status) {
-      await repo.updateDriverTripStatus(id, body.status);
+
+    if (data.availableSeats !== undefined) {
+      await repo.updateDriverTripSeats(id, data.availableSeats);
+    }
+    if (data.status) {
+      await repo.updateDriverTripStatus(id, data.status);
     }
 
     const updated = await repo.getDriverTrip(id);
@@ -829,10 +886,22 @@ export function createMatchingRoutes() {
       );
     }
 
-    const body = await c.req.json();
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+    }
+    const parsed = updateMatchConfigSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: parsed.error.issues.map(i => i.message).join(', ') } },
+        400,
+      );
+    }
     const repo = getRepo(c);
 
-    await repo.saveMatchConfig(user.organizationId, body);
+    await repo.saveMatchConfig(user.organizationId, parsed.data);
     return c.json({ message: 'Matching config updated' });
   });
 
