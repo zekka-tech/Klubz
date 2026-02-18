@@ -635,30 +635,39 @@ export function createMatchingRoutes() {
     const { matchId, driverTripId, riderRequestId } = parsed.data;
     const user = c.get('user') as AuthUser;
     const repo = getRepo(c);
-    const riderRequest = await repo.getRiderRequest(riderRequestId);
+    const match = await repo.getMatchResult(matchId);
+    if (!match) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Match not found' } }, 404);
+    }
+    if (match.status !== 'pending') {
+      return c.json({ error: { code: 'CONFLICT', message: 'Match is no longer pending' } }, 409);
+    }
+    if (match.driverTripId !== driverTripId || match.riderRequestId !== riderRequestId) {
+      return c.json({ error: { code: 'CONFLICT', message: 'Match context does not match request payload' } }, 409);
+    }
+    const ownsMatch = match.riderId === String(user.id) || match.driverId === String(user.id);
+    if (!isAdminRole(user) && !ownsMatch) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to confirm this match' } }, 403);
+    }
+
+    const riderRequest = await repo.getRiderRequest(match.riderRequestId);
     if (!riderRequest) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Rider request not found' } }, 404);
     }
-    const driverTrip = await repo.getDriverTrip(driverTripId);
+    const driverTrip = await repo.getDriverTrip(match.driverTripId);
     if (!driverTrip) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Driver trip not found' } }, 404);
-    }
-    const ownsRiderRequest = riderRequest.riderId === String(user.id);
-    const ownsDriverTrip = driverTrip.driverId === String(user.id);
-    if (!isAdminRole(user) && !ownsRiderRequest && !ownsDriverTrip) {
-      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to confirm this match' } }, 403);
     }
 
     // Confirm the match
     await repo.confirmMatch(matchId);
 
     // Update rider request status
-    await repo.updateRiderRequestStatus(riderRequestId, 'confirmed', driverTripId);
+    await repo.updateRiderRequestStatus(match.riderRequestId, 'confirmed', match.driverTripId);
 
     // Decrement driver's available seats
-    const trip = await repo.getDriverTrip(driverTripId);
-    if (trip && trip.availableSeats > 0) {
-      await repo.updateDriverTripSeats(driverTripId, trip.availableSeats - 1);
+    if (driverTrip.availableSeats > 0) {
+      await repo.updateDriverTripSeats(match.driverTripId, driverTrip.availableSeats - 1);
     }
 
     return c.json({ message: 'Match confirmed successfully', matchId });
@@ -684,6 +693,9 @@ export function createMatchingRoutes() {
     const match = await repo.getMatchResult(matchId);
     if (!match) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Match not found' } }, 404);
+    }
+    if (match.status !== 'pending') {
+      return c.json({ error: { code: 'CONFLICT', message: 'Match is no longer pending' } }, 409);
     }
     const ownsMatch = match.riderId === String(user.id) || match.driverId === String(user.id);
     if (!isAdminRole(user) && !ownsMatch) {

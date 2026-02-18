@@ -896,7 +896,14 @@ describe('Security hardening integration flows', () => {
     const token = await authToken(55, 'user');
     const db = new MockDB((query, _params, kind) => {
       if (query.includes('FROM match_results') && kind === 'first') {
-        return { id: 'match-1', driver_id: 77, rider_id: 88 };
+        return {
+          id: 'match-1',
+          driver_trip_id: 'driver-trip-1',
+          rider_request_id: 'rider-request-1',
+          driver_id: 77,
+          rider_id: 88,
+          status: 'pending',
+        };
       }
       return null;
     });
@@ -914,5 +921,73 @@ describe('Security hardening integration flows', () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('matching confirm endpoint rejects payload that mismatches match context', async () => {
+    const token = await authToken(88, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM match_results') && kind === 'first') {
+        return {
+          id: 'match-1',
+          driver_trip_id: 'driver-trip-actual',
+          rider_request_id: 'rider-request-actual',
+          driver_id: 77,
+          rider_id: 88,
+          status: 'pending',
+        };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/matching/confirm',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matchId: 'match-1',
+          driverTripId: 'driver-trip-other',
+          riderRequestId: 'rider-request-other',
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+    expect(body.error?.message).toBe('Match context does not match request payload');
+  });
+
+  test('matching reject endpoint returns conflict when match is not pending', async () => {
+    const token = await authToken(77, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM match_results') && kind === 'first') {
+        return {
+          id: 'match-2',
+          driver_trip_id: 'driver-trip-1',
+          rider_request_id: 'rider-request-1',
+          driver_id: 77,
+          rider_id: 88,
+          status: 'rejected',
+        };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/matching/reject',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId: 'match-2', reason: 'duplicate' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+    expect(body.error?.message).toBe('Match is no longer pending');
   });
 });

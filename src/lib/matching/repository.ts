@@ -88,8 +88,11 @@ interface RiderRequestRow {
 
 interface MatchResultAuthRow {
   id: string;
+  driver_trip_id: string;
+  rider_request_id: string;
   driver_id: number;
   rider_id: number;
+  status: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -672,10 +675,12 @@ export class MatchingRepository {
       .run();
   }
 
-  async getMatchResult(matchId: string): Promise<{ id: string; driverId: string; riderId: string } | null> {
+  async getMatchResult(
+    matchId: string,
+  ): Promise<{ id: string; driverTripId: string; riderRequestId: string; driverId: string; riderId: string; status: string } | null> {
     const row = await this.db
       .prepare(
-        `SELECT id, driver_id, rider_id
+        `SELECT id, driver_trip_id, rider_request_id, driver_id, rider_id, status
          FROM match_results
          WHERE id = ?1`,
       )
@@ -685,8 +690,11 @@ export class MatchingRepository {
     if (!row) return null;
     return {
       id: row.id,
+      driverTripId: row.driver_trip_id,
+      riderRequestId: row.rider_request_id,
       driverId: String(row.driver_id),
       riderId: String(row.rider_id),
+      status: row.status,
     };
   }
 
