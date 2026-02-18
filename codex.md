@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 06:16:31 UTC  
+Last updated: 2026-02-18 06:19:41 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,27 +22,27 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (116/116)
+- `npm test`: PASS (117/117)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
 - Working tree has pending ledger update
-- `main` ahead of `origin/main` by 2 commits
+- `main` ahead of `origin/main` by 1 commit
 
 ---
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `3e6ab19` - Enforced organization-scoped authorization for `admin` users across matching read/write paths (driver trips, rider requests, find/find-pool by request ID, results, confirm, reject) while preserving global `super_admin` behavior; scoped batch matching to admin organization; added cross-org integration contracts.
-2. `cec6b6e` - Updated codex ledger for matching JSON contract hardening batch.
-3. `4778fb4` - Normalized malformed JSON contracts on matching write endpoints (`driver-trips` create, `rider-requests` create, `find`, `find-pool`, `confirm`, `reject`) to consistently return `400 VALIDATION_ERROR` with `Invalid JSON`; added integration coverage for `find/find-pool/confirm/reject`.
-4. `a29810d` - Updated codex ledger for privileged audit coverage batch.
-5. `6e018d8` - Added privileged read-access audit coverage with best-effort non-blocking writes for admin and monitoring read endpoints, plus integration assertions for audit action persistence.
-6. `0e9de3b` - Updated codex ledger for transactional consistency hardening batch.
-7. `b9802b2` - Hardened matching confirm transactional consistency with atomic seat reservation/release compensation and race-contract integration tests.
-8. `d939658` - Updated codex ledger for mutation validation hardening batch.
+1. `96fe130` - Expanded route authorization matrix integration coverage with explicit organization-scope contracts for matching routes: cross-org admin denial on rider-request access, results retrieval, find/find-pool by `riderRequestId`, and reject; plus super-admin override allow-path verification.
+2. `923e092` - Updated codex ledger for org-scope authz hardening batch.
+3. `3e6ab19` - Enforced organization-scoped authorization for `admin` users across matching read/write paths (driver trips, rider requests, find/find-pool by request ID, results, confirm, reject) while preserving global `super_admin` behavior; scoped batch matching to admin organization; added cross-org integration contracts.
+4. `cec6b6e` - Updated codex ledger for matching JSON contract hardening batch.
+5. `4778fb4` - Normalized malformed JSON contracts on matching write endpoints (`driver-trips` create, `rider-requests` create, `find`, `find-pool`, `confirm`, `reject`) to consistently return `400 VALIDATION_ERROR` with `Invalid JSON`; added integration coverage for `find/find-pool/confirm/reject`.
+6. `a29810d` - Updated codex ledger for privileged audit coverage batch.
+7. `6e018d8` - Added privileged read-access audit coverage with best-effort non-blocking writes for admin and monitoring read endpoints, plus integration assertions for audit action persistence.
+8. `0e9de3b` - Updated codex ledger for transactional consistency hardening batch.
 
 Functional status:
 - Application compiles and builds.
@@ -120,6 +120,9 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 06:19 UTC` | codex | commit | `96fe130` | expanded route authz matrix integration coverage for matching organization-scope access contracts and super-admin override behavior
+- `2026-02-18 06:19 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (117 tests)
+- `2026-02-18 06:18 UTC` | codex | action | authz-matrix-expansion | added cross-org admin-denial contracts in route authz suite for matching `rider-requests`, `results`, `find`, `find-pool`, and `reject`
 - `2026-02-18 06:16 UTC` | codex | commit | `3e6ab19` | enforced org-scoped admin access controls in matching routes and added cross-org authorization integration tests
 - `2026-02-18 06:15 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (116 tests)
 - `2026-02-18 06:14 UTC` | codex | action | authz-hardening-org-scope | restricted matching admin access to same-organization resources (super-admin exempt) and scoped batch processing by organization
