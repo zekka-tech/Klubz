@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 04:07:00 UTC  
+Last updated: 2026-02-18 04:11:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (55/55)
+- `npm test`: PASS (57/57)
 - `npm run build`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
@@ -34,17 +34,18 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `bf1a256` - Guarded payment webhook transitions to prevent terminal-state downgrades (for example `paid -> failed/canceled`) and added regression coverage.
-2. `d6a7f7b` - Enforced server-side payment fare integrity by rejecting tampered `/api/payments/intent` amounts that do not match persisted trip fare.
-3. `9cac544` - Added webhook abuse-path integration contracts for missing signature and missing-metadata events (`succeeded`, `payment_failed`, `canceled`) and asserted no DB mutation on ignored events.
-4. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
-5. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
-6. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
-7. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
-8. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
-9. `88d1608` - Resolved lint-blocking errors across services and routes.
-10. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
-11. `37b9168` - Improved migration docs, tightened test scope, updated deps.
+1. `1cbfe37` - Hardened booking acceptance consistency with guarded pending-only transitions, seat-decrement conflict handling, and compensating rollback when seat updates lose races.
+2. `bf1a256` - Guarded payment webhook transitions to prevent terminal-state downgrades (for example `paid -> failed/canceled`) and added regression coverage.
+3. `d6a7f7b` - Enforced server-side payment fare integrity by rejecting tampered `/api/payments/intent` amounts that do not match persisted trip fare.
+4. `9cac544` - Added webhook abuse-path integration contracts for missing signature and missing-metadata events (`succeeded`, `payment_failed`, `canceled`) and asserted no DB mutation on ignored events.
+5. `5e84015` - Scoped payment route auth to `/intent`, allowed Stripe webhook callbacks without JWT, and added integration contract coverage for webhook/public + intent/protected behavior.
+6. `e2658f6` - Enforced `unknown`-based DB generics and explicit query-row typing in key routes.
+7. `17d7d89` - Refactored core route layers to typed request/DB models (`trips`, `users`, `admin`, `monitoring`, `payments`, `matching`).
+8. `3e0f272` - Hardened shared typing in auth + middleware and safer error narrowing.
+9. `5b88254` - Tuned lint policy for legacy `any` usage and structured runtime console logs.
+10. `88d1608` - Resolved lint-blocking errors across services and routes.
+11. `575b57d` - Stabilized TypeScript compile pipeline and shared typing.
+12. `37b9168` - Improved migration docs, tightened test scope, updated deps.
 
 Functional status:
 - Application compiles and builds.
@@ -122,6 +123,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-18 04:11 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-18 04:11 UTC` | codex | commit | `1cbfe37` | hardened booking acceptance flow with pending-only updates, seat conflict guards, and compensating rollback path
+- `2026-02-18 04:11 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (57 tests)
+- `2026-02-18 04:10 UTC` | codex | action | booking-consistency-hardening | added acceptance conflict handling for non-pending bookings and seat exhaustion race with explicit `CONFLICT` responses
 - `2026-02-18 04:07 UTC` | codex | push | `main -> origin/main` | success
 - `2026-02-18 04:07 UTC` | codex | commit | `bf1a256` | added payment webhook transition guards to block terminal-state downgrades and expanded integration coverage
 - `2026-02-18 04:07 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (55 tests)
