@@ -48,6 +48,7 @@ Deploy:
 - `DEPLOYMENT.md`
 - `MIGRATION_GUIDE.md`
 - `docs/OPERATIONS_RUNBOOK.md`
+- `docs/PAYMENT_WEBHOOK_THREAT_MODEL.md`
 - `docs/ROUTE_AUTHZ_MATRIX.md`
 - `codex.md`
 
@@ -66,4 +67,3 @@ Deploy:
 - Encryption and privacy controls for sensitive fields
 - Audit logging for critical security/business transitions
 - POPIA/GDPR user-data workflows (export/delete)
-

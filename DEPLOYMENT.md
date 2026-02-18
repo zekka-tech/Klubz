@@ -76,7 +76,7 @@ For migration failures, follow `MIGRATION_GUIDE.md` and fix forward with a new m
 ## 7. Related Documents
 
 - `docs/OPERATIONS_RUNBOOK.md`
+- `docs/PAYMENT_WEBHOOK_THREAT_MODEL.md`
 - `MIGRATION_GUIDE.md`
 - `docs/ROUTE_AUTHZ_MATRIX.md`
 - `codex.md`
-

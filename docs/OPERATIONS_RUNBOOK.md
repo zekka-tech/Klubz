@@ -103,7 +103,8 @@ High-signal failure indicators:
 2. Confirm webhook signature failures vs business failures.
 3. Check idempotency/replay behavior via event ID logs.
 4. Validate transition safety in `trip_participants.payment_status`.
-5. If needed, pause downstream side effects and recover state with audited replay.
+5. Validate booking-intent binding and metadata trust constraints against `docs/PAYMENT_WEBHOOK_THREAT_MODEL.md`.
+6. If needed, pause downstream side effects and recover state with audited replay.
 
 ### 7.3 Migration Failure During Deploy
 1. Stop rollout.
@@ -132,3 +133,9 @@ Mandatory before closure:
 - Security owner: authz/secrets/privacy incidents
 - Data owner: migration and persistence integrity incidents
 
+## 10. Related Documents
+
+- `docs/PAYMENT_WEBHOOK_THREAT_MODEL.md`
+- `DEPLOYMENT.md`
+- `MIGRATION_GUIDE.md`
+- `docs/ROUTE_AUTHZ_MATRIX.md`

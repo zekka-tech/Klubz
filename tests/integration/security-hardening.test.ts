@@ -864,6 +864,125 @@ describe('Security hardening integration flows', () => {
     expect(bookingLookupCount).toBe(1);
   });
 
+  test('payment failed webhook ignores unknown booking and does not mutate state', async () => {
+    let failedTransitions = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return null;
+      }
+      if (query.includes("SET payment_status = 'failed'") && kind === 'run') {
+        failedTransitions += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify({
+          id: 'evt_failed_unknown_booking_1',
+          type: 'payment_intent.payment_failed',
+          data: {
+            object: {
+              id: 'pi_failed_unknown_booking_1',
+              amount: 1200,
+              metadata: { bookingId: '404' },
+              last_payment_error: { message: 'Card declined' },
+            },
+          },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { received?: boolean };
+    expect(body.received).toBe(true);
+    expect(failedTransitions).toBe(0);
+  });
+
+  test('payment failed webhook ignores mismatched payment intent for booking', async () => {
+    let failedTransitions = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_expected_failed_1' };
+      }
+      if (query.includes("SET payment_status = 'failed'") && kind === 'run') {
+        failedTransitions += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify({
+          id: 'evt_failed_intent_mismatch_1',
+          type: 'payment_intent.payment_failed',
+          data: {
+            object: {
+              id: 'pi_unexpected_failed_1',
+              amount: 1200,
+              metadata: { bookingId: '77' },
+              last_payment_error: { message: 'Card declined' },
+            },
+          },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { received?: boolean };
+    expect(body.received).toBe(true);
+    expect(failedTransitions).toBe(0);
+  });
+
+  test('payment canceled webhook ignores mismatched payment intent for booking', async () => {
+    let canceledTransitions = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_expected_cancel_1' };
+      }
+      if (query.includes("SET payment_status = 'canceled'") && kind === 'run') {
+        canceledTransitions += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify({
+          id: 'evt_canceled_intent_mismatch_1',
+          type: 'payment_intent.canceled',
+          data: {
+            object: {
+              id: 'pi_unexpected_cancel_1',
+              amount: 1200,
+              metadata: { bookingId: '77' },
+            },
+          },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { received?: boolean };
+    expect(body.received).toBe(true);
+    expect(canceledTransitions).toBe(0);
+  });
+
   test('payment succeeded webhook is idempotent across distinct event ids for same booking', async () => {
     let paidTransitions = 0;
     let notificationInserts = 0;
