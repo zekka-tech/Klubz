@@ -240,6 +240,46 @@ describe('Security hardening integration flows', () => {
     expect(compensationCalls).toBe(1);
   });
 
+  test('trip booking accept is idempotent with Idempotency-Key replay', async () => {
+    const token = await authToken(10, 'user');
+    const sharedCache = new MockKV();
+    let acceptUpdates = 0;
+    let seatUpdates = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'accepted'") && kind === 'run') {
+        acceptUpdates += 1;
+        return { changes: 1 };
+      }
+      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+        seatUpdates += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const headers = { Authorization: `Bearer ${token}`, 'Idempotency-Key': 'accept-dup-1' };
+    const first = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      { method: 'POST', headers },
+      { ...baseEnv, DB: db, CACHE: sharedCache },
+    );
+    expect(first.status).toBe(200);
+
+    const second = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      { method: 'POST', headers },
+      { ...baseEnv, DB: db, CACHE: sharedCache },
+    );
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { replay?: boolean };
+    expect(secondBody.replay).toBe(true);
+    expect(acceptUpdates).toBe(1);
+    expect(seatUpdates).toBe(1);
+  });
+
   test('trip booking reject rejects non-owner driver', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -342,6 +382,44 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('CONFLICT');
     expect(body.error?.message).toBe('Trip is already cancelled');
+  });
+
+  test('trip cancel is idempotent with Idempotency-Key replay', async () => {
+    const token = await authToken(12, 'user');
+    const sharedCache = new MockKV();
+    let cancelUpdates = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 12 };
+      }
+      if (query.includes("SET status = 'cancelled'") && kind === 'run') {
+        cancelUpdates += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'cancel-dup-1',
+    };
+    const first = await app.request(
+      '/api/trips/1/cancel',
+      { method: 'POST', headers, body: JSON.stringify({ reason: 'Ops issue' }) },
+      { ...baseEnv, DB: db, CACHE: sharedCache },
+    );
+    expect(first.status).toBe(200);
+
+    const second = await app.request(
+      '/api/trips/1/cancel',
+      { method: 'POST', headers, body: JSON.stringify({ reason: 'Ops issue' }) },
+      { ...baseEnv, DB: db, CACHE: sharedCache },
+    );
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { replay?: boolean };
+    expect(secondBody.replay).toBe(true);
+    expect(cancelUpdates).toBe(1);
   });
 
   test('trip rating rejects non-completed participation', async () => {

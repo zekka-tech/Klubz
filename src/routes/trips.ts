@@ -583,6 +583,10 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
   const user = c.get('user') as AuthUser;
   const tripId = c.req.param('tripId');
   const bookingId = c.req.param('bookingId');
+  const idempotencyKey = getIdempotencyKey(c, user.id, `trip-accept:${tripId}:${bookingId}`);
+  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
+    return c.json({ message: 'Duplicate request ignored', replay: true });
+  }
 
   const db = getDB(c);
   if (db) {
@@ -725,6 +729,10 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
   const user = c.get('user') as AuthUser;
   const tripId = c.req.param('tripId');
   const bookingId = c.req.param('bookingId');
+  const idempotencyKey = getIdempotencyKey(c, user.id, `trip-reject:${tripId}:${bookingId}`);
+  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
+    return c.json({ message: 'Duplicate request ignored', replay: true });
+  }
   let body: unknown = {};
   try { body = await c.req.json(); } catch { /* empty body is OK */ }
 
@@ -830,6 +838,10 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
 tripRoutes.post('/:tripId/cancel', async (c) => {
   const user = c.get('user') as AuthUser;
   const tripId = c.req.param('tripId');
+  const idempotencyKey = getIdempotencyKey(c, user.id, `trip-cancel:${tripId}`);
+  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
+    return c.json({ message: 'Duplicate request ignored', replay: true });
+  }
   let body: unknown = {};
   try { body = await c.req.json(); } catch { body = {}; }
 
