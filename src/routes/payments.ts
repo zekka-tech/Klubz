@@ -12,9 +12,6 @@ import { getUserNotificationPreferences } from '../lib/userPreferences';
 
 export const paymentRoutes = new Hono<AppEnv>();
 
-// All payment routes require authentication
-paymentRoutes.use('*', authMiddleware());
-
 interface CreateIntentBody {
   tripId: number | string;
   amount: number;
@@ -93,7 +90,7 @@ function getStripe(c: Context<AppEnv>) {
 // POST /intent - Create payment intent for booking
 // ---------------------------------------------------------------------------
 
-paymentRoutes.post('/intent', async (c) => {
+paymentRoutes.post('/intent', authMiddleware(), async (c) => {
   const user = c.get('user') as AuthUser;
   const body = await c.req.json<CreateIntentBody>();
   const { tripId, amount } = body;

@@ -108,6 +108,14 @@ describe('Notification route integration flows', () => {
 
     const noAuthList = await app.request('/api/notifications', {}, env);
     expect(noAuthList.status).toBe(401);
+    const noAuthBody = (await noAuthList.json()) as {
+      error?: { code?: string; message?: string; status?: number; requestId?: string; timestamp?: string };
+    };
+    expect(noAuthBody.error?.code).toBe('AUTHENTICATION_ERROR');
+    expect(noAuthBody.error?.status).toBe(401);
+    expect(noAuthBody.error?.message).toBe('Missing or invalid authorization header');
+    expect(typeof noAuthBody.error?.requestId).toBe('string');
+    expect(typeof noAuthBody.error?.timestamp).toBe('string');
 
     const invalidAuthRead = await app.request(
       '/api/notifications/1/read',
@@ -401,7 +409,13 @@ describe('Notification route integration flows', () => {
     );
 
     expect(res.status).toBe(400);
-    const body = (await res.json()) as { error?: { code?: string } };
+    const body = (await res.json()) as {
+      error?: { code?: string; message?: string; status?: number; requestId?: string; timestamp?: string };
+    };
     expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.status).toBe(400);
+    expect(body.error?.message).toBe('Invalid status filter');
+    expect(typeof body.error?.requestId).toBe('string');
+    expect(typeof body.error?.timestamp).toBe('string');
   });
 });

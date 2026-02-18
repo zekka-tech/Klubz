@@ -272,13 +272,11 @@ describe('Security hardening integration flows', () => {
   });
 
   test('webhook returns configuration error in production without webhook secret', async () => {
-    const token = await authToken(44, 'user');
-
     const res = await app.request(
       '/api/payments/webhook',
       {
         method: 'POST',
-        headers: { 'stripe-signature': 'dummy', Authorization: `Bearer ${token}` },
+        headers: { 'stripe-signature': 'dummy' },
         body: JSON.stringify({ id: 'evt_missing_secret', type: 'payment_intent.succeeded', data: { object: {} } }),
       },
       { ...baseEnv, ENVIRONMENT: 'production', DB: new MockDB(() => null), CACHE: new MockKV() },
@@ -291,7 +289,6 @@ describe('Security hardening integration flows', () => {
   });
 
   test('webhook replay is ignored on second identical event', async () => {
-    const token = await authToken(44, 'user');
     const db = new MockDB(() => null);
     const cache = new MockKV();
     const event = {
@@ -304,7 +301,7 @@ describe('Security hardening integration flows', () => {
       '/api/payments/webhook',
       {
         method: 'POST',
-        headers: { 'stripe-signature': 'dummy', Authorization: `Bearer ${token}` },
+        headers: { 'stripe-signature': 'dummy' },
         body: JSON.stringify(event),
       },
       { ...baseEnv, DB: db, CACHE: cache },
@@ -315,7 +312,7 @@ describe('Security hardening integration flows', () => {
       '/api/payments/webhook',
       {
         method: 'POST',
-        headers: { 'stripe-signature': 'dummy', Authorization: `Bearer ${token}` },
+        headers: { 'stripe-signature': 'dummy' },
         body: JSON.stringify(event),
       },
       { ...baseEnv, DB: db, CACHE: cache },
@@ -324,5 +321,22 @@ describe('Security hardening integration flows', () => {
     expect(second.status).toBe(200);
     const body = (await second.json()) as { replay?: boolean };
     expect(body.replay).toBe(true);
+  });
+
+  test('payment intent endpoint still requires auth', async () => {
+    const res = await app.request(
+      '/api/payments/intent',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tripId: 1, amount: 10 }),
+      },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error?: { code?: string; status?: number } };
+    expect(body.error?.code).toBe('AUTHENTICATION_ERROR');
+    expect(body.error?.status).toBe(401);
   });
 });
