@@ -459,8 +459,7 @@ tripRoutes.post('/:tripId/book', async (c) => {
 
     // Send notification to driver
     const notifications = new NotificationService(c.env);
-    if (notifications.emailAvailable) {
-      try {
+    try {
         const tripDetails = await db.prepare(`
             SELECT t.title, t.origin, t.destination, t.departure_time, t.driver_id,
                    u.email, u.first_name_encrypted, u.last_name_encrypted
@@ -489,19 +488,19 @@ tripRoutes.post('/:tripId/book', async (c) => {
             logger.warn('Failed to persist booking request notification', { error: err instanceof Error ? err.message : String(err) });
           }
 
-          const driverFirstName = tripDetails.first_name_encrypted
-            ? await decrypt(JSON.parse(tripDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, tripDetails.driver_id.toString())
-            : 'Driver';
+          if (notifications.emailAvailable && driverNotificationPrefs.tripUpdates) {
+            const driverFirstName = tripDetails.first_name_encrypted
+              ? await decrypt(JSON.parse(tripDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, tripDetails.driver_id.toString())
+              : 'Driver';
 
-          const riderDetails = await db.prepare('SELECT first_name_encrypted, last_name_encrypted FROM users WHERE id = ?').bind(user.id).first<RiderNameRow>();
-          const riderFirstName = riderDetails?.first_name_encrypted
-            ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
-            : 'A rider';
-          const riderLastName = riderDetails?.last_name_encrypted
-            ? await decrypt(JSON.parse(riderDetails.last_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
-            : '';
+            const riderDetails = await db.prepare('SELECT first_name_encrypted, last_name_encrypted FROM users WHERE id = ?').bind(user.id).first<RiderNameRow>();
+            const riderFirstName = riderDetails?.first_name_encrypted
+              ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
+              : 'A rider';
+            const riderLastName = riderDetails?.last_name_encrypted
+              ? await decrypt(JSON.parse(riderDetails.last_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
+              : '';
 
-          if (driverNotificationPrefs.tripUpdates) {
             await notifications.sendEmail(
               tripDetails.email,
               'New Booking Request - Klubz',
@@ -526,7 +525,6 @@ tripRoutes.post('/:tripId/book', async (c) => {
       } catch (err) {
         logger.warn('Failed to send booking notification', { error: err instanceof Error ? err.message : String(err) });
       }
-    }
 
     return c.json({ message: 'Booking request submitted successfully', booking: { tripId, passengerId: user.id, status: 'requested', createdAt: new Date().toISOString() } });
   } catch (err: unknown) {
@@ -704,9 +702,8 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
 
       // Send notification to rider
       const notifications = new NotificationService(c.env);
-      if (notifications.emailAvailable || notifications.smsAvailable) {
-        try {
-          const bookingDetails = await db.prepare(`
+      try {
+        const bookingDetails = await db.prepare(`
             SELECT tp.user_id, t.title, t.origin, t.destination, t.departure_time, t.price_per_seat,
                    u.email, u.first_name_encrypted, u.last_name_encrypted, u.phone_encrypted,
                    d.first_name_encrypted as driver_first_name
@@ -717,8 +714,8 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
             WHERE tp.id = ?
           `).bind(bookingId).first<AcceptBookingDetailsRow>();
 
-          if (bookingDetails) {
-            const riderNotificationPrefs = await getUserNotificationPreferences(db, bookingDetails.user_id);
+        if (bookingDetails) {
+          const riderNotificationPrefs = await getUserNotificationPreferences(db, bookingDetails.user_id);
 
             try {
               if (riderNotificationPrefs.tripUpdates) {
@@ -737,6 +734,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
               logger.warn('Failed to persist booking accepted notification', { error: err instanceof Error ? err.message : String(err) });
             }
 
+          if (notifications.emailAvailable || notifications.smsAvailable) {
             const riderFirstName = bookingDetails.first_name_encrypted
               ? await decrypt(JSON.parse(bookingDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, bookingDetails.user_id.toString())
               : 'Rider';
@@ -781,9 +779,9 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
               }
             }
           }
-        } catch (err) {
-          logger.warn('Failed to send booking confirmation', { error: err instanceof Error ? err.message : String(err) });
         }
+      } catch (err) {
+        logger.warn('Failed to send booking confirmation', { error: err instanceof Error ? err.message : String(err) });
       }
 
     return c.json({ message: 'Booking accepted successfully', booking: { id: bookingId, tripId, status: 'accepted', acceptedAt: new Date().toISOString() } });
@@ -844,9 +842,8 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
 
       // Send notification to rider about rejection
       const notifications = new NotificationService(c.env);
-      if (notifications.emailAvailable) {
-        try {
-          const riderDetails = await db.prepare(`
+      try {
+        const riderDetails = await db.prepare(`
             SELECT u.email, u.first_name_encrypted, tp.user_id, t.title, t.departure_time
             FROM trip_participants tp
             JOIN users u ON tp.user_id = u.id
@@ -854,8 +851,8 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
             WHERE tp.id = ?
           `).bind(bookingId).first<RejectRiderDetailsRow>();
 
-          if (riderDetails) {
-            const riderNotificationPrefs = await getUserNotificationPreferences(db, riderDetails.user_id);
+        if (riderDetails) {
+          const riderNotificationPrefs = await getUserNotificationPreferences(db, riderDetails.user_id);
 
             try {
               if (riderNotificationPrefs.tripUpdates) {
@@ -874,13 +871,13 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
               logger.warn('Failed to persist booking rejected notification', { error: err instanceof Error ? err.message : String(err) });
             }
 
+          if (notifications.emailAvailable && riderNotificationPrefs.tripUpdates) {
             const riderFirstName = riderDetails.first_name_encrypted
               ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, riderDetails.user_id.toString())
               : 'Rider';
 
             const reason = parsedBody.data.reason || 'The driver is unable to accommodate this booking';
 
-            if (riderNotificationPrefs.tripUpdates) {
               await notifications.sendEmail(
                 riderDetails.email,
                 'Booking Request Update - Klubz',
@@ -898,11 +895,10 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
               `,
                 `Your Klubz booking request was not accepted. Search for other trips at klubz.com`
               );
-            }
           }
-        } catch (err) {
-          logger.warn('Failed to send rejection notification', { error: err instanceof Error ? err.message : String(err) });
         }
+      } catch (err) {
+        logger.warn('Failed to send rejection notification', { error: err instanceof Error ? err.message : String(err) });
       }
   } catch (err: unknown) {
     const parsedError = parseError(err);
@@ -964,22 +960,20 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
 
       const notifications = new NotificationService(c.env);
       let acceptedParticipants: CancelParticipantRow[] = [];
-      if (notifications.emailAvailable) {
-        try {
-          const participants = await db.prepare(`
-            SELECT u.email, u.first_name_encrypted, tp.user_id, t.title, t.departure_time, t.origin, t.destination
-            FROM trip_participants tp
-            JOIN users u ON tp.user_id = u.id
-            JOIN trips t ON tp.trip_id = t.id
-            WHERE tp.trip_id = ? AND tp.status = 'accepted' AND tp.role = 'rider'
-          `).bind(tripId).all<CancelParticipantRow>();
-          acceptedParticipants = participants.results ?? [];
-        } catch (err) {
-          logger.warn('Failed to load accepted participants for trip cancellation notifications', {
-            error: err instanceof Error ? err.message : String(err),
-            tripId,
-          });
-        }
+      try {
+        const participants = await db.prepare(`
+          SELECT u.email, u.first_name_encrypted, tp.user_id, t.title, t.departure_time, t.origin, t.destination
+          FROM trip_participants tp
+          JOIN users u ON tp.user_id = u.id
+          JOIN trips t ON tp.trip_id = t.id
+          WHERE tp.trip_id = ? AND tp.status = 'accepted' AND tp.role = 'rider'
+        `).bind(tripId).all<CancelParticipantRow>();
+        acceptedParticipants = participants.results ?? [];
+      } catch (err) {
+        logger.warn('Failed to load accepted participants for trip cancellation notifications', {
+          error: err instanceof Error ? err.message : String(err),
+          tripId,
+        });
       }
 
       const participantCancelUpdate = await db
@@ -1002,40 +996,39 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
       }, user.id);
 
       // Notify all accepted participants about cancellation
-      if (notifications.emailAvailable) {
-        try {
-          const reason = parsedBody.data.reason || 'The driver had to cancel this trip';
+      try {
+        const reason = parsedBody.data.reason || 'The driver had to cancel this trip';
 
-          for (const participant of acceptedParticipants) {
+        for (const participant of acceptedParticipants) {
+          try {
+            const participantNotificationPrefs = await getUserNotificationPreferences(db, participant.user_id);
+
             try {
-              const participantNotificationPrefs = await getUserNotificationPreferences(db, participant.user_id);
-
-              try {
-                if (participantNotificationPrefs.tripUpdates) {
-                  await createNotification(db, {
-                    userId: participant.user_id,
-                    tripId: Number.parseInt(tripId, 10),
-                    notificationType: 'trip_cancelled',
-                    channel: 'in_app',
-                    status: 'sent',
-                    subject: 'Trip cancelled',
-                    message: `Your upcoming trip ${participant.title || ''} was cancelled by the driver.`,
-                    metadata: { tripId, cancelledBy: user.id },
-                  });
-                }
-              } catch (err) {
-                logger.warn('Failed to persist trip cancellation notification', { error: err instanceof Error ? err.message : String(err) });
+              if (participantNotificationPrefs.tripUpdates) {
+                await createNotification(db, {
+                  userId: participant.user_id,
+                  tripId: Number.parseInt(tripId, 10),
+                  notificationType: 'trip_cancelled',
+                  channel: 'in_app',
+                  status: 'sent',
+                  subject: 'Trip cancelled',
+                  message: `Your upcoming trip ${participant.title || ''} was cancelled by the driver.`,
+                  metadata: { tripId, cancelledBy: user.id },
+                });
               }
+            } catch (err) {
+              logger.warn('Failed to persist trip cancellation notification', { error: err instanceof Error ? err.message : String(err) });
+            }
 
+            if (notifications.emailAvailable && participantNotificationPrefs.tripUpdates) {
               const firstName = participant.first_name_encrypted
                 ? await decrypt(JSON.parse(participant.first_name_encrypted).data, c.env.ENCRYPTION_KEY, participant.user_id.toString())
                 : 'Rider';
 
-              if (participantNotificationPrefs.tripUpdates) {
-                await notifications.sendEmail(
-                  participant.email,
-                  'Trip Cancelled - Klubz',
-                  `
+              await notifications.sendEmail(
+                participant.email,
+                'Trip Cancelled - Klubz',
+                `
                   <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
                     <h1 style="color:#EF4444">Trip Cancelled</h1>
                     <p>Hi ${firstName}, unfortunately your upcoming trip has been cancelled.</p>
@@ -1049,19 +1042,18 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
                     <p>We're sorry for the inconvenience. Search for alternative trips on Klubz.</p>
                   </div>
                 `,
-                  `Your Klubz trip on ${new Date(participant.departure_time).toLocaleDateString()} has been cancelled. ${reason}`
-                );
-              }
-            } catch (err) {
-              logger.warn('Failed to send cancellation notification to participant', {
-                error: err instanceof Error ? err.message : String(err),
-                participantId: participant.user_id
-              });
+                `Your Klubz trip on ${new Date(participant.departure_time).toLocaleDateString()} has been cancelled. ${reason}`
+              );
             }
+          } catch (err) {
+            logger.warn('Failed to send cancellation notification to participant', {
+              error: err instanceof Error ? err.message : String(err),
+              participantId: participant.user_id
+            });
           }
-        } catch (err) {
-          logger.warn('Failed to send cancellation notifications', { error: err instanceof Error ? err.message : String(err) });
         }
+      } catch (err) {
+        logger.warn('Failed to send cancellation notifications', { error: err instanceof Error ? err.message : String(err) });
       }
   } catch (err: unknown) {
     const parsedError = parseError(err);

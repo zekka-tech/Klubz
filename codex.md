@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 10:54:40 UTC  
+Last updated: 2026-02-19 11:02:32 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,13 +22,13 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (184/184)
+- `npm test`: PASS (187/187)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS (10 files, 9 unique versions, next `0010`)
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree clean (no uncommitted changes)
+- Working tree has pending changes (notification transport-decoupling hardening + integration contracts)
 - `main` aligned with `origin/main`
 
 ---
@@ -121,6 +121,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 11:02 UTC` | codex | action | notification-channel-decoupling-hardening | decoupled in-app trip notifications from email/SMS provider availability across booking request/accept/reject and trip cancel flows; provider transports remain conditional while persisted notifications honor user preferences
+- `2026-02-19 11:02 UTC` | codex | action | quality-gates | ran `npm run type-check`, targeted `tests/integration/notification-preferences-enforcement.test.ts` (8/8) and `tests/integration/security-hardening.test.ts` (81/81), and full `npm run verify` (`type-check`, `lint`, `test` 187/187, `build`) all passing
 - `2026-02-19 10:54 UTC` | codex | push | `main -> origin/main` | success (`be39508`)
 - `2026-02-19 10:54 UTC` | codex | commit | `be39508` | fixed trip cancellation notification ordering regression by loading accepted riders before participant cancellation transition; added integration regression contract
 - `2026-02-19 10:54 UTC` | codex | action | trip-cancel-notification-order-hardening | fixed trip cancellation flow ordering to capture accepted riders before participant cancellation transition, preserving rider cancellation notifications while keeping participant status integrity updates

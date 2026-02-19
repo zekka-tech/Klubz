@@ -206,6 +206,58 @@ describe('Notification preference enforcement integration', () => {
     expect(notificationInserts).toBe(0);
   });
 
+  test('booking acceptance persists in-app notification even when email and SMS providers are unavailable', async () => {
+    const token = await authToken(52, 'user');
+    let notificationInserts = 0;
+
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 52 };
+      }
+      if (query.includes("UPDATE trip_participants SET status = 'accepted'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('SELECT tp.user_id') && kind === 'first') {
+        return {
+          user_id: 21,
+          title: 'Morning Ride',
+          origin: 'A',
+          destination: 'B',
+          departure_time: new Date().toISOString(),
+          price_per_seat: 30,
+          email: 'rider@example.com',
+          first_name_encrypted: null,
+          last_name_encrypted: null,
+          phone_encrypted: null,
+          driver_first_name: null,
+        };
+      }
+      if (query.includes('FROM user_preferences') && kind === 'first') {
+        return prefsNotificationsEnabled;
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') {
+        notificationInserts += 1;
+        return { ok: true };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(notificationInserts).toBe(1);
+  });
+
   test('payment succeeded webhook skips persisted notification when tripUpdates is disabled', async () => {
     const token = await authToken(44, 'user');
     let notificationInserts = 0;
@@ -380,6 +432,101 @@ describe('Notification preference enforcement integration', () => {
     expect(notificationInserts).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     fetchSpy.mockRestore();
+  });
+
+  test('booking rejection persists in-app notification when email provider is unavailable', async () => {
+    const token = await authToken(70, 'user');
+    let notificationInserts = 0;
+
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 70 };
+      }
+      if (query.includes("UPDATE trip_participants SET status = 'rejected'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('SELECT u.email, u.first_name_encrypted, tp.user_id, t.title, t.departure_time') && kind === 'first') {
+        return {
+          email: 'rider@example.com',
+          first_name_encrypted: null,
+          user_id: 21,
+          title: 'Morning Ride',
+          departure_time: new Date().toISOString(),
+        };
+      }
+      if (query.includes('FROM user_preferences') && kind === 'first') {
+        return prefsNotificationsEnabled;
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') {
+        notificationInserts += 1;
+        return { ok: true };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Capacity full' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(notificationInserts).toBe(1);
+  });
+
+  test('trip cancellation persists in-app notifications when email provider is unavailable', async () => {
+    const token = await authToken(71, 'user');
+    let notificationInserts = 0;
+
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 71, status: 'scheduled' };
+      }
+      if (query.includes("UPDATE trips SET status = 'cancelled'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes("WHERE tp.trip_id = ? AND tp.status = 'accepted' AND tp.role = 'rider'") && kind === 'all') {
+        return [
+          {
+            email: 'rider@example.com',
+            first_name_encrypted: null,
+            user_id: 21,
+            title: 'Morning Ride',
+            departure_time: new Date().toISOString(),
+            origin: 'A',
+            destination: 'B',
+          },
+        ];
+      }
+      if (query.includes("UPDATE trip_participants") && query.includes("status = 'cancelled'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('FROM user_preferences') && kind === 'first') {
+        return prefsNotificationsEnabled;
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') {
+        notificationInserts += 1;
+        return { ok: true };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Emergency' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(notificationInserts).toBe(1);
   });
 
   test('payment succeeded webhook persists notification when tripUpdates is enabled', async () => {
