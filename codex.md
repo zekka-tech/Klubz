@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 09:44:18 UTC  
+Last updated: 2026-02-19 09:49:26 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (180/180)
+- `npm test`: PASS (182/182)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS (10 files, 9 unique versions, next `0010`)
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
@@ -120,6 +120,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 09:49 UTC` | codex | push | `main -> origin/main` | success (`26d4d86`)
+- `2026-02-19 09:49 UTC` | codex | commit | `26d4d86` | hardened trip cancellation/account deletion consistency by cancelling rider participant records on trip cancel and scoping account deletion active-trip checks to active rider participation on active trips
+- `2026-02-19 09:49 UTC` | codex | action | quality-gates | ran targeted `tests/integration/security-hardening.test.ts` and full `npm run verify` (`type-check`, `lint`, `test` 182/182, `build`) all passing
+- `2026-02-19 09:48 UTC` | codex | action | trip-cancellation-participant-state-hardening | cancel flow now marks rider participants `requested|accepted -> cancelled` with `cancelled_at`, and account deletion active-trip detection now scopes to active rider participation joined to active trip states
 - `2026-02-19 09:44 UTC` | codex | push | `main -> origin/main` | success (`f95d8cd`)
 - `2026-02-19 09:44 UTC` | codex | commit | `f95d8cd` | hardened trip booking/reject/cancel payload validation contracts with strict passenger integer enforcement and reason type/length validation, plus integration coverage
 - `2026-02-19 09:44 UTC` | codex | commit | `c4b28a7` | enforced canonical passenger-count persistence and seat decrement integrity on trip booking accept path with migration and integration coverage
