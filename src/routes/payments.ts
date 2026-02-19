@@ -59,6 +59,10 @@ interface ProcessedWebhookEventRow {
   event_id: string;
 }
 
+interface IdempotencyRecordRow {
+  response_json: string | null;
+}
+
 interface PaymentIntentResponse {
   clientSecret: string | null;
   paymentIntentId: string;
@@ -86,19 +90,53 @@ function getIdempotencyKey(c: Context<AppEnv>, userId: number, tripId: number | 
 
 async function getIdempotentPaymentIntentResponse(c: Context<AppEnv>, key: string): Promise<PaymentIntentResponse | null> {
   const cache = c.env?.CACHE;
-  if (!cache) return null;
+  if (cache) {
+    const cached = await cache.get(key, 'json');
+    if (!cached || typeof cached !== 'object') return null;
+    const response = cached as PaymentIntentResponse;
+    if (!response.paymentIntentId || typeof response.paymentIntentId !== 'string') return null;
+    return response;
+  }
 
-  const cached = await cache.get(key, 'json');
-  if (!cached || typeof cached !== 'object') return null;
-  const response = cached as PaymentIntentResponse;
-  if (!response.paymentIntentId || typeof response.paymentIntentId !== 'string') return null;
-  return response;
+  const db = c.env?.DB;
+  if (!db) return null;
+  try {
+    const row = await db.prepare('SELECT response_json FROM idempotency_records WHERE idempotency_key = ?')
+      .bind(key)
+      .first<IdempotencyRecordRow>();
+    if (!row?.response_json) return null;
+    const parsed = JSON.parse(row.response_json) as PaymentIntentResponse;
+    if (!parsed.paymentIntentId || typeof parsed.paymentIntentId !== 'string') return null;
+    return parsed;
+  } catch (err: unknown) {
+    logger.warn('Failed to read idempotent payment intent response', {
+      key,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 async function setIdempotentPaymentIntentResponse(c: Context<AppEnv>, key: string, response: PaymentIntentResponse): Promise<void> {
   const cache = c.env?.CACHE;
-  if (!cache) return;
-  await cache.put(key, JSON.stringify(response), { expirationTtl: 10 * 60 });
+  const responseJson = JSON.stringify(response);
+  if (cache) {
+    await cache.put(key, responseJson, { expirationTtl: 10 * 60 });
+  }
+
+  const db = c.env?.DB;
+  if (!db) return;
+  try {
+    await db.prepare(`
+      INSERT OR REPLACE INTO idempotency_records (idempotency_key, response_json, created_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+    `).bind(key, responseJson).run();
+  } catch (err: unknown) {
+    logger.warn('Failed to persist idempotent payment intent response', {
+      key,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boolean> {

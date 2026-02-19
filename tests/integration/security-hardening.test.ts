@@ -421,6 +421,52 @@ describe('Security hardening integration flows', () => {
     expect(seatUpdates).toBe(1);
   });
 
+  test('trip booking accept is idempotent without CACHE using durable DB idempotency records', async () => {
+    const token = await authToken(10, 'user');
+    let idempotencyInserted = false;
+    let acceptUpdates = 0;
+    let seatUpdates = 0;
+
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('INSERT OR IGNORE INTO idempotency_records') && kind === 'run') {
+        if (idempotencyInserted) return { changes: 0 };
+        idempotencyInserted = true;
+        return { changes: 1 };
+      }
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'accepted'") && kind === 'run') {
+        acceptUpdates += 1;
+        return { changes: 1 };
+      }
+      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+        seatUpdates += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const headers = { Authorization: `Bearer ${token}`, 'Idempotency-Key': 'accept-db-dup-1' };
+    const first = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      { method: 'POST', headers },
+      { ...baseEnv, DB: db, CACHE: undefined as unknown as MockKV },
+    );
+    expect(first.status).toBe(200);
+
+    const second = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      { method: 'POST', headers },
+      { ...baseEnv, DB: db, CACHE: undefined as unknown as MockKV },
+    );
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { replay?: boolean };
+    expect(secondBody.replay).toBe(true);
+    expect(acceptUpdates).toBe(1);
+    expect(seatUpdates).toBe(1);
+  });
+
   test('trip booking reject rejects non-owner driver', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -1038,6 +1084,55 @@ describe('Security hardening integration flows', () => {
     expect(body.amount).toBe(120);
     expect(body.currency).toBe('zar');
     expect(dbCalls).toBe(0);
+  });
+
+  test('payment intent replays durable DB idempotent response without CACHE', async () => {
+    const token = await authToken(44, 'user');
+    const idempotencyKey = 'pi-db-replay-1';
+    let dbCalls = 0;
+    const db = new MockDB((query, _params, kind) => {
+      dbCalls += 1;
+      if (query.includes('SELECT response_json FROM idempotency_records') && kind === 'first') {
+        return {
+          response_json: JSON.stringify({
+            clientSecret: 'cs_test_db_existing',
+            paymentIntentId: 'pi_db_existing_1',
+            amount: 120,
+            currency: 'zar',
+          }),
+        };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/intent',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify({ tripId: 10, amount: 120 }),
+      },
+      { ...baseEnv, DB: db, CACHE: undefined as unknown as MockKV },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      replay?: boolean;
+      paymentIntentId?: string;
+      clientSecret?: string;
+      amount?: number;
+      currency?: string;
+    };
+    expect(body.replay).toBe(true);
+    expect(body.paymentIntentId).toBe('pi_db_existing_1');
+    expect(body.clientSecret).toBe('cs_test_db_existing');
+    expect(body.amount).toBe(120);
+    expect(body.currency).toBe('zar');
+    expect(dbCalls).toBe(1);
   });
 
   test('payment intent rejects amount tampering when it does not match trip fare', async () => {

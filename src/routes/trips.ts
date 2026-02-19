@@ -130,6 +130,10 @@ interface D1RunResult {
   };
 }
 
+interface IdempotencyInsertResult {
+  changes?: number;
+}
+
 const offerTripSchema = z.object({
   pickupLocation: z.object({
     address: z.string().trim().min(1).optional(),
@@ -167,13 +171,31 @@ function getIdempotencyKey(c: Context<AppEnv>, userId: number, scope: string): s
 
 async function isIdempotentReplay(c: Context<AppEnv>, key: string): Promise<boolean> {
   const cache = c.env?.CACHE;
-  if (!cache) return false;
+  if (cache) {
+    const existing = await cache.get(key, 'text');
+    if (existing) return true;
 
-  const existing = await cache.get(key, 'text');
-  if (existing) return true;
+    await cache.put(key, 'seen', { expirationTtl: 10 * 60 }); // 10 minutes
+    return false;
+  }
 
-  await cache.put(key, 'seen', { expirationTtl: 10 * 60 }); // 10 minutes
-  return false;
+  const db = c.env?.DB;
+  if (!db) return false;
+
+  try {
+    const result = await db.prepare(`
+      INSERT OR IGNORE INTO idempotency_records (idempotency_key, created_at)
+      VALUES (?, CURRENT_TIMESTAMP)
+    `).bind(key).run();
+    const changes = ((result.meta ?? {}) as IdempotencyInsertResult).changes;
+    return changes === 0;
+  } catch (err: unknown) {
+    logger.warn('Idempotency replay check failed', {
+      key,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
 function parseMaybeJsonLocation(value: string, fallback: { lat: number; lng: number }): { lat: number; lng: number } {
