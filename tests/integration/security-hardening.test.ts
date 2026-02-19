@@ -768,6 +768,57 @@ describe('Security hardening integration flows', () => {
     expect(body.replay).toBe(true);
   });
 
+  test('webhook event retries after transient processing failure with same event id', async () => {
+    let attempts = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('transient booking lookup failure');
+        }
+        return { user_id: 44, trip_id: 10, payment_intent_id: 'pi_retry_1' };
+      }
+      if (query.includes("SET payment_status = 'failed'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const cache = new MockKV();
+    const event = {
+      id: 'evt_retry_same_id_1',
+      type: 'payment_intent.payment_failed',
+      data: { object: { id: 'pi_retry_1', amount: 1200, metadata: { bookingId: '77' } } },
+    };
+
+    const first = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify(event),
+      },
+      { ...baseEnv, DB: db, CACHE: cache },
+    );
+    expect(first.status).toBe(500);
+
+    const second = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify(event),
+      },
+      { ...baseEnv, DB: db, CACHE: cache },
+    );
+
+    expect(second.status).toBe(200);
+    const body = (await second.json()) as { replay?: boolean; received?: boolean };
+    expect(body.received).toBe(true);
+    expect(body.replay).toBeUndefined();
+    expect(attempts).toBe(2);
+  });
+
   test('webhook rejects requests without stripe signature header', async () => {
     const res = await app.request(
       '/api/payments/webhook',

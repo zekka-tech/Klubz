@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 05:49:00 UTC  
+Last updated: 2026-02-19 06:02:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,14 +22,14 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (158/158)
+- `npm test`: PASS (159/159)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree has uncommitted route and test updates pending commit
-- `main` is ahead of last documented ledger entry and requires commit/push for remote alignment
+- Working tree has uncommitted webhook reliability hardening updates pending commit
+- `main` is aligned with `origin/main` prior to the next commit in progress
 
 ---
 
@@ -120,6 +120,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 06:02 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (159/159), and `build` all passing
+- `2026-02-19 06:01 UTC` | codex | action | webhook-replay-reliability-hardening | deferred webhook replay marking until post-successful processing, fail-closed on transient webhook processing DB failures (`PAYMENT_WEBHOOK_ERROR`), and added retry regression contract for same-event-id retries
+- `2026-02-19 05:54 UTC` | codex | push | `main -> origin/main` | success (`1722f2d`)
+- `2026-02-19 05:54 UTC` | codex | commit | `1722f2d` | expanded CORS allow/expose headers for browser idempotency and rate-limit observability contracts
 - `2026-02-19 05:49 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (158/158), and `build` all passing
 - `2026-02-19 05:47 UTC` | codex | action | rate-limiter-consolidation-hardening | replaced in-app bespoke API rate limiter with shared `middleware/rateLimiter` (KV-capable, `Retry-After` contract), aligned auth audit user-agent extraction to shared HTTP helper, and added integration rate-limiter contract coverage
 - `2026-02-19 05:45 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (156/156), and `build` all passing

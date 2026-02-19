@@ -103,11 +103,15 @@ async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boole
 
   const key = `stripe:webhook:event:${eventId}`;
   const existing = await cache.get(key, 'text');
-  if (existing) return true;
+  return Boolean(existing);
+}
 
+async function markEventProcessed(c: Context<AppEnv>, eventId: string): Promise<void> {
+  const cache = c.env?.CACHE;
+  if (!cache) return;
+  const key = `stripe:webhook:event:${eventId}`;
   // Keep event IDs for 7 days to prevent replay processing.
   await cache.put(key, 'processed', { expirationTtl: 7 * 24 * 60 * 60 });
-  return false;
 }
 
 function getRequiredMetadata(
@@ -365,6 +369,8 @@ paymentRoutes.post('/webhook', async (c) => {
     return c.json({ received: true, replay: true });
   }
 
+  let response: { received: true; replay?: boolean; ignored?: boolean; reason?: string } = { received: true };
+
   // Handle different event types
   switch (event.type) {
     case 'payment_intent.succeeded': {
@@ -375,7 +381,8 @@ paymentRoutes.post('/webhook', async (c) => {
           eventId: event.id,
           paymentIntentId: paymentIntent.id,
         });
-        return c.json({ received: true, ignored: true, reason: 'missing_metadata' });
+        response = { received: true, ignored: true, reason: 'missing_metadata' };
+        break;
       }
       const { tripId, userId, bookingId } = metadata;
 
@@ -472,7 +479,9 @@ paymentRoutes.post('/webhook', async (c) => {
         logger.error('Failed to update payment status', {
           error: parsed.message,
           bookingId,
+          eventId: event.id,
         });
+        throw new AppError('Failed to process webhook event', 'PAYMENT_WEBHOOK_ERROR', 500);
       }
       break;
     }
@@ -485,7 +494,8 @@ paymentRoutes.post('/webhook', async (c) => {
           eventId: event.id,
           paymentIntentId: paymentIntent.id,
         });
-        return c.json({ received: true, ignored: true, reason: 'missing_metadata' });
+        response = { received: true, ignored: true, reason: 'missing_metadata' };
+        break;
       }
       const { bookingId } = metadata;
 
@@ -562,7 +572,9 @@ paymentRoutes.post('/webhook', async (c) => {
         logger.error('Failed to update payment status', {
           error: parsed.message,
           bookingId,
+          eventId: event.id,
         });
+        throw new AppError('Failed to process webhook event', 'PAYMENT_WEBHOOK_ERROR', 500);
       }
       break;
     }
@@ -575,7 +587,8 @@ paymentRoutes.post('/webhook', async (c) => {
           eventId: event.id,
           paymentIntentId: paymentIntent.id,
         });
-        return c.json({ received: true, ignored: true, reason: 'missing_metadata' });
+        response = { received: true, ignored: true, reason: 'missing_metadata' };
+        break;
       }
       const { bookingId } = metadata;
 
@@ -625,7 +638,9 @@ paymentRoutes.post('/webhook', async (c) => {
         logger.error('Failed to update payment status', {
           error: parsed.message,
           bookingId,
+          eventId: event.id,
         });
+        throw new AppError('Failed to process webhook event', 'PAYMENT_WEBHOOK_ERROR', 500);
       }
       break;
     }
@@ -634,7 +649,8 @@ paymentRoutes.post('/webhook', async (c) => {
       logger.debug('Unhandled webhook event type', { eventType: event.type });
   }
 
-  return c.json({ received: true });
+  await markEventProcessed(c, event.id);
+  return c.json(response);
 });
 
 export default paymentRoutes;
