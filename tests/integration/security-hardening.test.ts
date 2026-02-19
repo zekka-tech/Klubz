@@ -462,6 +462,62 @@ describe('Security hardening integration flows', () => {
     expect(insertedPassengerCount).toBe(3);
   });
 
+  test('trip booking rejects non-integer passenger counts', async () => {
+    const token = await authToken(20, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, available_seats, status, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, available_seats: 4, status: 'scheduled', driver_id: 10 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/book',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickupLocation: { address: 'Pickup A' },
+          dropoffLocation: { address: 'Dropoff B' },
+          passengers: 1.5,
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+  });
+
+  test('trip booking rejects non-numeric passenger counts', async () => {
+    const token = await authToken(20, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, available_seats, status, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, available_seats: 4, status: 'scheduled', driver_id: 10 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/book',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickupLocation: { address: 'Pickup A' },
+          dropoffLocation: { address: 'Dropoff B' },
+          passengers: '2',
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+  });
+
   test('trip booking accept rejects non-owner driver', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -834,6 +890,23 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.message).toBe('Booking rejection failed');
   });
 
+  test('trip booking reject validates reason payload type', async () => {
+    const token = await authToken(10, 'user');
+    const res = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 42 }),
+      },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+  });
+
   test('trip cancel rejects non-owner driver', async () => {
     const token = await authToken(12, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -991,6 +1064,23 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('INTERNAL_ERROR');
     expect(body.error?.message).toBe('Trip cancellation failed');
+  });
+
+  test('trip cancel validates reason payload type', async () => {
+    const token = await authToken(12, 'user');
+    const res = await app.request(
+      '/api/trips/1/cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 100 }),
+      },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
   });
 
   test('trip rating rejects non-completed participation', async () => {

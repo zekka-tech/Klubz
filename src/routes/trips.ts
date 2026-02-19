@@ -25,11 +25,6 @@ export const tripRoutes = new Hono<AppEnv>();
 
 tripRoutes.use('*', authMiddleware());
 
-interface LocationInput {
-  address?: string;
-  [key: string]: unknown;
-}
-
 interface TripSearchResult {
   trips: unknown[];
   searchCriteria: {
@@ -69,12 +64,6 @@ interface TripParticipantOwnerRow {
   id: number;
   user_id: number;
   status: string;
-}
-
-interface BookRequestBody {
-  pickupLocation?: LocationInput;
-  dropoffLocation?: LocationInput;
-  passengers?: number;
 }
 
 interface RateRequestBody {
@@ -152,6 +141,20 @@ const offerTripSchema = z.object({
     model: z.string().trim().min(1),
     licensePlate: z.string().trim().min(1),
   }).strict(),
+}).strict();
+
+const bookTripSchema = z.object({
+  pickupLocation: z.object({
+    address: z.string().trim().min(1).optional(),
+  }).passthrough(),
+  dropoffLocation: z.object({
+    address: z.string().trim().min(1).optional(),
+  }).passthrough(),
+  passengers: z.number().int().min(1).max(4).optional().default(1),
+}).strict();
+
+const tripReasonSchema = z.object({
+  reason: z.string().trim().min(1).max(500).optional(),
 }).strict();
 
 function parseError(err: unknown): { message: string } {
@@ -398,7 +401,12 @@ tripRoutes.post('/:tripId/book', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
 
-  const { pickupLocation, dropoffLocation, passengers = 1 } = (body as BookRequestBody);
+  const parsedBody = bookTripSchema.safeParse(body);
+  if (!parsedBody.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedBody.error.issues.map((i) => i.message).join(', ') } }, 400);
+  }
+
+  const { pickupLocation, dropoffLocation, passengers } = parsedBody.data;
   const idempotencyKey = getIdempotencyKey(c, user.id, `trip-book:${tripId}`);
   if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
     return c.json({
@@ -408,13 +416,6 @@ tripRoutes.post('/:tripId/book', async (c) => {
       }
     }, 409);
   }
-  if (!pickupLocation || !dropoffLocation) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Pickup and dropoff locations are required' } }, 400);
-  }
-  if (passengers < 1 || passengers > 4) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Passenger count must be between 1 and 4' } }, 400);
-  }
-
   const db = getDBOptional(c);
   if (!db) {
     logger.error('Booking denied because DB is unavailable', undefined, {
@@ -806,7 +807,11 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
     return c.json({ message: 'Duplicate request ignored', replay: true });
   }
   let body: unknown = {};
-  try { body = await c.req.json(); } catch { /* empty body is OK */ }
+  try { body = await c.req.json(); } catch { body = {}; /* empty body is OK */ }
+  const parsedBody = tripReasonSchema.safeParse(body);
+  if (!parsedBody.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedBody.error.issues.map((i) => i.message).join(', ') } }, 400);
+  }
 
   const db = getDBOptional(c);
   if (!db) {
@@ -873,7 +878,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
               ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, riderDetails.user_id.toString())
               : 'Rider';
 
-            const reason = (body as { reason?: string }).reason || 'The driver is unable to accommodate this booking';
+            const reason = parsedBody.data.reason || 'The driver is unable to accommodate this booking';
 
             if (riderNotificationPrefs.tripUpdates) {
               await notifications.sendEmail(
@@ -920,6 +925,10 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
   }
   let body: unknown = {};
   try { body = await c.req.json(); } catch { body = {}; }
+  const parsedBody = tripReasonSchema.safeParse(body);
+  if (!parsedBody.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedBody.error.issues.map((i) => i.message).join(', ') } }, 400);
+  }
 
   const db = getDBOptional(c);
   if (!db) {
@@ -968,7 +977,7 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
             WHERE tp.trip_id = ? AND tp.status = 'accepted' AND tp.role = 'rider'
           `).bind(tripId).all();
 
-          const reason = (body as { reason?: string }).reason || 'The driver had to cancel this trip';
+          const reason = parsedBody.data.reason || 'The driver had to cancel this trip';
 
           for (const participant of (participants.results ?? []) as CancelParticipantRow[]) {
             try {
