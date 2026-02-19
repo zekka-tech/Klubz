@@ -430,6 +430,38 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.message).toBe('Trip service unavailable');
   });
 
+  test('trip booking persists requested passenger count', async () => {
+    const token = await authToken(20, 'user');
+    let insertedPassengerCount: unknown = null;
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('SELECT id, available_seats, status, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, available_seats: 4, status: 'scheduled', driver_id: 10 };
+      }
+      if (query.includes('INSERT INTO trip_participants') && kind === 'run') {
+        insertedPassengerCount = params[4];
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/book',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickupLocation: { address: 'Pickup A' },
+          dropoffLocation: { address: 'Dropoff B' },
+          passengers: 3,
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(insertedPassengerCount).toBe(3);
+  });
+
   test('trip booking accept rejects non-owner driver', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -463,7 +495,7 @@ describe('Security hardening integration flows', () => {
       if (query.includes("SET status = 'accepted'") && kind === 'run') {
         return { changes: 0 };
       }
-      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
         seatUpdateCalls += 1;
         return { changes: 1 };
       }
@@ -496,7 +528,7 @@ describe('Security hardening integration flows', () => {
       if (query.includes("SET status = 'accepted'") && kind === 'run') {
         return { changes: 1 };
       }
-      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
         return { changes: 0 };
       }
       if (query.includes("SET status = 'requested', accepted_at = NULL") && kind === 'run') {
@@ -535,7 +567,7 @@ describe('Security hardening integration flows', () => {
         acceptUpdates += 1;
         return { changes: 1 };
       }
-      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
         seatUpdates += 1;
         return { changes: 1 };
       }
@@ -581,7 +613,7 @@ describe('Security hardening integration flows', () => {
         acceptUpdates += 1;
         return { changes: 1 };
       }
-      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
         seatUpdates += 1;
         return { changes: 1 };
       }
@@ -633,6 +665,36 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('INTERNAL_ERROR');
     expect(body.error?.message).toBe('Booking acceptance failed');
+  });
+
+  test('trip booking accept enforces seat decrement using stored passenger count', async () => {
+    const token = await authToken(10, 'user');
+    let seatUpdateUsesPassengerCount = false;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'accepted'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
+        seatUpdateUsesPassengerCount = query.includes('passenger_count');
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(seatUpdateUsesPassengerCount).toBe(true);
   });
 
   test('trip booking reject rejects non-owner driver', async () => {

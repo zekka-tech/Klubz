@@ -438,13 +438,14 @@ tripRoutes.post('/:tripId/book', async (c) => {
 
     await db
       .prepare(
-        `INSERT INTO trip_participants (trip_id, user_id, role, status, pickup_location_encrypted, dropoff_location_encrypted)
-         VALUES (?, ?, 'rider', 'requested', ?, ?)`
+        `INSERT INTO trip_participants (trip_id, user_id, role, status, pickup_location_encrypted, dropoff_location_encrypted, passenger_count)
+         VALUES (?, ?, 'rider', 'requested', ?, ?, ?)`
       )
       .bind(
         tripId, user.id,
         pickupLocation.address || JSON.stringify(pickupLocation),
         dropoffLocation.address || JSON.stringify(dropoffLocation),
+        passengers,
       )
       .run();
 
@@ -671,8 +672,21 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
 
       // Decrement seats only if availability exists.
       const seatUpdate = await db
-        .prepare('UPDATE trips SET available_seats = available_seats - 1 WHERE id = ? AND available_seats > 0')
-        .bind(tripId)
+        .prepare(`
+          UPDATE trips
+          SET available_seats = available_seats - (
+            SELECT COALESCE(passenger_count, 1)
+            FROM trip_participants
+            WHERE id = ? AND trip_id = ?
+          )
+          WHERE id = ?
+            AND available_seats >= (
+              SELECT COALESCE(passenger_count, 1)
+              FROM trip_participants
+              WHERE id = ? AND trip_id = ?
+            )
+        `)
+        .bind(bookingId, tripId, tripId, bookingId, tripId)
         .run();
       const seatRows = getAffectedRows(seatUpdate);
       if (seatRows === 0) {

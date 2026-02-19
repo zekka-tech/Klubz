@@ -180,7 +180,7 @@ describe('Notification preference enforcement integration', () => {
       if (query.includes("UPDATE trip_participants SET status = 'accepted'") && kind === 'run') {
         return { ok: true };
       }
-      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
         return { ok: true };
       }
       if (query.includes('FROM user_preferences') && kind === 'first') {
@@ -268,7 +268,7 @@ describe('Notification preference enforcement integration', () => {
       if (query.includes("UPDATE trip_participants SET status = 'accepted'") && kind === 'run') {
         return { ok: true };
       }
-      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
         return { ok: true };
       }
       if (query.includes('SELECT tp.user_id') && kind === 'first') {
@@ -332,7 +332,7 @@ describe('Notification preference enforcement integration', () => {
       if (query.includes("UPDATE trip_participants SET status = 'accepted'") && kind === 'run') {
         return { ok: true };
       }
-      if (query.includes('UPDATE trips SET available_seats = available_seats - 1') && kind === 'run') {
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
         return { ok: true };
       }
       if (query.includes('SELECT tp.user_id') && kind === 'first') {

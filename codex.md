@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 09:32:00 UTC  
+Last updated: 2026-02-19 09:39:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,9 +22,9 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (174/174)
+- `npm test`: PASS (176/176)
 - `npm run build`: PASS
-- `npm run db:check-migrations`: PASS
+- `npm run db:check-migrations`: PASS (10 files, 9 unique versions, next `0010`)
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
@@ -120,6 +120,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 09:39 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (pass), targeted trip/audit/notification suites, and full `npm run verify` (`type-check`, `lint`, `test` 176/176, `build`) all passing
+- `2026-02-19 09:37 UTC` | codex | action | trip-passenger-count-integrity-hardening | added migration `0009_add_trip_participant_passenger_count.sql`, persist `passenger_count` on booking creation, and enforce seat decrement/availability checks using canonical booking passenger count on accept path; expanded integration contracts
 - `2026-02-19 09:32 UTC` | codex | push | `main -> origin/main` | success (`539891a`)
 - `2026-02-19 09:32 UTC` | codex | commit | `539891a` | expanded trip-route fail-closed integration coverage for offer/reject/cancel/rate DB-unavailable and runtime DB-failure contracts
 - `2026-02-19 09:31 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (pass), targeted security suite (71/71), and full `npm run verify` (`type-check`, `lint`, `test` 174/174, `build`) all passing

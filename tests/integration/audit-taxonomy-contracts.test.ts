@@ -323,7 +323,7 @@ describe('Audit taxonomy contracts', () => {
           updated_at: '2026-01-01T00:00:00.000Z',
         };
       }
-      if (query.includes('available_seats = available_seats - 1') && kind === 'run') {
+      if (query.includes('available_seats = available_seats -') && kind === 'run') {
         return { changes: 1 };
       }
       if (query.includes("SET status = 'confirmed'") && kind === 'run') {
