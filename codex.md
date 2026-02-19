@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 10:54:04 UTC  
+Last updated: 2026-02-19 10:54:40 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -28,21 +28,22 @@ Quality gate status (latest run):
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree has pending changes (trip cancellation notification regression fix + tests)
+- Working tree clean (no uncommitted changes)
 - `main` aligned with `origin/main`
 
 ---
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `42af5f9` - Added formal payment webhook threat-model artifact (`docs/PAYMENT_WEBHOOK_THREAT_MODEL.md`) and expanded integration abuse-path contracts to assert non-mutation for unknown-booking and payment-intent-mismatch failed/canceled webhook events.
-2. `b54a306` - Hardened payment webhook trust boundaries by binding state transitions to canonical `trip_participants.payment_intent_id` + booking context, enforcing metadata-to-booking consistency on success events, and expanding abuse-path integration contracts for spoofed metadata and intent mismatch handling.
-3. `cd5bb88` - Consolidated operational documentation to current production standards: replaced stale deployment/migration guidance, added `docs/OPERATIONS_RUNBOOK.md` for incident response and on-call procedures, and introduced standardized verification scripts (`verify`, `verify:ci`).
-4. `5f64e92` - Introduced shared query-integer validation helper (`src/lib/validation.ts`) and unified pagination/query integer parsing across admin, matching, and user routes to reduce duplicated validation logic and drift risk while preserving existing contracts.
-5. `9b6b1e1` - Expanded admin authorization matrix integration coverage with additional negative-role contracts across admin read/mutation/export subroutes (`/stats`, `/users`, `/users/:id`, `PUT /users/:id`, `POST /users/:id/export`) plus super-admin allow-path pass-through assertions.
-6. `2819b2c` - Added route-level observability contract assertions for global error telemetry classification, validating `handled` (`VALIDATION_ERROR`) and `unhandled` (`CONFIGURATION_ERROR`) structured log emissions on representative payment webhook paths.
-7. `82a1048` - Added non-critical transition audit persistence for matching confirm/reject and payment webhook succeeded/failed/canceled state transitions, with integration contracts enforcing `MATCH_CONFIRMED`, `MATCH_REJECTED`, `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, and `PAYMENT_CANCELED`.
-8. `e8a818b` - Added dedicated audit taxonomy integration contracts for critical auth/privacy flows, asserting expected audit actions on successful operations: `USER_LOGIN`, `USER_REGISTER`, `USER_LOGOUT`, `DATA_EXPORT`, and `ACCOUNT_DELETED`.
+1. `be39508` - Fixed trip-cancel notification regression by loading accepted rider recipients before participant status transition to `cancelled`, preserving cancellation notifications while retaining participant cancellation integrity updates; added integration regression contract for execution ordering.
+2. `42af5f9` - Added formal payment webhook threat-model artifact (`docs/PAYMENT_WEBHOOK_THREAT_MODEL.md`) and expanded integration abuse-path contracts to assert non-mutation for unknown-booking and payment-intent-mismatch failed/canceled webhook events.
+3. `b54a306` - Hardened payment webhook trust boundaries by binding state transitions to canonical `trip_participants.payment_intent_id` + booking context, enforcing metadata-to-booking consistency on success events, and expanding abuse-path integration contracts for spoofed metadata and intent mismatch handling.
+4. `cd5bb88` - Consolidated operational documentation to current production standards: replaced stale deployment/migration guidance, added `docs/OPERATIONS_RUNBOOK.md` for incident response and on-call procedures, and introduced standardized verification scripts (`verify`, `verify:ci`).
+5. `5f64e92` - Introduced shared query-integer validation helper (`src/lib/validation.ts`) and unified pagination/query integer parsing across admin, matching, and user routes to reduce duplicated validation logic and drift risk while preserving existing contracts.
+6. `9b6b1e1` - Expanded admin authorization matrix integration coverage with additional negative-role contracts across admin read/mutation/export subroutes (`/stats`, `/users`, `/users/:id`, `PUT /users/:id`, `POST /users/:id/export`) plus super-admin allow-path pass-through assertions.
+7. `2819b2c` - Added route-level observability contract assertions for global error telemetry classification, validating `handled` (`VALIDATION_ERROR`) and `unhandled` (`CONFIGURATION_ERROR`) structured log emissions on representative payment webhook paths.
+8. `82a1048` - Added non-critical transition audit persistence for matching confirm/reject and payment webhook succeeded/failed/canceled state transitions, with integration contracts enforcing `MATCH_CONFIRMED`, `MATCH_REJECTED`, `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, and `PAYMENT_CANCELED`.
+9. `e8a818b` - Added dedicated audit taxonomy integration contracts for critical auth/privacy flows, asserting expected audit actions on successful operations: `USER_LOGIN`, `USER_REGISTER`, `USER_LOGOUT`, `DATA_EXPORT`, and `ACCOUNT_DELETED`.
 
 Functional status:
 - Application compiles and builds.
@@ -120,6 +121,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 10:54 UTC` | codex | push | `main -> origin/main` | success (`be39508`)
+- `2026-02-19 10:54 UTC` | codex | commit | `be39508` | fixed trip cancellation notification ordering regression by loading accepted riders before participant cancellation transition; added integration regression contract
 - `2026-02-19 10:54 UTC` | codex | action | trip-cancel-notification-order-hardening | fixed trip cancellation flow ordering to capture accepted riders before participant cancellation transition, preserving rider cancellation notifications while keeping participant status integrity updates
 - `2026-02-19 10:54 UTC` | codex | action | quality-gates | ran `npm run type-check`, targeted `tests/integration/security-hardening.test.ts` (81/81), and full `npm run verify` (`type-check`, `lint`, `test` 184/184, `build`) all passing
 - `2026-02-19 10:46 UTC` | codex | push | `main -> origin/main` | success (`2b3dde6`)
