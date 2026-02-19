@@ -289,6 +289,66 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.message).toContain('MFA verification is not yet implemented');
   });
 
+  test('trip offer fails closed when trip DB is unavailable', async () => {
+    const token = await authToken(12, 'user');
+
+    const res = await app.request(
+      '/api/trips/offer',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickupLocation: { address: 'A' },
+          dropoffLocation: { address: 'B' },
+          scheduledTime: new Date(Date.now() + 60_000).toISOString(),
+          availableSeats: 2,
+          price: 35,
+          notes: 'evening commute',
+          vehicleInfo: { make: 'Toyota', model: 'Corolla', licensePlate: 'ABC-1234' },
+        }),
+      },
+      { ...baseEnv, DB: undefined as unknown as MockDB, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Trip service unavailable');
+  });
+
+  test('trip offer returns internal error when DB write fails', async () => {
+    const token = await authToken(12, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('INSERT INTO trips') && kind === 'run') {
+        throw new Error('D1_ERROR: write failed');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/offer',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickupLocation: { address: 'A' },
+          dropoffLocation: { address: 'B' },
+          scheduledTime: new Date(Date.now() + 60_000).toISOString(),
+          availableSeats: 2,
+          price: 35,
+          notes: 'evening commute',
+          vehicleInfo: { make: 'Toyota', model: 'Corolla', licensePlate: 'ABC-1234' },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Trip offer creation failed');
+  });
+
   test('trip booking rejects driver booking their own trip', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -665,6 +725,53 @@ describe('Security hardening integration flows', () => {
     expect(rejectUpdates).toBe(1);
   });
 
+  test('trip booking reject fails closed when trip DB is unavailable', async () => {
+    const token = await authToken(10, 'user');
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'No seats left' }),
+      },
+      { ...baseEnv, DB: undefined as unknown as MockDB, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Trip service unavailable');
+  });
+
+  test('trip booking reject returns internal error when DB update fails', async () => {
+    const token = await authToken(10, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'rejected'") && kind === 'run') {
+        throw new Error('D1_ERROR: reject update failed');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'No seats left' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Booking rejection failed');
+  });
+
   test('trip cancel rejects non-owner driver', async () => {
     const token = await authToken(12, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -777,6 +884,53 @@ describe('Security hardening integration flows', () => {
     expect(cancelUpdates).toBe(1);
   });
 
+  test('trip cancel fails closed when trip DB is unavailable', async () => {
+    const token = await authToken(12, 'user');
+
+    const res = await app.request(
+      '/api/trips/1/cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Emergency' }),
+      },
+      { ...baseEnv, DB: undefined as unknown as MockDB, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Trip service unavailable');
+  });
+
+  test('trip cancel returns internal error when DB update fails', async () => {
+    const token = await authToken(12, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 12, status: 'scheduled' };
+      }
+      if (query.includes("SET status = 'cancelled'") && kind === 'run') {
+        throw new Error('D1_ERROR: cancel update failed');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Emergency' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Trip cancellation failed');
+  });
+
   test('trip rating rejects non-completed participation', async () => {
     const token = await authToken(20, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -827,6 +981,53 @@ describe('Security hardening integration flows', () => {
 
     expect(res.status).toBe(200);
     expect(ratingUpdated).toBe(true);
+  });
+
+  test('trip rating fails closed when trip DB is unavailable', async () => {
+    const token = await authToken(20, 'user');
+
+    const res = await app.request(
+      '/api/trips/1/rate',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rating: 4, comment: 'Solid ride' }),
+      },
+      { ...baseEnv, DB: undefined as unknown as MockDB, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Trip service unavailable');
+  });
+
+  test('trip rating returns internal error when DB update fails', async () => {
+    const token = await authToken(20, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, user_id, status FROM trip_participants') && kind === 'first') {
+        return { id: 1, user_id: 20, status: 'completed' };
+      }
+      if (query.includes('UPDATE trip_participants SET rating') && kind === 'run') {
+        throw new Error('D1_ERROR: rating update failed');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/rate',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rating: 4, comment: 'Solid ride' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Trip rating failed');
   });
 
   test('webhook returns configuration error in production without webhook secret', async () => {
