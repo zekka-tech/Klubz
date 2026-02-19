@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 06:14:00 UTC  
+Last updated: 2026-02-19 06:15:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -28,8 +28,8 @@ Quality gate status (latest run):
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree has uncommitted durable idempotency fallback updates pending commit
-- `main` is ahead of last ledger-documented push and requires commit/push for remote alignment
+- Working tree clean (no uncommitted changes)
+- `main` aligned with `origin/main`
 
 ---
 
@@ -120,6 +120,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 06:15 UTC` | codex | push | `main -> origin/main` | success (`d41dce9`)
+- `2026-02-19 06:15 UTC` | codex | commit | `d41dce9` | added durable DB-backed idempotency fallback for trip writes and payment intent replay when KV is unavailable, plus migration and integration coverage
 - `2026-02-19 06:14 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (pass), targeted security suite (59/59), and full `npm run verify` (`type-check`, `lint`, `test` 162/162, `build`) all passing
 - `2026-02-19 06:13 UTC` | codex | action | idempotency-durability-hardening | added durable DB-backed fallback for request idempotency when KV is unavailable across trip write endpoints and payment intent replay (`idempotency_records`), added migration `0008_idempotency_records.sql`, updated db smoke checks, and expanded no-KV replay integration coverage
 - `2026-02-19 06:09 UTC` | codex | push | `main -> origin/main` | success (`20a3524`)
