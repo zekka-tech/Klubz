@@ -962,6 +962,26 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
         return c.json({ error: { code: 'CONFLICT', message: 'Trip cannot be cancelled from current status' } }, 409);
       }
 
+      const notifications = new NotificationService(c.env);
+      let acceptedParticipants: CancelParticipantRow[] = [];
+      if (notifications.emailAvailable) {
+        try {
+          const participants = await db.prepare(`
+            SELECT u.email, u.first_name_encrypted, tp.user_id, t.title, t.departure_time, t.origin, t.destination
+            FROM trip_participants tp
+            JOIN users u ON tp.user_id = u.id
+            JOIN trips t ON tp.trip_id = t.id
+            WHERE tp.trip_id = ? AND tp.status = 'accepted' AND tp.role = 'rider'
+          `).bind(tripId).all<CancelParticipantRow>();
+          acceptedParticipants = participants.results ?? [];
+        } catch (err) {
+          logger.warn('Failed to load accepted participants for trip cancellation notifications', {
+            error: err instanceof Error ? err.message : String(err),
+            tripId,
+          });
+        }
+      }
+
       const participantCancelUpdate = await db
         .prepare(`
           UPDATE trip_participants
@@ -982,20 +1002,11 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
       }, user.id);
 
       // Notify all accepted participants about cancellation
-      const notifications = new NotificationService(c.env);
       if (notifications.emailAvailable) {
         try {
-          const participants = await db.prepare(`
-            SELECT u.email, u.first_name_encrypted, tp.user_id, t.title, t.departure_time, t.origin, t.destination
-            FROM trip_participants tp
-            JOIN users u ON tp.user_id = u.id
-            JOIN trips t ON tp.trip_id = t.id
-            WHERE tp.trip_id = ? AND tp.status = 'accepted' AND tp.role = 'rider'
-          `).bind(tripId).all();
-
           const reason = parsedBody.data.reason || 'The driver had to cancel this trip';
 
-          for (const participant of (participants.results ?? []) as CancelParticipantRow[]) {
+          for (const participant of acceptedParticipants) {
             try {
               const participantNotificationPrefs = await getUserNotificationPreferences(db, participant.user_id);
 

@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 10:46:03 UTC  
+Last updated: 2026-02-19 10:54:04 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,13 +22,13 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (183/183)
+- `npm test`: PASS (184/184)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS (10 files, 9 unique versions, next `0010`)
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree clean (no uncommitted changes)
+- Working tree has pending changes (trip cancellation notification regression fix + tests)
 - `main` aligned with `origin/main`
 
 ---
@@ -120,6 +120,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 10:54 UTC` | codex | action | trip-cancel-notification-order-hardening | fixed trip cancellation flow ordering to capture accepted riders before participant cancellation transition, preserving rider cancellation notifications while keeping participant status integrity updates
+- `2026-02-19 10:54 UTC` | codex | action | quality-gates | ran `npm run type-check`, targeted `tests/integration/security-hardening.test.ts` (81/81), and full `npm run verify` (`type-check`, `lint`, `test` 184/184, `build`) all passing
 - `2026-02-19 10:46 UTC` | codex | push | `main -> origin/main` | success (`2b3dde6`)
 - `2026-02-19 10:46 UTC` | codex | commit | `2b3dde6` | fixed trip offer seat-capacity persistence invariant (`total_seats == available_seats`) and added integration contract coverage
 - `2026-02-19 10:46 UTC` | codex | action | quality-gates | ran targeted `tests/integration/security-hardening.test.ts` and full `npm run verify` (`type-check`, `lint`, `test` 183/183, `build`) all passing

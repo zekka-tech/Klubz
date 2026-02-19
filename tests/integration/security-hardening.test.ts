@@ -1137,6 +1137,67 @@ describe('Security hardening integration flows', () => {
     expect(participantCancelUpdates).toBe(1);
   });
 
+  test('trip cancel loads accepted riders for notifications before participant status transition', async () => {
+    const token = await authToken(12, 'user');
+    const callOrder: string[] = [];
+    let acceptedParticipantLoads = 0;
+    let participantCancelUpdates = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 12, status: 'scheduled' };
+      }
+      if (query.includes("UPDATE trips SET status = 'cancelled'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes("WHERE tp.trip_id = ? AND tp.status = 'accepted' AND tp.role = 'rider'") && kind === 'all') {
+        callOrder.push('loadAcceptedParticipants');
+        acceptedParticipantLoads += 1;
+        return [
+          {
+            email: 'rider@example.com',
+            first_name_encrypted: null,
+            user_id: 21,
+            title: 'Morning Trip',
+            departure_time: '2026-02-19T08:00:00.000Z',
+            origin: 'Origin',
+            destination: 'Destination',
+          },
+        ];
+      }
+      if (query.includes('FROM user_preferences') && kind === 'first') {
+        return {
+          notifications_json: JSON.stringify({ tripUpdates: false }),
+          privacy_json: '{}',
+          accessibility_json: '{}',
+          language: 'en',
+          timezone: 'UTC',
+          currency: 'USD',
+        };
+      }
+      if (query.includes("UPDATE trip_participants") && query.includes("status = 'cancelled'") && kind === 'run') {
+        callOrder.push('cancelParticipants');
+        participantCancelUpdates += 1;
+        return { changes: 2 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Emergency' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV(), SENDGRID_API_KEY: 'sg-test-key' },
+    );
+
+    expect(res.status).toBe(200);
+    expect(acceptedParticipantLoads).toBe(1);
+    expect(participantCancelUpdates).toBe(1);
+    expect(callOrder).toEqual(['loadAcceptedParticipants', 'cancelParticipants']);
+  });
+
   test('trip cancel validates reason payload type', async () => {
     const token = await authToken(12, 'user');
     const res = await app.request(
