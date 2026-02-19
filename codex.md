@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 06:02:00 UTC  
+Last updated: 2026-02-19 06:08:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,14 +22,14 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (159/159)
+- `npm test`: PASS (160/160)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree has uncommitted webhook reliability hardening updates pending commit
-- `main` is aligned with `origin/main` prior to the next commit in progress
+- Working tree has uncommitted webhook replay durability hardening updates pending commit
+- `main` is ahead of last ledger-documented push and requires commit/push for remote alignment
 
 ---
 
@@ -120,6 +120,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 06:08 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (pass), targeted webhook/audit suites (62/62), and full `npm run verify` (`type-check`, `lint`, `test` 160/160, `build`) all passing
+- `2026-02-19 06:07 UTC` | codex | action | webhook-replay-durability-hardening | added durable DB-backed Stripe webhook replay ledger fallback (`processed_webhook_events`) when KV replay cache is unavailable, updated webhook replay marker persistence path, added migration `0007_webhook_event_replay.sql`, and expanded replay integration coverage for no-KV environments
 - `2026-02-19 06:02 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (159/159), and `build` all passing
 - `2026-02-19 06:01 UTC` | codex | action | webhook-replay-reliability-hardening | deferred webhook replay marking until post-successful processing, fail-closed on transient webhook processing DB failures (`PAYMENT_WEBHOOK_ERROR`), and added retry regression contract for same-event-id retries
 - `2026-02-19 05:54 UTC` | codex | push | `main -> origin/main` | success (`1722f2d`)

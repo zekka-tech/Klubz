@@ -55,6 +55,10 @@ interface D1RunResult {
   };
 }
 
+interface ProcessedWebhookEventRow {
+  event_id: string;
+}
+
 interface PaymentIntentResponse {
   clientSecret: string | null;
   paymentIntentId: string;
@@ -99,19 +103,52 @@ async function setIdempotentPaymentIntentResponse(c: Context<AppEnv>, key: strin
 
 async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boolean> {
   const cache = c.env?.CACHE;
-  if (!cache) return false;
+  if (cache) {
+    const key = `stripe:webhook:event:${eventId}`;
+    const existing = await cache.get(key, 'text');
+    if (existing) return true;
+  }
 
-  const key = `stripe:webhook:event:${eventId}`;
-  const existing = await cache.get(key, 'text');
-  return Boolean(existing);
+  const db = c.env?.DB;
+  if (!db) return false;
+
+  try {
+    const existing = await db.prepare('SELECT event_id FROM processed_webhook_events WHERE event_id = ?')
+      .bind(eventId)
+      .first<ProcessedWebhookEventRow>();
+    return Boolean(existing?.event_id);
+  } catch (err: unknown) {
+    logger.warn('Webhook replay lookup failed', {
+      eventId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
-async function markEventProcessed(c: Context<AppEnv>, eventId: string): Promise<void> {
+async function markEventProcessed(c: Context<AppEnv>, eventId: string, eventType: string): Promise<void> {
   const cache = c.env?.CACHE;
-  if (!cache) return;
-  const key = `stripe:webhook:event:${eventId}`;
-  // Keep event IDs for 7 days to prevent replay processing.
-  await cache.put(key, 'processed', { expirationTtl: 7 * 24 * 60 * 60 });
+  if (cache) {
+    const key = `stripe:webhook:event:${eventId}`;
+    // Keep event IDs for 7 days to prevent replay processing.
+    await cache.put(key, 'processed', { expirationTtl: 7 * 24 * 60 * 60 });
+  }
+
+  const db = c.env?.DB;
+  if (!db) return;
+
+  try {
+    await db.prepare(`
+      INSERT OR IGNORE INTO processed_webhook_events (event_id, event_type, processed_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+    `).bind(eventId, eventType).run();
+  } catch (err: unknown) {
+    logger.warn('Failed to persist webhook replay marker', {
+      eventId,
+      eventType,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function getRequiredMetadata(
@@ -649,7 +686,7 @@ paymentRoutes.post('/webhook', async (c) => {
       logger.debug('Unhandled webhook event type', { eventType: event.type });
   }
 
-  await markEventProcessed(c, event.id);
+  await markEventProcessed(c, event.id, event.type);
   return c.json(response);
 });
 

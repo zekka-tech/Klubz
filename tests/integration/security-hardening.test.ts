@@ -768,6 +768,57 @@ describe('Security hardening integration flows', () => {
     expect(body.replay).toBe(true);
   });
 
+  test('webhook replay is ignored without CACHE using durable DB replay ledger', async () => {
+    let replayInserted = false;
+    let replayInsertCalls = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT event_id FROM processed_webhook_events WHERE event_id = ?') && kind === 'first') {
+        return replayInserted ? { event_id: 'evt_replay_db_1' } : null;
+      }
+      if (query.includes('INSERT OR IGNORE INTO processed_webhook_events') && kind === 'run') {
+        replayInsertCalls += 1;
+        replayInserted = true;
+        return { changes: 1 };
+      }
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return null;
+      }
+      return null;
+    });
+
+    const event = {
+      id: 'evt_replay_db_1',
+      type: 'payment_intent.canceled',
+      data: { object: { id: 'pi_replay_db_1', amount: 1200, metadata: { bookingId: '77' } } },
+    };
+
+    const first = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify(event),
+      },
+      { ...baseEnv, DB: db, CACHE: undefined as unknown as MockKV },
+    );
+    expect(first.status).toBe(200);
+
+    const second = await app.request(
+      '/api/payments/webhook',
+      {
+        method: 'POST',
+        headers: { 'stripe-signature': 'dummy' },
+        body: JSON.stringify(event),
+      },
+      { ...baseEnv, DB: db, CACHE: undefined as unknown as MockKV },
+    );
+
+    expect(second.status).toBe(200);
+    const body = (await second.json()) as { replay?: boolean };
+    expect(body.replay).toBe(true);
+    expect(replayInsertCalls).toBe(1);
+  });
+
   test('webhook event retries after transient processing failure with same event id', async () => {
     let attempts = 0;
     const db = new MockDB((query, _params, kind) => {
