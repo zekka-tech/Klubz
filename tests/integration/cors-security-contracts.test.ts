@@ -14,6 +14,9 @@ describe('CORS and security header contracts', () => {
     expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true');
     expect(res.headers.get('Vary')).toContain('Origin');
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('X-Request-ID');
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('X-RateLimit-Limit');
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('X-RateLimit-Reset');
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Retry-After');
   });
 
   test('disallowed origin on non-preflight request does not receive CORS allow-origin header', async () => {
@@ -41,6 +44,7 @@ describe('CORS and security header contracts', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(origin);
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('GET');
     expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Idempotency-Key');
     expect(res.headers.get('Vary')).toContain('Origin');
   });
 

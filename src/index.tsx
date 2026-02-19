@@ -26,8 +26,8 @@ const DEFAULT_ALLOWED_ORIGINS = new Set([
 ]);
 
 const CORS_ALLOWED_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
-const CORS_ALLOWED_HEADERS = 'Content-Type, Authorization, X-Request-ID, X-CSRF-Token';
-const CORS_EXPOSED_HEADERS = 'X-Request-ID, X-RateLimit-Remaining';
+const CORS_ALLOWED_HEADERS = 'Content-Type, Authorization, X-Request-ID, X-CSRF-Token, Idempotency-Key';
+const CORS_EXPOSED_HEADERS = 'X-Request-ID, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After';
 
 function normalizeOrigin(value: string | undefined): string | null {
   if (!value) return null;
