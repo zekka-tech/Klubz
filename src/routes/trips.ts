@@ -962,8 +962,24 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
         return c.json({ error: { code: 'CONFLICT', message: 'Trip cannot be cancelled from current status' } }, 409);
       }
 
+      const participantCancelUpdate = await db
+        .prepare(`
+          UPDATE trip_participants
+          SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP)
+          WHERE trip_id = ?
+            AND role = 'rider'
+            AND status IN ('requested', 'accepted')
+        `)
+        .bind(tripId)
+        .run();
+      const participantCancelRows = getAffectedRows(participantCancelUpdate);
+
       // Emit real-time event
-      eventBus.emit('trip:cancelled', { tripId, cancelledBy: user.id }, user.id);
+      eventBus.emit('trip:cancelled', {
+        tripId,
+        cancelledBy: user.id,
+        cancelledParticipants: participantCancelRows ?? undefined,
+      }, user.id);
 
       // Notify all accepted participants about cancellation
       const notifications = new NotificationService(c.env);

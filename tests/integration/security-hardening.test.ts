@@ -989,7 +989,7 @@ describe('Security hardening integration flows', () => {
       if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
         return { id: 1, driver_id: 12, status: 'scheduled' };
       }
-      if (query.includes("SET status = 'cancelled'") && kind === 'run') {
+      if (query.includes("UPDATE trips SET status = 'cancelled'") && kind === 'run') {
         cancelUpdates += 1;
         return { changes: 1 };
       }
@@ -1044,7 +1044,7 @@ describe('Security hardening integration flows', () => {
       if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
         return { id: 1, driver_id: 12, status: 'scheduled' };
       }
-      if (query.includes("SET status = 'cancelled'") && kind === 'run') {
+      if (query.includes("UPDATE trips SET status = 'cancelled'") && kind === 'run') {
         throw new Error('D1_ERROR: cancel update failed');
       }
       return null;
@@ -1064,6 +1064,37 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('INTERNAL_ERROR');
     expect(body.error?.message).toBe('Trip cancellation failed');
+  });
+
+  test('trip cancel marks requested and accepted riders as cancelled', async () => {
+    const token = await authToken(12, 'user');
+    let participantCancelUpdates = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 12, status: 'scheduled' };
+      }
+      if (query.includes("UPDATE trips SET status = 'cancelled'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes("UPDATE trip_participants") && query.includes("status = 'cancelled'") && kind === 'run') {
+        participantCancelUpdates += 1;
+        return { changes: 2 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Emergency' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(participantCancelUpdates).toBe(1);
   });
 
   test('trip cancel validates reason payload type', async () => {
@@ -2477,6 +2508,42 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('VALIDATION_ERROR');
     expect(body.error?.message).toBe('Cannot delete account while driving active trips. Please cancel your trips first.');
+  });
+
+  test('account deletion active trip check scopes to active rider participation only', async () => {
+    const token = await authToken(33, 'user');
+    let activeTripsQuery = '';
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM trip_participants tp') && kind === 'first') {
+        activeTripsQuery = query;
+        return { count: 0 };
+      }
+      if (query.includes('FROM trips') && kind === 'first') {
+        return { count: 0 };
+      }
+      if (query.startsWith('UPDATE users') && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('UPDATE trip_participants') && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('INSERT INTO audit_logs') && kind === 'run') {
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/users/account',
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(activeTripsQuery).toContain('JOIN trips t ON tp.trip_id = t.id');
+    expect(activeTripsQuery).toContain("tp.role = 'rider'");
+    expect(activeTripsQuery).toContain("tp.status IN ('requested', 'accepted')");
+    expect(activeTripsQuery).toContain("t.status IN ('scheduled', 'active')");
   });
 
   test('admin cannot assign super admin role', async () => {

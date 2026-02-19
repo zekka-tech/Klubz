@@ -568,9 +568,12 @@ userRoutes.delete('/account', async (c) => {
     // Check for active trips as participant
     const activeTrips = await db.prepare(`
       SELECT COUNT(*) as count
-      FROM trip_participants
-      WHERE user_id = ?
-      AND status IN ('requested', 'accepted')
+      FROM trip_participants tp
+      JOIN trips t ON tp.trip_id = t.id
+      WHERE tp.user_id = ?
+      AND tp.role = 'rider'
+      AND tp.status IN ('requested', 'accepted')
+      AND t.status IN ('scheduled', 'active')
     `).bind(user.id).first<CountRow>();
 
     if (activeTrips && activeTrips.count > 0) {
