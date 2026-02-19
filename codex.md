@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 08:50:00 UTC  
+Last updated: 2026-02-19 09:32:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (166/166)
+- `npm test`: PASS (174/174)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
@@ -120,6 +120,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 09:32 UTC` | codex | push | `main -> origin/main` | success (`539891a`)
+- `2026-02-19 09:32 UTC` | codex | commit | `539891a` | expanded trip-route fail-closed integration coverage for offer/reject/cancel/rate DB-unavailable and runtime DB-failure contracts
+- `2026-02-19 09:31 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (pass), targeted security suite (71/71), and full `npm run verify` (`type-check`, `lint`, `test` 174/174, `build`) all passing
+- `2026-02-19 09:29 UTC` | codex | action | trip-fail-closed-contract-expansion | added integration coverage for trip write-path fail-closed contracts across offer/reject/cancel/rate endpoints (DB unavailable + runtime DB failure cases)
 - `2026-02-19 08:50 UTC` | codex | push | `main -> origin/main` | success (`0149f05`)
 - `2026-02-19 08:49 UTC` | codex | commit | `0149f05` | hardened trip write endpoints to fail closed on missing/failed DB operations and expanded integration contracts for booking DB-unavailable/runtime-failure paths
 - `2026-02-19 08:48 UTC` | codex | action | quality-gates | ran `npm run verify` (`type-check`, `lint`, `test` 166/166, `build`) all passing
