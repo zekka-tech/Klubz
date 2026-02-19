@@ -12,6 +12,11 @@ This guide is the canonical deployment process for staging and production.
 - D1 database created and bound
 - Required secrets configured in Pages settings
 
+Production runtime validation requirements (fail-closed):
+- `JWT_SECRET` must be present and at least 32 characters
+- `ENCRYPTION_KEY` must be a 64-character hex string
+- `APP_URL` must be a valid absolute URL
+
 ## 2. Quality Gates (Mandatory)
 
 Run before any deployment:
@@ -54,6 +59,7 @@ Post-deploy checks:
 - No sustained `type=unhandled` log spikes
 - Metrics and security endpoints return expected shapes
 - Payment webhook events process without signature/configuration errors
+- `/health` returns `200` (runtime configuration guard passes)
 
 ## 5. Rollback and Recovery
 

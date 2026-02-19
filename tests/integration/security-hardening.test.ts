@@ -87,7 +87,7 @@ class MockKV {
 }
 
 const baseEnv = {
-  JWT_SECRET: 'integration-secret',
+  JWT_SECRET: 'integration-secret-0123456789abcdef',
   ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   STRIPE_SECRET_KEY: 'sk_test_dummy',
   STRIPE_WEBHOOK_SECRET: '',
@@ -188,6 +188,105 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('CONFIGURATION_ERROR');
     expect(body.error?.message).toBe('Authentication service unavailable');
+  });
+
+  test('runtime configuration fails closed in production when JWT secret is invalid', async () => {
+    const res = await app.request(
+      '/health',
+      { method: 'GET' },
+      { ...baseEnv, ENVIRONMENT: 'production', JWT_SECRET: 'too-short' },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Internal server error');
+  });
+
+  test('runtime configuration fails closed in production when encryption key is invalid', async () => {
+    const res = await app.request(
+      '/health',
+      { method: 'GET' },
+      { ...baseEnv, ENVIRONMENT: 'production', ENCRYPTION_KEY: 'not-a-valid-key' },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Internal server error');
+  });
+
+  test('login fails closed in development when auth tables are missing', async () => {
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM users') && kind === 'first') {
+        throw new Error('D1_ERROR: no such table: users');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/auth/login',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'dev-user@example.com',
+          password: 'StrongPass123!',
+        }),
+      },
+      { ...baseEnv, ENVIRONMENT: 'development', DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Authentication service unavailable');
+  });
+
+  test('register fails closed in development when auth tables are missing', async () => {
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id FROM users') && kind === 'first') {
+        throw new Error('D1_ERROR: no such table: users');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/auth/register',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'dev-register@example.com',
+          password: 'StrongPass123!',
+          name: 'Dev User',
+        }),
+      },
+      { ...baseEnv, ENVIRONMENT: 'development', DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Authentication service unavailable');
+  });
+
+  test('mfa verify returns explicit not implemented contract', async () => {
+    const res = await app.request(
+      '/api/auth/mfa/verify',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: '123456' }),
+      },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(501);
+    const body = (await res.json()) as { error?: { code?: string; message?: string; status?: number } };
+    expect(body.error?.code).toBe('NOT_IMPLEMENTED');
+    expect(body.error?.status).toBe(501);
+    expect(body.error?.message).toContain('MFA verification is not yet implemented');
   });
 
   test('trip booking accept rejects non-owner driver', async () => {

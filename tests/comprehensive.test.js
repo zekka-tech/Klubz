@@ -157,9 +157,9 @@ async function testSecurityHeaders(runner) {
     assertEqual(headers.get('X-Frame-Options'), 'DENY');
   });
 
-  await runner.run('X-XSS-Protection is set', async () => {
+  await runner.run('X-XSS-Protection is disabled per modern browser guidance', async () => {
     const { headers } = await fetchJSON('/health');
-    assertEqual(headers.get('X-XSS-Protection'), '1; mode=block');
+    assertEqual(headers.get('X-XSS-Protection'), '0');
   });
 
   await runner.run('Referrer-Policy is set', async () => {

@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-18 11:54:18 UTC  
+Last updated: 2026-02-19 05:49:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,14 +22,14 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (132/132)
+- `npm test`: PASS (158/158)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree has pending ledger update
-- `main` is aligned with `origin/main` before this ledger-entry update commit
+- Working tree has uncommitted route and test updates pending commit
+- `main` is ahead of last documented ledger entry and requires commit/push for remote alignment
 
 ---
 
@@ -120,6 +120,22 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 05:49 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (158/158), and `build` all passing
+- `2026-02-19 05:47 UTC` | codex | action | rate-limiter-consolidation-hardening | replaced in-app bespoke API rate limiter with shared `middleware/rateLimiter` (KV-capable, `Retry-After` contract), aligned auth audit user-agent extraction to shared HTTP helper, and added integration rate-limiter contract coverage
+- `2026-02-19 05:45 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (156/156), and `build` all passing
+- `2026-02-19 05:44 UTC` | codex | action | client-ip-normalization-hardening | centralized client IP extraction/normalization in `lib/http` (header casing, forwarded-chain first-hop, IPv4 port stripping, oversized-header rejection), and wired index/middleware rate-limit, security, and audit logging paths to shared helper with added unit/integration contracts
+- `2026-02-19 05:38 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (151/151), and `build` all passing
+- `2026-02-19 05:36 UTC` | codex | action | request-id-contract-hardening | centralized request-id validation/propagation in app middleware, reused canonical request ID in error payloads/logs, and added dedicated integration contracts for echo/sanitization/log-correlation behavior
+- `2026-02-19 05:32 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (148/148), and `build` all passing
+- `2026-02-19 05:31 UTC` | codex | action | production-runtime-config-guard | added fail-closed production runtime config validation (`JWT_SECRET` length, `ENCRYPTION_KEY` format, `APP_URL` URL validity) with integration contracts and CSP/CORS follow-up test alignment
+- `2026-02-19 05:23 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (143/143), and `build` all passing
+- `2026-02-19 05:22 UTC` | codex | action | cors-security-hardening | consolidated strict CORS allowlist handling for preflight/non-preflight, removed permissive origin reflection, added `Vary: Origin` and new CORS integration contract suite
+- `2026-02-19 05:07 UTC` | codex | action | quality-gates | re-ran full `npm run verify`; `type-check`, `lint`, `test` (139/139), and `build` all passing
+- `2026-02-19 05:06 UTC` | codex | action | auth-mfa-contract-hardening | removed unreachable dead code in `/api/auth/mfa/verify` and added integration contract asserting explicit `501 NOT_IMPLEMENTED` behavior
+- `2026-02-19 04:57 UTC` | codex | action | quality-gates | re-ran `npm run verify` (`type-check`, `lint`, `test`, `build`) all passing with 136 tests
+- `2026-02-19 04:57 UTC` | codex | action | notifications-query-contract-hardening | replaced permissive notifications pagination parsing with strict validated query contracts and added malformed-metadata resilience plus integration coverage
+- `2026-02-19 04:49 UTC` | codex | action | quality-gates | re-ran `npm run verify` (`type-check`, `lint`, `test`, `build`) all passing with 135 tests
+- `2026-02-19 04:49 UTC` | codex | action | admin-organizations-implementation | replaced `/api/admin/organizations` placeholder with D1-derived paginated organization summaries and added integration contracts for validation, fail-closed DB errors, and response shape
 - `2026-02-18 11:54 UTC` | codex | push | `main -> origin/main` | success (`fe68632`)
 - `2026-02-18 11:54 UTC` | codex | commit | `fe68632` | hardened auth fail-closed behavior for unavailable DB in non-development environments and added production contract tests
 - `2026-02-18 11:53 UTC` | codex | action | auth-fail-closed-hardening | switched auth login/register/logout DB access to optional binding path and enforced explicit `CONFIGURATION_ERROR` fail-closed behavior outside development when auth DB is unavailable

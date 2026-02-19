@@ -323,33 +323,36 @@ describe('Notification route integration flows', () => {
     expect(body.data[0]?.status).toBe('read');
   });
 
-  test('limit is clamped to max 100 and min 1', async () => {
+  test('invalid limit and offset query values return 400 validation error', async () => {
     const token = await authToken(15);
-    let capturedLimit: unknown = null;
-    const db = new MockDB((query, params, kind) => {
-      if (query.includes('COUNT(*) as total') && kind === 'first') return { total: 0 };
-      if (query.includes('FROM notifications') && kind === 'all') {
-        capturedLimit = params[params.length - 2];
-        return [];
-      }
-      return null;
-    });
+    const db = new MockDB(() => null);
+    const env = { ...baseEnv, DB: db, CACHE: new MockKV() };
 
-    const highRes = await app.request(
-      '/api/notifications?limit=9999&offset=0',
+    const limitRes = await app.request(
+      '/api/notifications?limit=9999',
       { headers: { Authorization: `Bearer ${token}` } },
-      { ...baseEnv, DB: db, CACHE: new MockKV() },
+      env,
     );
-    expect(highRes.status).toBe(200);
-    expect(capturedLimit).toBe(100);
+    expect(limitRes.status).toBe(400);
+    const limitBody = (await limitRes.json()) as {
+      error?: { code?: string; message?: string; status?: number };
+    };
+    expect(limitBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(limitBody.error?.status).toBe(400);
+    expect(limitBody.error?.message).toBe('Invalid limit query parameter');
 
-    const lowRes = await app.request(
-      '/api/notifications?limit=0&offset=0',
+    const offsetRes = await app.request(
+      '/api/notifications?offset=-1',
       { headers: { Authorization: `Bearer ${token}` } },
-      { ...baseEnv, DB: db, CACHE: new MockKV() },
+      env,
     );
-    expect(lowRes.status).toBe(200);
-    expect(capturedLimit).toBe(1);
+    expect(offsetRes.status).toBe(400);
+    const offsetBody = (await offsetRes.json()) as {
+      error?: { code?: string; message?: string; status?: number };
+    };
+    expect(offsetBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(offsetBody.error?.status).toBe(400);
+    expect(offsetBody.error?.message).toBe('Invalid offset query parameter');
   });
 
   test('offset affects hasMore and page slice behavior', async () => {
@@ -417,5 +420,41 @@ describe('Notification route integration flows', () => {
     expect(body.error?.message).toBe('Invalid status filter');
     expect(typeof body.error?.requestId).toBe('string');
     expect(typeof body.error?.timestamp).toBe('string');
+  });
+
+  test('malformed notification metadata is ignored without failing response', async () => {
+    const token = await authToken(18);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('COUNT(*) as total') && kind === 'first') return { total: 1 };
+      if (query.includes('FROM notifications') && kind === 'all') {
+        return [{
+          id: 45,
+          user_id: 18,
+          trip_id: null,
+          notification_type: 'booking_accepted',
+          channel: 'in_app',
+          status: 'sent',
+          subject: 'Subject',
+          message: 'Message',
+          metadata: '{"broken_json"',
+          sent_at: null,
+          delivered_at: null,
+          read_at: null,
+          created_at: '2026-02-17T10:00:00Z',
+        }];
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/notifications',
+      { headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ id: number; metadata: unknown }> };
+    expect(body.data[0]?.id).toBe(45);
+    expect(body.data[0]?.metadata).toBeNull();
   });
 });

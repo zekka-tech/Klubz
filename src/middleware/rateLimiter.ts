@@ -10,6 +10,7 @@
 
 import type { Context, Next } from 'hono';
 import type { AppEnv } from '../types';
+import { getIP } from '../lib/http';
 
 interface RateLimitConfig {
   windowMs: number;
@@ -135,10 +136,7 @@ export const rateLimiter = (config: Partial<RateLimitConfig> = {}) => {
   const cfg = { ...defaultConfig, ...config };
 
   return async (c: Context<AppEnv>, next: Next) => {
-    const ip = c.req.header('CF-Connecting-IP')
-      || c.req.header('x-forwarded-for')
-      || c.req.header('x-real-ip')
-      || 'unknown';
+    const ip = getIP(c);
     const key = `${cfg.keyPrefix}:${ip}`;
     const now = Date.now();
 

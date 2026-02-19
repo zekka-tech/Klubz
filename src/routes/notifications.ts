@@ -3,6 +3,8 @@ import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { getDB } from '../lib/db';
 import { ValidationError } from '../lib/errors';
+import { logger } from '../lib/logger';
+import { parseQueryInteger } from '../lib/validation';
 
 export const notificationRoutes = new Hono<AppEnv>();
 
@@ -31,15 +33,28 @@ interface CountRow {
   total: number;
 }
 
-function parseIntSafe(value: string | undefined, fallback: number): number {
-  const n = Number.parseInt(value || '', 10);
-  return Number.isFinite(n) ? n : fallback;
+function parseNotificationMetadata(value: string | null, notificationId: number): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    logger.warn('Ignoring malformed notification metadata payload', { notificationId });
+    return null;
+  }
 }
 
 notificationRoutes.get('/', async (c) => {
   const user = c.get('user') as AuthUser;
-  const limit = Math.min(Math.max(parseIntSafe(c.req.query('limit'), 20), 1), 100);
-  const offset = Math.max(parseIntSafe(c.req.query('offset'), 0), 0);
+  const limit = parseQueryInteger(c.req.query('limit'), 20, { min: 1, max: 100 });
+  if (limit === null) {
+    throw new ValidationError('Invalid limit query parameter');
+  }
+
+  const offset = parseQueryInteger(c.req.query('offset'), 0, { min: 0, max: 100000 });
+  if (offset === null) {
+    throw new ValidationError('Invalid offset query parameter');
+  }
+
   const status = c.req.query('status') as NotificationStatus | undefined;
 
   if (status && !allowedStatuses.has(status)) {
@@ -75,7 +90,7 @@ notificationRoutes.get('/', async (c) => {
       status: row.status,
       subject: row.subject,
       message: row.message,
-      metadata: row.metadata ? JSON.parse(row.metadata) : null,
+      metadata: parseNotificationMetadata(row.metadata, row.id),
       sentAt: row.sent_at,
       deliveredAt: row.delivered_at,
       readAt: row.read_at,

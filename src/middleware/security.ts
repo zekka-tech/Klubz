@@ -4,6 +4,7 @@
  */
 
 import { Context, Next } from 'hono'
+import { getIP } from '../lib/http'
 
 // ═══ CSRF Protection ═══
 export function csrfProtection() {
@@ -90,7 +91,7 @@ export function bruteForceProtection(opts: { maxAttempts?: number; lockDurationM
   const window = opts.windowMs || 5 * 60 * 1000 // 5 min
 
   return async (c: Context, next: Next) => {
-    const ip = c.req.header('CF-Connecting-IP') || c.req.header('x-forwarded-for') || 'unknown'
+    const ip = getIP(c)
     const key = `bf:${ip}`
     const now = Date.now()
 

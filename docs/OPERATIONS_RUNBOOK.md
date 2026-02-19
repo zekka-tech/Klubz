@@ -26,6 +26,11 @@ Required runtime secrets:
 - `JWT_SECRET`
 - `ENCRYPTION_KEY`
 
+Production hard requirements (enforced by runtime guard):
+- `JWT_SECRET` must be at least 32 characters
+- `ENCRYPTION_KEY` must be a 64-character hex string
+- `APP_URL` must be a valid absolute URL
+
 Conditionally required:
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
 - `SENDGRID_API_KEY`
@@ -97,6 +102,11 @@ High-signal failure indicators:
    - `/health`
    - representative failing endpoint
 4. Add/expand integration coverage for the failing contract before closing.
+
+If failures include `CONFIGURATION_ERROR` with message `Runtime configuration invalid`:
+- validate `JWT_SECRET` length
+- validate `ENCRYPTION_KEY` format
+- validate `APP_URL` URL syntax
 
 ### 7.2 Payment Webhook Degradation
 1. Verify `STRIPE_WEBHOOK_SECRET` is configured in production.

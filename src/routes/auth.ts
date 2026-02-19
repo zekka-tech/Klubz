@@ -63,10 +63,6 @@ function getJWTSecret(c: { env?: { JWT_SECRET?: string } }): string {
   return secret;
 }
 
-function isDevelopmentEnv(c: { env?: { ENVIRONMENT?: string } }): boolean {
-  return c.env?.ENVIRONMENT === 'development';
-}
-
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -180,32 +176,23 @@ authRoutes.post('/login', async (c) => {
         });
         return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Login failed' } }, 500);
       }
-      // Table missing → fall through to dev fallback
-      logger.warn('D1 tables not migrated, using dev fallback for login');
+      logger.error('Login denied because auth tables are unavailable', err instanceof Error ? err : undefined, {
+        environment: c.env?.ENVIRONMENT || 'unknown',
+      });
+      return c.json(
+        { error: { code: 'CONFIGURATION_ERROR', message: 'Authentication service unavailable' } },
+        500,
+      );
     }
   }
 
-  if (!isDevelopmentEnv(c)) {
-    logger.error('Login denied because DB is unavailable outside development', undefined, {
-      environment: c.env?.ENVIRONMENT || 'unknown',
-    });
-    return c.json(
-      { error: { code: 'CONFIGURATION_ERROR', message: 'Authentication service unavailable' } },
-      500,
-    );
-  }
-
-  // ── Fallback: dev mode without D1 ──
-  const userId = Math.floor(Math.random() * 100000);
-  const user = { id: userId, email, name: email.split('@')[0], role: 'user' };
-
-  const { accessToken, refreshToken } = await issueTokenPair(user, secret);
-
-  return c.json({
-    accessToken,
-    refreshToken,
-    user: { id: userId, email, name: user.name, role: 'user', mfaEnabled: false },
+  logger.error('Login denied because DB is unavailable', undefined, {
+    environment: c.env?.ENVIRONMENT || 'unknown',
   });
+  return c.json(
+    { error: { code: 'CONFIGURATION_ERROR', message: 'Authentication service unavailable' } },
+    500,
+  );
 });
 
 // ── Register ───────────────────────────────────────────────────────────────
@@ -261,7 +248,7 @@ authRoutes.post('/register', async (c) => {
       try {
         await db
           .prepare('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)')
-          .bind(userId, 'USER_REGISTER', 'user', userId, ip, (c.req.header('user-agent') || 'unknown').slice(0, 255))
+          .bind(userId, 'USER_REGISTER', 'user', userId, ip, getUserAgent(c))
           .run();
       } catch { /* best-effort */ }
 
@@ -278,25 +265,23 @@ authRoutes.post('/register', async (c) => {
         }
         return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Registration failed' } }, 500);
       }
-      logger.warn('D1 tables not migrated, using dev fallback for register');
+      logger.error('Registration denied because auth tables are unavailable', err instanceof Error ? err : undefined, {
+        environment: c.env?.ENVIRONMENT || 'unknown',
+      });
+      return c.json(
+        { error: { code: 'CONFIGURATION_ERROR', message: 'Authentication service unavailable' } },
+        500,
+      );
     }
   }
 
-  if (!isDevelopmentEnv(c)) {
-    logger.error('Registration denied because DB is unavailable outside development', undefined, {
-      environment: c.env?.ENVIRONMENT || 'unknown',
-    });
-    return c.json(
-      { error: { code: 'CONFIGURATION_ERROR', message: 'Authentication service unavailable' } },
-      500,
-    );
-  }
-
-  // ── Fallback: dev mode ──
-  return c.json({
-    message: 'Registration successful',
-    userId: Math.floor(Math.random() * 100000),
+  logger.error('Registration denied because DB is unavailable', undefined, {
+    environment: c.env?.ENVIRONMENT || 'unknown',
   });
+  return c.json(
+    { error: { code: 'CONFIGURATION_ERROR', message: 'Authentication service unavailable' } },
+    500,
+  );
 });
 
 // ── MFA Verify ─────────────────────────────────────────────────────────────
@@ -311,8 +296,6 @@ authRoutes.post('/mfa/verify', async (c) => {
       status: 501
     }
   }, 501);
-
-  return c.json({ verified: true, message: 'MFA verification successful' });
 });
 
 // ── Token Refresh ──────────────────────────────────────────────────────────

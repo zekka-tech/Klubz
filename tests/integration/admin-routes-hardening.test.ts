@@ -272,6 +272,100 @@ describe('Admin route hardening contracts', () => {
     expect(levelBody.error?.message).toBe('Invalid level filter');
   });
 
+  test('admin organizations list rejects invalid pagination query params', async () => {
+    const token = await authToken(1, 'admin');
+
+    const pageRes = await app.request(
+      '/api/admin/organizations?page=0',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+    expect(pageRes.status).toBe(400);
+    const pageBody = (await pageRes.json()) as { error?: { code?: string; message?: string } };
+    expect(pageBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(pageBody.error?.message).toBe('Invalid page query parameter');
+
+    const limitRes = await app.request(
+      '/api/admin/organizations?limit=1000',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+    expect(limitRes.status).toBe(400);
+    const limitBody = (await limitRes.json()) as { error?: { code?: string; message?: string } };
+    expect(limitBody.error?.code).toBe('VALIDATION_ERROR');
+    expect(limitBody.error?.message).toBe('Invalid limit query parameter');
+  });
+
+  test('admin organizations list returns 500 when DB read fails', async () => {
+    const token = await authToken(1, 'admin');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('COUNT(*) as total FROM (') && kind === 'first') {
+        throw new Error('org count failed');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/admin/organizations',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Failed to load organizations');
+  });
+
+  test('admin organizations list returns derived organizations with metrics and pagination', async () => {
+    const token = await authToken(1, 'admin');
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('COUNT(*) as total FROM (') && kind === 'first') {
+        return { total: 2 };
+      }
+      if (query.includes('FROM (') && query.includes('orgs.organization_id') && kind === 'all') {
+        expect(params).toEqual([1, 1]);
+        return [
+          {
+            organization_id: 'org-b',
+            driver_trip_count: 3,
+            rider_request_count: 5,
+            has_matching_config: 1,
+            last_activity_at: '2026-02-18T00:00:00.000Z',
+          },
+        ];
+      }
+      if (query.includes("INSERT INTO audit_logs") && kind === 'run') {
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/admin/organizations?page=2&limit=1',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      organizations: Array<{
+        id: string;
+        metrics: { driverTrips: number; riderRequests: number; hasMatchingConfig: boolean };
+        lastActivityAt: string | null;
+      }>;
+      pagination: { page: number; limit: number; total: number; totalPages: number };
+    };
+    expect(body.organizations).toEqual([
+      {
+        id: 'org-b',
+        metrics: { driverTrips: 3, riderRequests: 5, hasMatchingConfig: true },
+        lastActivityAt: '2026-02-18T00:00:00.000Z',
+      },
+    ]);
+    expect(body.pagination).toEqual({ page: 2, limit: 1, total: 2, totalPages: 2 });
+  });
+
   test('admin update requires authentication', async () => {
     const res = await app.request(
       '/api/admin/users/10',

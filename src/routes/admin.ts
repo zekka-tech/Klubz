@@ -72,6 +72,14 @@ interface AuditLogRow {
   created_at: string;
 }
 
+interface OrganizationSummaryRow {
+  organization_id: string;
+  driver_trip_count: number;
+  rider_request_count: number;
+  has_matching_config: number;
+  last_activity_at: string | null;
+}
+
 interface UpdateUserBody {
   email?: string;
   role?: 'admin' | 'user' | 'super_admin';
@@ -394,12 +402,94 @@ adminRoutes.put('/users/:userId', async (c) => {
 // ---------------------------------------------------------------------------
 
 adminRoutes.get('/organizations', async (c) => {
-  await writeAdminAudit(c, 'ADMIN_ORGANIZATIONS_VIEWED', 'organization');
-  // Organizations not in current schema - return placeholder
-  return c.json({
-    organizations: [],
-    pagination: { page: 1, limit: 10, total: 0, totalPages: 0 },
-  });
+  const page = parseQueryInteger(c.req.query('page'), 1, { min: 1, max: 100000 });
+  if (page === null) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid page query parameter' } }, 400);
+  }
+
+  const limit = parseQueryInteger(c.req.query('limit'), 20, { min: 1, max: 100 });
+  if (limit === null) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid limit query parameter' } }, 400);
+  }
+
+  const db = getDB(c);
+  try {
+    const organizationSetQuery = `
+      SELECT organization_id
+      FROM driver_trips
+      WHERE organization_id IS NOT NULL AND TRIM(organization_id) != ''
+      UNION
+      SELECT organization_id
+      FROM rider_requests
+      WHERE organization_id IS NOT NULL AND TRIM(organization_id) != ''
+      UNION
+      SELECT organization_id
+      FROM matching_config
+      WHERE organization_id IS NOT NULL AND TRIM(organization_id) != ''
+    `;
+
+    const countRes = await db
+      .prepare(`SELECT COUNT(*) as total FROM (${organizationSetQuery}) orgs`)
+      .first<TotalRow>();
+    const total = countRes?.total ?? 0;
+
+    const { results } = await db
+      .prepare(`
+        SELECT
+          orgs.organization_id,
+          COALESCE(dt.driver_trip_count, 0) as driver_trip_count,
+          COALESCE(rr.rider_request_count, 0) as rider_request_count,
+          CASE WHEN mc.organization_id IS NULL THEN 0 ELSE 1 END as has_matching_config,
+          (
+            SELECT MAX(ts) FROM (
+              SELECT MAX(created_at) as ts FROM driver_trips dtx WHERE dtx.organization_id = orgs.organization_id
+              UNION ALL
+              SELECT MAX(created_at) as ts FROM rider_requests rrx WHERE rrx.organization_id = orgs.organization_id
+              UNION ALL
+              SELECT MAX(updated_at) as ts FROM matching_config mcx WHERE mcx.organization_id = orgs.organization_id
+            )
+          ) as last_activity_at
+        FROM (${organizationSetQuery}) orgs
+        LEFT JOIN (
+          SELECT organization_id, COUNT(*) as driver_trip_count
+          FROM driver_trips
+          WHERE organization_id IS NOT NULL AND TRIM(organization_id) != ''
+          GROUP BY organization_id
+        ) dt ON dt.organization_id = orgs.organization_id
+        LEFT JOIN (
+          SELECT organization_id, COUNT(*) as rider_request_count
+          FROM rider_requests
+          WHERE organization_id IS NOT NULL AND TRIM(organization_id) != ''
+          GROUP BY organization_id
+        ) rr ON rr.organization_id = orgs.organization_id
+        LEFT JOIN matching_config mc ON mc.organization_id = orgs.organization_id
+        ORDER BY orgs.organization_id ASC
+        LIMIT ? OFFSET ?
+      `)
+      .bind(limit, (page - 1) * limit)
+      .all<OrganizationSummaryRow>();
+
+    const organizations = (results || []).map((row) => ({
+      id: row.organization_id,
+      metrics: {
+        driverTrips: row.driver_trip_count,
+        riderRequests: row.rider_request_count,
+        hasMatchingConfig: row.has_matching_config === 1,
+      },
+      lastActivityAt: row.last_activity_at,
+    }));
+
+    await writeAdminAudit(c, 'ADMIN_ORGANIZATIONS_VIEWED', 'organization');
+
+    return c.json({
+      organizations,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Admin organizations error', err instanceof Error ? err : undefined, { error: parsed.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load organizations' } }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------
