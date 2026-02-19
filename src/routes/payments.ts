@@ -525,7 +525,7 @@ paymentRoutes.post('/webhook', async (c) => {
           userId: String(booking.user_id),
           bookingId,
           amount: paymentIntent.amount / 100,
-        });
+        }, booking.user_id);
 
         await writePaymentAudit(c, 'PAYMENT_SUCCEEDED', bookingId, String(booking.user_id));
 
@@ -619,7 +619,7 @@ paymentRoutes.post('/webhook', async (c) => {
         eventBus.emit('payment:failed', {
           bookingId,
           reason: paymentIntent.last_payment_error?.message,
-        });
+        }, booking.user_id);
 
         await writePaymentAudit(c, 'PAYMENT_FAILED', bookingId, String(booking.user_id));
         try {

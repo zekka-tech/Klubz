@@ -4,6 +4,7 @@
  * In-memory pub/sub event bus that feeds connected SSE clients.
  * Events are published from route handlers and fanned out to subscribers.
  */
+import type { AuthUser } from '../types';
 
 export type EventType =
   | 'trip:created'
@@ -26,6 +27,17 @@ export interface AppEvent {
   userId?: number;
   data: Record<string, unknown>;
   timestamp: string;
+}
+
+/**
+ * Non-admin users must only receive events explicitly targeted at their user id.
+ * Admin and super_admin roles can observe the full event stream.
+ */
+export function isEventVisibleToUser(event: AppEvent, user: Pick<AuthUser, 'id' | 'role'>): boolean {
+  if (user.role === 'admin' || user.role === 'super_admin') {
+    return true;
+  }
+  return event.userId !== undefined && event.userId === user.id;
 }
 
 type Subscriber = (event: AppEvent) => void;

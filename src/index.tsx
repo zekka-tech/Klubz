@@ -7,13 +7,14 @@ import { adminRoutes } from './routes/admin'
 import { monitoringRoutes } from './routes/monitoring'
 import { paymentRoutes } from './routes/payments'
 import { notificationRoutes } from './routes/notifications'
-import { eventBus } from './lib/eventBus'
+import { eventBus, isEventVisibleToUser } from './lib/eventBus'
 import { logger } from './lib/logger'
 import { getAnonymizedIP } from './lib/http'
 import { AppError } from './lib/errors'
+import { authMiddleware } from './middleware/auth'
 import { rateLimiter } from './middleware/rateLimiter'
 import type { Context } from 'hono'
-import type { AppEnv } from './types'
+import type { AppEnv, AuthUser } from './types'
 type AppJsonInit = Parameters<Context<AppEnv>['json']>[1]
 
 const app = new Hono<AppEnv>()
@@ -373,7 +374,8 @@ const matchingRoutes = createMatchingRoutes()
 app.route('/api/matching', matchingRoutes)
 
 // ═══ Real-Time Events (SSE) ═══
-app.get('/api/events', async (c) => {
+app.get('/api/events', authMiddleware(), async (c) => {
+  const user = c.get('user') as AuthUser;
   const { readable, writable } = new TransformStream()
   const writer = writable.getWriter()
   const encoder = new TextEncoder()
@@ -382,6 +384,9 @@ app.get('/api/events', async (c) => {
 
   // Subscribe to event bus for real events
   const unsubscribe = eventBus.onAll(async (event) => {
+    if (!isEventVisibleToUser(event, user)) {
+      return;
+    }
     try {
       await writer.write(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`))
     } catch { /* client disconnected */ }

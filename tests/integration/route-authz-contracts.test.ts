@@ -136,6 +136,7 @@ describe('Route authz contracts', () => {
       { method: 'GET', path: '/api/trips/available' },
       { method: 'GET', path: '/api/matching/config' },
       { method: 'GET', path: '/api/monitoring/sla' },
+      { method: 'GET', path: '/api/events' },
     ];
 
     for (const tcase of cases) {
