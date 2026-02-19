@@ -409,6 +409,12 @@ Latest entries:
 - `2026-02-19 11:24 UTC` | codex | action | quality-gates | re-ran `npm run verify` (`type-check`, `lint`, `test`, `build`) all passing (191 tests)
 - `2026-02-19 11:24 UTC` | codex | commit | `9c0f520` | hardened SSE event auth and user-scoped visibility
 - `2026-02-19 11:24 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-19 11:31 UTC` | codex | action | correlation-id-hardening | added `src/lib/observability.ts` request-context helper and propagated correlation IDs through auth/payment structured logs (including webhook replay/idempotency/audit-warning paths)
+- `2026-02-19 11:31 UTC` | codex | action | logger-hardening | normalized request-id extraction in logger emit path (promote `metadata.requestId` to top-level `requestId`) and fixed `logger.error/logger.fatal` metadata merge semantics for `errorOrMeta` + explicit `meta` arguments
+- `2026-02-19 11:31 UTC` | codex | action | integration-tests | expanded `tests/integration/request-id-contracts.test.ts` with cross-module observability assertions ensuring auth/payment warning+error logs retain client-provided `X-Request-ID`
+- `2026-02-19 11:31 UTC` | codex | action | quality-gates | re-ran `npm run verify` (`type-check`, `lint`, `test`, `build`) all passing (193 tests)
+- `2026-02-19 11:31 UTC` | codex | commit | `9b87518` | hardened request-id propagation in auth and payments logs
+- `2026-02-19 11:31 UTC` | codex | push | `main -> origin/main` | success
 
 ---
 
