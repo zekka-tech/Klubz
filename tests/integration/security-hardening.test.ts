@@ -349,6 +349,46 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.message).toBe('Trip offer creation failed');
   });
 
+  test('trip offer persists total seats equal to available seats', async () => {
+    const token = await authToken(12, 'user');
+    let insertedAvailableSeats: unknown = null;
+    let insertedTotalSeats: unknown = null;
+
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('INSERT INTO trips') && kind === 'run') {
+        insertedAvailableSeats = params[7];
+        insertedTotalSeats = params[8];
+        return { last_row_id: 1 };
+      }
+      if (query.includes('INSERT INTO trip_participants') && kind === 'run') {
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/offer',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickupLocation: { address: 'A' },
+          dropoffLocation: { address: 'B' },
+          scheduledTime: new Date(Date.now() + 60_000).toISOString(),
+          availableSeats: 4,
+          price: 35,
+          notes: 'evening commute',
+          vehicleInfo: { make: 'Toyota', model: 'Corolla', licensePlate: 'ABC-1234' },
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    expect(insertedAvailableSeats).toBe(4);
+    expect(insertedTotalSeats).toBe(4);
+  });
+
   test('trip booking rejects driver booking their own trip', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {

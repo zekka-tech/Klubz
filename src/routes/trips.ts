@@ -590,7 +590,7 @@ tripRoutes.post('/offer', async (c) => {
           'hash_' + (Date.now() + 1),
           scheduledTime,
           availableSeats,
-          availableSeats + 1,
+          availableSeats,
           price || 35.00,
           vehicleInfo.make + ' ' + vehicleInfo.model,
           vehicleInfo.licensePlate,
