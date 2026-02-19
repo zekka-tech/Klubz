@@ -11,7 +11,7 @@ import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { eventBus } from '../lib/eventBus';
-import { getDB } from '../lib/db';
+import { getDB, getDBOptional } from '../lib/db';
 import { matchRiderToDrivers } from '../lib/matching/engine';
 import type { RiderRequest, DriverTrip } from '../lib/matching/types';
 import { ValidationError } from '../lib/errors';
@@ -55,6 +55,8 @@ interface DriverTripRow {
 
 interface TripSeatRow {
   available_seats: number;
+  driver_id?: number;
+  status?: string;
 }
 
 interface TripOwnerRow {
@@ -413,40 +415,51 @@ tripRoutes.post('/:tripId/book', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Passenger count must be between 1 and 4' } }, 400);
   }
 
-  const db = getDB(c);
-  if (db) {
-    try {
-      // Verify trip exists and has seats
-      const trip = await db.prepare('SELECT id, available_seats, status FROM trips WHERE id = ?').bind(tripId).first<TripSeatRow>();
-      if (!trip) return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
-      if (trip.available_seats < passengers) {
-        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Not enough seats' } }, 400);
-      }
+  const db = getDBOptional(c);
+  if (!db) {
+    logger.error('Booking denied because DB is unavailable', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+  try {
+    // Verify trip exists and has seats
+    const trip = await db.prepare('SELECT id, available_seats, status, driver_id FROM trips WHERE id = ?').bind(tripId).first<TripSeatRow>();
+    if (!trip) return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+    if (trip.driver_id === user.id) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Drivers cannot book their own trips' } }, 403);
+    }
+    if (trip.status && trip.status !== 'scheduled') {
+      return c.json({ error: { code: 'CONFLICT', message: 'Trip is not open for booking' } }, 409);
+    }
+    if (trip.available_seats < passengers) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Not enough seats' } }, 400);
+    }
 
-      await db
-        .prepare(
-          `INSERT INTO trip_participants (trip_id, user_id, role, status, pickup_location_encrypted, dropoff_location_encrypted)
-           VALUES (?, ?, 'rider', 'requested', ?, ?)`
-        )
-        .bind(
-          tripId, user.id,
-          pickupLocation.address || JSON.stringify(pickupLocation),
-          dropoffLocation.address || JSON.stringify(dropoffLocation),
-        )
-        .run();
+    await db
+      .prepare(
+        `INSERT INTO trip_participants (trip_id, user_id, role, status, pickup_location_encrypted, dropoff_location_encrypted)
+         VALUES (?, ?, 'rider', 'requested', ?, ?)`
+      )
+      .bind(
+        tripId, user.id,
+        pickupLocation.address || JSON.stringify(pickupLocation),
+        dropoffLocation.address || JSON.stringify(dropoffLocation),
+      )
+      .run();
 
-      // Emit real-time booking event
-      eventBus.emit('booking:requested', {
-        tripId,
-        passengerId: user.id,
-        passengers,
-      }, user.id);
+    // Emit real-time booking event
+    eventBus.emit('booking:requested', {
+      tripId,
+      passengerId: user.id,
+      passengers,
+    }, user.id);
 
-      // Send notification to driver
-      const notifications = new NotificationService(c.env);
-      if (notifications.emailAvailable) {
-        try {
-          const tripDetails = await db.prepare(`
+    // Send notification to driver
+    const notifications = new NotificationService(c.env);
+    if (notifications.emailAvailable) {
+      try {
+        const tripDetails = await db.prepare(`
             SELECT t.title, t.origin, t.destination, t.departure_time, t.driver_id,
                    u.email, u.first_name_encrypted, u.last_name_encrypted
             FROM trips t
@@ -454,76 +467,74 @@ tripRoutes.post('/:tripId/book', async (c) => {
             WHERE t.id = ?
           `).bind(tripId).first<BookingTripDetailsRow>();
 
-          if (tripDetails) {
-            const driverNotificationPrefs = await getUserNotificationPreferences(db, tripDetails.driver_id);
+        if (tripDetails) {
+          const driverNotificationPrefs = await getUserNotificationPreferences(db, tripDetails.driver_id);
 
-            try {
-              if (driverNotificationPrefs.tripUpdates) {
-                await createNotification(db, {
-                  userId: tripDetails.driver_id,
-                  tripId: Number.parseInt(tripId, 10),
-                  notificationType: 'booking_request',
-                  channel: 'in_app',
-                  status: 'pending',
-                  subject: 'New booking request',
-                  message: `You received a new booking request for ${tripDetails.title || 'your trip'}.`,
-                  metadata: { tripId, passengerId: user.id, passengers },
-                });
-              }
-            } catch (err) {
-              logger.warn('Failed to persist booking request notification', { error: err instanceof Error ? err.message : String(err) });
-            }
-
-            const driverFirstName = tripDetails.first_name_encrypted
-              ? await decrypt(JSON.parse(tripDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, tripDetails.driver_id.toString())
-              : 'Driver';
-
-            const riderDetails = await db.prepare('SELECT first_name_encrypted, last_name_encrypted FROM users WHERE id = ?').bind(user.id).first<RiderNameRow>();
-            const riderFirstName = riderDetails?.first_name_encrypted
-              ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
-              : 'A rider';
-            const riderLastName = riderDetails?.last_name_encrypted
-              ? await decrypt(JSON.parse(riderDetails.last_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
-              : '';
-
+          try {
             if (driverNotificationPrefs.tripUpdates) {
-              await notifications.sendEmail(
-                tripDetails.email,
-                'New Booking Request - Klubz',
-                `
-                <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
-                  <h1 style="color:#3B82F6">New Booking Request</h1>
-                  <p>Hi ${driverFirstName}, you have a new booking request for your trip.</p>
-                  <div style="background:#F3F4F6;padding:16px;border-radius:8px;margin:16px 0">
-                    <p><strong>Trip:</strong> ${tripDetails.title || 'Your trip'}</p>
-                    <p><strong>Rider:</strong> ${riderFirstName} ${riderLastName}</p>
-                    <p><strong>Passengers:</strong> ${passengers}</p>
-                    <p><strong>Pickup:</strong> ${pickupLocation.address || 'Requested location'}</p>
-                    <p><strong>Dropoff:</strong> ${dropoffLocation.address || 'Requested location'}</p>
-                  </div>
-                  <p>Log in to Klubz to accept or reject this booking.</p>
-                </div>
-              `,
-                `New booking request from ${riderFirstName} ${riderLastName} for ${passengers} passenger(s).`
-              );
+              await createNotification(db, {
+                userId: tripDetails.driver_id,
+                tripId: Number.parseInt(tripId, 10),
+                notificationType: 'booking_request',
+                channel: 'in_app',
+                status: 'pending',
+                subject: 'New booking request',
+                message: `You received a new booking request for ${tripDetails.title || 'your trip'}.`,
+                metadata: { tripId, passengerId: user.id, passengers },
+              });
             }
+          } catch (err) {
+            logger.warn('Failed to persist booking request notification', { error: err instanceof Error ? err.message : String(err) });
           }
-        } catch (err) {
-          logger.warn('Failed to send booking notification', { error: err instanceof Error ? err.message : String(err) });
-        }
-      }
 
-      return c.json({ message: 'Booking request submitted successfully', booking: { tripId, passengerId: user.id, status: 'requested', createdAt: new Date().toISOString() } });
-    } catch (err: unknown) {
-      const parsedError = parseError(err);
-      logger.error('Booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
-      if (parsedError.message.includes('UNIQUE')) {
-        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Already booked on this trip' } }, 409);
+          const driverFirstName = tripDetails.first_name_encrypted
+            ? await decrypt(JSON.parse(tripDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, tripDetails.driver_id.toString())
+            : 'Driver';
+
+          const riderDetails = await db.prepare('SELECT first_name_encrypted, last_name_encrypted FROM users WHERE id = ?').bind(user.id).first<RiderNameRow>();
+          const riderFirstName = riderDetails?.first_name_encrypted
+            ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
+            : 'A rider';
+          const riderLastName = riderDetails?.last_name_encrypted
+            ? await decrypt(JSON.parse(riderDetails.last_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
+            : '';
+
+          if (driverNotificationPrefs.tripUpdates) {
+            await notifications.sendEmail(
+              tripDetails.email,
+              'New Booking Request - Klubz',
+              `
+              <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
+                <h1 style="color:#3B82F6">New Booking Request</h1>
+                <p>Hi ${driverFirstName}, you have a new booking request for your trip.</p>
+                <div style="background:#F3F4F6;padding:16px;border-radius:8px;margin:16px 0">
+                  <p><strong>Trip:</strong> ${tripDetails.title || 'Your trip'}</p>
+                  <p><strong>Rider:</strong> ${riderFirstName} ${riderLastName}</p>
+                  <p><strong>Passengers:</strong> ${passengers}</p>
+                  <p><strong>Pickup:</strong> ${pickupLocation.address || 'Requested location'}</p>
+                  <p><strong>Dropoff:</strong> ${dropoffLocation.address || 'Requested location'}</p>
+                </div>
+                <p>Log in to Klubz to accept or reject this booking.</p>
+              </div>
+            `,
+              `New booking request from ${riderFirstName} ${riderLastName} for ${passengers} passenger(s).`
+            );
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed to send booking notification', { error: err instanceof Error ? err.message : String(err) });
       }
     }
-  }
 
-  return c.json({ message: 'Booking request submitted successfully', booking: { tripId, status: 'requested', createdAt: new Date().toISOString() } });
+    return c.json({ message: 'Booking request submitted successfully', booking: { tripId, passengerId: user.id, status: 'requested', createdAt: new Date().toISOString() } });
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    logger.error('Booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
+    if (parsedError.message.includes('UNIQUE')) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Already booked on this trip' } }, 409);
+    }
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Booking request failed' } }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -555,9 +566,14 @@ tripRoutes.post('/offer', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Scheduled time must be in the future' } }, 400);
   }
 
-  const db = getDB(c);
-  if (db) {
-    try {
+  const db = getDBOptional(c);
+  if (!db) {
+    logger.error('Trip offer denied because DB is unavailable', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+  try {
       const result = await db
         .prepare(
           `INSERT INTO trips (title, description, origin, destination, origin_hash, destination_hash, departure_time, available_seats, total_seats, price_per_seat, currency, status, vehicle_type, vehicle_model_encrypted, vehicle_plate_encrypted, driver_id)
@@ -603,20 +619,15 @@ tripRoutes.post('/offer', async (c) => {
         await cache.invalidatePattern('trips:search:');
       }
 
-      return c.json({
-        message: 'Trip offer created successfully',
-        trip: { id: tripId, status: 'scheduled', driverId: user.id, availableSeats, createdAt: new Date().toISOString() },
-      });
-    } catch (err: unknown) {
-      const parsedError = parseError(err);
-      logger.error('Trip offer error', err instanceof Error ? err : undefined, { error: parsedError.message });
-    }
+    return c.json({
+      message: 'Trip offer created successfully',
+      trip: { id: tripId, status: 'scheduled', driverId: user.id, availableSeats, createdAt: new Date().toISOString() },
+    });
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    logger.error('Trip offer error', err instanceof Error ? err : undefined, { error: parsedError.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Trip offer creation failed' } }, 500);
   }
-
-  return c.json({
-    message: 'Trip offer created successfully',
-    trip: { id: Date.now(), status: 'scheduled', availableSeats, createdAt: new Date().toISOString() },
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -632,9 +643,14 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
     return c.json({ message: 'Duplicate request ignored', replay: true });
   }
 
-  const db = getDB(c);
-  if (db) {
-    try {
+  const db = getDBOptional(c);
+  if (!db) {
+    logger.error('Booking acceptance denied because DB is unavailable', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+  try {
       const trip = await db
         .prepare('SELECT id, driver_id FROM trips WHERE id = ?')
         .bind(tripId)
@@ -755,14 +771,12 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
         }
       }
 
-      return c.json({ message: 'Booking accepted successfully', booking: { id: bookingId, tripId, status: 'accepted', acceptedAt: new Date().toISOString() } });
-    } catch (err: unknown) {
-      const parsedError = parseError(err);
-      logger.error('Accept booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
-    }
+    return c.json({ message: 'Booking accepted successfully', booking: { id: bookingId, tripId, status: 'accepted', acceptedAt: new Date().toISOString() } });
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    logger.error('Accept booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Booking acceptance failed' } }, 500);
   }
-
-  return c.json({ message: 'Booking accepted successfully', booking: { id: bookingId, tripId, status: 'accepted', acceptedAt: new Date().toISOString() } });
 });
 
 // ---------------------------------------------------------------------------
@@ -780,9 +794,14 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
   let body: unknown = {};
   try { body = await c.req.json(); } catch { /* empty body is OK */ }
 
-  const db = getDB(c);
-  if (db) {
-    try {
+  const db = getDBOptional(c);
+  if (!db) {
+    logger.error('Booking rejection denied because DB is unavailable', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+  try {
       const trip = await db
         .prepare('SELECT id, driver_id FROM trips WHERE id = ?')
         .bind(tripId)
@@ -866,12 +885,11 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
           logger.warn('Failed to send rejection notification', { error: err instanceof Error ? err.message : String(err) });
         }
       }
-    } catch (err: unknown) {
-      const parsedError = parseError(err);
-      logger.error('Reject booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
-    }
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    logger.error('Reject booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Booking rejection failed' } }, 500);
   }
-
   return c.json({ message: 'Booking rejected', booking: { id: bookingId, tripId, status: 'rejected', rejectedAt: new Date().toISOString() } });
 });
 
@@ -889,9 +907,14 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
   let body: unknown = {};
   try { body = await c.req.json(); } catch { body = {}; }
 
-  const db = getDB(c);
-  if (db) {
-    try {
+  const db = getDBOptional(c);
+  if (!db) {
+    logger.error('Trip cancellation denied because DB is unavailable', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+  try {
       const trip = await db
         .prepare('SELECT id, driver_id, status FROM trips WHERE id = ?')
         .bind(tripId)
@@ -990,12 +1013,11 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
           logger.warn('Failed to send cancellation notifications', { error: err instanceof Error ? err.message : String(err) });
         }
       }
-    } catch (err: unknown) {
-      const parsedError = parseError(err);
-      logger.error('Cancel trip error', err instanceof Error ? err : undefined, { error: parsedError.message });
-    }
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    logger.error('Cancel trip error', err instanceof Error ? err : undefined, { error: parsedError.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Trip cancellation failed' } }, 500);
   }
-
   return c.json({ message: 'Trip cancelled successfully', trip: { id: tripId, status: 'cancelled', cancelledAt: new Date().toISOString() } });
 });
 
@@ -1019,9 +1041,14 @@ tripRoutes.post('/:tripId/rate', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Comment must be < 500 chars' } }, 400);
   }
 
-  const db = getDB(c);
-  if (db) {
-    try {
+  const db = getDBOptional(c);
+  if (!db) {
+    logger.error('Trip rating denied because DB is unavailable', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+  try {
       const participant = await db
         .prepare('SELECT id, user_id, status FROM trip_participants WHERE trip_id = ? AND user_id = ?')
         .bind(tripId, user.id)
@@ -1037,12 +1064,11 @@ tripRoutes.post('/:tripId/rate', async (c) => {
         .prepare('UPDATE trip_participants SET rating = ?, review_encrypted = ? WHERE trip_id = ? AND user_id = ?')
         .bind(rating, comment || null, tripId, user.id)
         .run();
-    } catch (err: unknown) {
-      const parsedError = parseError(err);
-      logger.error('Rate trip error', err instanceof Error ? err : undefined, { error: parsedError.message });
-    }
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    logger.error('Rate trip error', err instanceof Error ? err : undefined, { error: parsedError.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Trip rating failed' } }, 500);
   }
-
   return c.json({ message: 'Rating submitted successfully', rating: { tripId, userId: user.id, rating, comment: comment || null, createdAt: new Date().toISOString() } });
 });
 

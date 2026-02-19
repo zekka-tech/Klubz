@@ -289,6 +289,87 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.message).toContain('MFA verification is not yet implemented');
   });
 
+  test('trip booking rejects driver booking their own trip', async () => {
+    const token = await authToken(10, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, available_seats, status, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, available_seats: 3, status: 'scheduled', driver_id: 10 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/book',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickupLocation: { address: 'Pickup A' },
+          dropoffLocation: { address: 'Dropoff B' },
+          passengers: 1,
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+    expect(body.error?.message).toBe('Drivers cannot book their own trips');
+  });
+
+  test('trip booking returns conflict when trip is not open for booking', async () => {
+    const token = await authToken(20, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, available_seats, status, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, available_seats: 3, status: 'cancelled', driver_id: 10 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/book',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickupLocation: { address: 'Pickup A' },
+          dropoffLocation: { address: 'Dropoff B' },
+          passengers: 1,
+        }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+    expect(body.error?.message).toBe('Trip is not open for booking');
+  });
+
+  test('trip booking fails closed when trip DB is unavailable', async () => {
+    const token = await authToken(20, 'user');
+
+    const res = await app.request(
+      '/api/trips/1/book',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickupLocation: { address: 'Pickup A' },
+          dropoffLocation: { address: 'Dropoff B' },
+          passengers: 1,
+        }),
+      },
+      { ...baseEnv, DB: undefined as unknown as MockDB, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+    expect(body.error?.message).toBe('Trip service unavailable');
+  });
+
   test('trip booking accept rejects non-owner driver', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -465,6 +546,33 @@ describe('Security hardening integration flows', () => {
     expect(secondBody.replay).toBe(true);
     expect(acceptUpdates).toBe(1);
     expect(seatUpdates).toBe(1);
+  });
+
+  test('trip booking accept returns internal error when DB update fails', async () => {
+    const token = await authToken(10, 'user');
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'accepted'") && kind === 'run') {
+        throw new Error('D1_ERROR: statement timeout');
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/bookings/2/accept',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INTERNAL_ERROR');
+    expect(body.error?.message).toBe('Booking acceptance failed');
   });
 
   test('trip booking reject rejects non-owner driver', async () => {
