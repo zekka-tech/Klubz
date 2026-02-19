@@ -403,6 +403,12 @@ Latest entries:
 - `2026-02-19 11:11 UTC` | codex | action | quality-gates | re-ran `npm run verify` (`type-check`, `lint`, `test`, `build`) all passing (187 tests)
 - `2026-02-19 11:11 UTC` | codex | commit | `6db7d5e` | hardened rider-role scoping in booking accept/reject flows and expanded integration guard assertions
 - `2026-02-19 11:11 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-19 11:24 UTC` | codex | action | sse-authz-hardening | required JWT auth on `/api/events`, introduced role-aware event visibility filtering (non-admin users only receive events scoped to their `userId`), and preserved payment event delivery by emitting booking `user_id` context
+- `2026-02-19 11:24 UTC` | codex | action | integration-tests | expanded route authz contracts to enforce unauthenticated denial on `/api/events`
+- `2026-02-19 11:24 UTC` | codex | action | unit-tests | added `tests/unit/eventBus.test.ts` to lock event visibility policy for `user` vs `admin`/`super_admin` roles
+- `2026-02-19 11:24 UTC` | codex | action | quality-gates | re-ran `npm run verify` (`type-check`, `lint`, `test`, `build`) all passing (191 tests)
+- `2026-02-19 11:24 UTC` | codex | commit | `9c0f520` | hardened SSE event auth and user-scoped visibility
+- `2026-02-19 11:24 UTC` | codex | push | `main -> origin/main` | success
 
 ---
 
