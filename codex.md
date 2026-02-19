@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 09:49:26 UTC  
+Last updated: 2026-02-19 10:46:03 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,7 +22,7 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (182/182)
+- `npm test`: PASS (183/183)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS (10 files, 9 unique versions, next `0010`)
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
@@ -120,6 +120,10 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 10:46 UTC` | codex | push | `main -> origin/main` | success (`2b3dde6`)
+- `2026-02-19 10:46 UTC` | codex | commit | `2b3dde6` | fixed trip offer seat-capacity persistence invariant (`total_seats == available_seats`) and added integration contract coverage
+- `2026-02-19 10:46 UTC` | codex | action | quality-gates | ran targeted `tests/integration/security-hardening.test.ts` and full `npm run verify` (`type-check`, `lint`, `test` 183/183, `build`) all passing
+- `2026-02-19 10:45 UTC` | codex | action | trip-offer-seat-capacity-consistency-hardening | fixed trip offer persistence to keep `total_seats` equal to offered `available_seats` and added integration contract coverage for seat-capacity invariants
 - `2026-02-19 09:49 UTC` | codex | push | `main -> origin/main` | success (`26d4d86`)
 - `2026-02-19 09:49 UTC` | codex | commit | `26d4d86` | hardened trip cancellation/account deletion consistency by cancelling rider participant records on trip cancel and scoping account deletion active-trip checks to active rider participation on active trips
 - `2026-02-19 09:49 UTC` | codex | action | quality-gates | ran targeted `tests/integration/security-hardening.test.ts` and full `npm run verify` (`type-check`, `lint`, `test` 182/182, `build`) all passing
