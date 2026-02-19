@@ -11,6 +11,7 @@ import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { getDB } from '../lib/db';
 import { getIP, getUserAgent } from '../lib/http';
+import { getCacheService } from '../lib/cache';
 import { parseQueryInteger } from '../lib/validation';
 
 export const adminRoutes = new Hono<AppEnv>();
@@ -21,6 +22,27 @@ interface CountRow {
 
 interface TotalRow {
   total: number;
+}
+
+interface AdminStatsResponse {
+  totalUsers: number;
+  activeUsers: number;
+  totalTrips: number;
+  completedTrips: number;
+  activeDrivers: number;
+  revenue: {
+    total: number;
+    currency: string;
+  };
+  carbonSaved: {
+    total: number;
+    unit: string;
+  };
+  sla: {
+    uptime: number;
+    avgResponseTime: number;
+  };
+  timestamp: string;
 }
 
 interface AdminUserRow {
@@ -134,6 +156,16 @@ adminRoutes.use('*', authMiddleware(['admin', 'super_admin']));
 // ---------------------------------------------------------------------------
 
 adminRoutes.get('/stats', async (c) => {
+  const cache = getCacheService(c);
+  const cacheKey = 'admin:stats';
+  if (cache) {
+    const cachedStats = await cache.get<AdminStatsResponse>(cacheKey);
+    if (cachedStats) {
+      await writeAdminAudit(c, 'ADMIN_STATS_VIEWED', 'admin_dashboard');
+      return c.json(cachedStats);
+    }
+  }
+
   const db = getDB(c);
 
   try {
@@ -153,9 +185,7 @@ adminRoutes.get('/stats', async (c) => {
     const activeDrivers = (driversRes.results?.[0] as CountRow | undefined)?.count ?? 0;
     const revenue = (carbonRes.results?.[0] as TotalRow | undefined)?.total ?? 0;
 
-    await writeAdminAudit(c, 'ADMIN_STATS_VIEWED', 'admin_dashboard');
-
-    return c.json({
+    const stats: AdminStatsResponse = {
       totalUsers,
       activeUsers,
       totalTrips,
@@ -165,7 +195,15 @@ adminRoutes.get('/stats', async (c) => {
       carbonSaved: { total: (completedTrips as number) * 2.1, unit: 'kg CO2' },
       sla: { uptime: 99.85, avgResponseTime: 145 },
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    if (cache) {
+      await cache.set(cacheKey, stats, 60);
+    }
+
+    await writeAdminAudit(c, 'ADMIN_STATS_VIEWED', 'admin_dashboard');
+
+    return c.json(stats);
   } catch (err: unknown) {
     const parsed = parseError(err);
     logger.error('Admin stats DB error', err instanceof Error ? err : undefined, { error: parsed.message });
