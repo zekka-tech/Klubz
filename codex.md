@@ -398,6 +398,11 @@ Latest entries:
 - `2026-02-18 06:00 UTC` | codex | action | quality-gates | re-ran `type-check`, `lint`, `test`, `build` all passing (108 tests)
 - `2026-02-18 06:00 UTC` | codex | commit | `b9802b2` | hardened matching seat reservation consistency and expanded booking/payment race-path integration contracts
 - `2026-02-18 06:00 UTC` | codex | push | `main -> origin/main` | success
+- `2026-02-19 11:11 UTC` | codex | action | booking-role-hardening | enforced `role='rider'` guards in trip booking accept/reject updates, seat-decrement subqueries, and related booking-detail lookups to prevent non-rider participant transitions
+- `2026-02-19 11:11 UTC` | codex | action | integration-tests | tightened `tests/integration/security-hardening.test.ts` assertions to require rider-role guard presence in accept/reject mutation SQL and accept compensation path
+- `2026-02-19 11:11 UTC` | codex | action | quality-gates | re-ran `npm run verify` (`type-check`, `lint`, `test`, `build`) all passing (187 tests)
+- `2026-02-19 11:11 UTC` | codex | commit | `6db7d5e` | hardened rider-role scoping in booking accept/reject flows and expanded integration guard assertions
+- `2026-02-19 11:11 UTC` | codex | push | `main -> origin/main` | success
 
 ---
 
