@@ -127,7 +127,8 @@ Use this format for every significant action:
 - `2026-02-19 11:50 UTC` | codex | action | admin-stats-cache-hardening | added KV-backed caching to `/admin/stats`, retained `ADMIN_STATS_VIEWED` audit write, and snapshot the SLA/carbon metrics before caching
 - `2026-02-19 11:47 UTC` | codex | action | quality-gates | ran `npm run lint`, `npm run type-check`, and `npm test` (193 tests) after stats cache change
 - `2026-02-19 14:36 UTC` | codex | action | quality-gates | ran `npm run verify` (type-check, lint, test 193, build) to validate the cached admin stats change end-to-end
-Latest entries:
+- Latest entries:
+- `2026-02-19 15:05 UTC` | codex | action | phase1-authz-idempotency-inventory | documented authorization/idempotency coverage and remaining gaps in `docs/PHASE1_AUTHZ_IDEMPOTENCY.md` to complete Phase 1 material risk review
 - `2026-02-19 15:03 UTC` | codex | action | quality-gates | reran `npm run lint`, `npm run type-check`, `npm test` (193) and `npm run build` after migration renumbering and doc updates
 - `2026-02-19 14:53 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (10 files, next 0011) after removing the legacy duplicate migration prefix
 - `2026-02-19 14:52 UTC` | codex | action | migration-number-normalization | renamed `migrations/0003_smart_matching.sql` to `0010_smart_matching.sql`, deleted the legacy duplicate prefix allowance, and updated migration sequencing docs for unique prefixes
