@@ -661,7 +661,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
       }
 
       const bookingUpdate = await db
-        .prepare("UPDATE trip_participants SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP WHERE id = ? AND trip_id = ? AND status = 'requested'")
+        .prepare("UPDATE trip_participants SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP WHERE id = ? AND trip_id = ? AND role = 'rider' AND status = 'requested'")
         .bind(bookingId, tripId)
         .run();
       const bookingRows = getAffectedRows(bookingUpdate);
@@ -676,13 +676,13 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
           SET available_seats = available_seats - (
             SELECT COALESCE(passenger_count, 1)
             FROM trip_participants
-            WHERE id = ? AND trip_id = ?
+            WHERE id = ? AND trip_id = ? AND role = 'rider'
           )
           WHERE id = ?
             AND available_seats >= (
               SELECT COALESCE(passenger_count, 1)
               FROM trip_participants
-              WHERE id = ? AND trip_id = ?
+              WHERE id = ? AND trip_id = ? AND role = 'rider'
             )
         `)
         .bind(bookingId, tripId, tripId, bookingId, tripId)
@@ -691,7 +691,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
       if (seatRows === 0) {
         // Compensate booking transition when seat decrement loses a race.
         await db
-          .prepare("UPDATE trip_participants SET status = 'requested', accepted_at = NULL WHERE id = ? AND trip_id = ? AND status = 'accepted'")
+          .prepare("UPDATE trip_participants SET status = 'requested', accepted_at = NULL WHERE id = ? AND trip_id = ? AND role = 'rider' AND status = 'accepted'")
           .bind(bookingId, tripId)
           .run();
         return c.json({ error: { code: 'CONFLICT', message: 'No seats available' } }, 409);
@@ -711,7 +711,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
             JOIN trips t ON tp.trip_id = t.id
             JOIN users u ON tp.user_id = u.id
             JOIN users d ON t.driver_id = d.id
-            WHERE tp.id = ?
+            WHERE tp.id = ? AND tp.role = 'rider'
           `).bind(bookingId).first<AcceptBookingDetailsRow>();
 
         if (bookingDetails) {
@@ -829,7 +829,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
       }
 
       const rejectUpdate = await db
-        .prepare("UPDATE trip_participants SET status = 'rejected' WHERE id = ? AND trip_id = ? AND status = 'requested'")
+        .prepare("UPDATE trip_participants SET status = 'rejected' WHERE id = ? AND trip_id = ? AND role = 'rider' AND status = 'requested'")
         .bind(bookingId, tripId)
         .run();
       const rejectRows = getAffectedRows(rejectUpdate);
@@ -848,7 +848,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
             FROM trip_participants tp
             JOIN users u ON tp.user_id = u.id
             JOIN trips t ON tp.trip_id = t.id
-            WHERE tp.id = ?
+            WHERE tp.id = ? AND tp.role = 'rider'
           `).bind(bookingId).first<RejectRiderDetailsRow>();
 
         if (riderDetails) {

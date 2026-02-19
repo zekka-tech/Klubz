@@ -584,11 +584,13 @@ describe('Security hardening integration flows', () => {
   test('trip booking accept returns conflict when booking is not pending', async () => {
     const token = await authToken(10, 'user');
     let seatUpdateCalls = 0;
+    let acceptUpdateHasRiderRoleGuard = false;
     const db = new MockDB((query, _params, kind) => {
       if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
         return { id: 1, driver_id: 10 };
       }
       if (query.includes("SET status = 'accepted'") && kind === 'run') {
+        acceptUpdateHasRiderRoleGuard = query.includes("role = 'rider'");
         return { changes: 0 };
       }
       if (query.includes('available_seats = available_seats -') && kind === 'run') {
@@ -612,11 +614,14 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('CONFLICT');
     expect(body.error?.message).toBe('Booking is no longer pending');
     expect(seatUpdateCalls).toBe(0);
+    expect(acceptUpdateHasRiderRoleGuard).toBe(true);
   });
 
   test('trip booking accept rolls back when seat decrement fails', async () => {
     const token = await authToken(10, 'user');
     let compensationCalls = 0;
+    let seatUpdateHasRiderRoleGuard = false;
+    let compensationHasRiderRoleGuard = false;
     const db = new MockDB((query, _params, kind) => {
       if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
         return { id: 1, driver_id: 10 };
@@ -625,10 +630,12 @@ describe('Security hardening integration flows', () => {
         return { changes: 1 };
       }
       if (query.includes('available_seats = available_seats -') && kind === 'run') {
+        seatUpdateHasRiderRoleGuard = query.includes("role = 'rider'");
         return { changes: 0 };
       }
       if (query.includes("SET status = 'requested', accepted_at = NULL") && kind === 'run') {
         compensationCalls += 1;
+        compensationHasRiderRoleGuard = query.includes("role = 'rider'");
         return { changes: 1 };
       }
       return null;
@@ -648,6 +655,8 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('CONFLICT');
     expect(body.error?.message).toBe('No seats available');
     expect(compensationCalls).toBe(1);
+    expect(seatUpdateHasRiderRoleGuard).toBe(true);
+    expect(compensationHasRiderRoleGuard).toBe(true);
   });
 
   test('trip booking accept is idempotent with Idempotency-Key replay', async () => {
@@ -819,11 +828,13 @@ describe('Security hardening integration flows', () => {
 
   test('trip booking reject returns conflict when booking is not pending', async () => {
     const token = await authToken(10, 'user');
+    let rejectUpdateHasRiderRoleGuard = false;
     const db = new MockDB((query, _params, kind) => {
       if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
         return { id: 1, driver_id: 10 };
       }
       if (query.includes("SET status = 'rejected'") && kind === 'run') {
+        rejectUpdateHasRiderRoleGuard = query.includes("role = 'rider'");
         return { changes: 0 };
       }
       return null;
@@ -843,6 +854,7 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('CONFLICT');
     expect(body.error?.message).toBe('Booking is no longer pending');
+    expect(rejectUpdateHasRiderRoleGuard).toBe(true);
   });
 
   test('trip booking reject is idempotent with Idempotency-Key replay', async () => {
