@@ -14,6 +14,7 @@ import { hashPassword, verifyPassword, hashForLookup, isLegacyHash } from '../li
 import { logger } from '../lib/logger';
 import { getDBOptional } from '../lib/db';
 import { getAnonymizedIP, getUserAgent } from '../lib/http';
+import { withRequestContext } from '../lib/observability';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -120,7 +121,7 @@ authRoutes.post('/login', async (c) => {
             .prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             .bind(newHash, user.id)
             .run();
-          logger.info('Migrated legacy PBKDF2 hash to bcrypt', { userId: user.id });
+          logger.info('Migrated legacy PBKDF2 hash to bcrypt', withRequestContext(c, { userId: user.id }));
         } catch { /* best-effort re-hash */ }
       }
 
@@ -172,11 +173,13 @@ authRoutes.post('/login', async (c) => {
     } catch (err: unknown) {
       if (!isTableMissing(err)) {
         logger.error('Login DB error', err instanceof Error ? err : undefined, {
+          ...withRequestContext(c),
           error: err instanceof Error ? err.message : String(err),
         });
         return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Login failed' } }, 500);
       }
       logger.error('Login denied because auth tables are unavailable', err instanceof Error ? err : undefined, {
+        ...withRequestContext(c),
         environment: c.env?.ENVIRONMENT || 'unknown',
       });
       return c.json(
@@ -187,6 +190,7 @@ authRoutes.post('/login', async (c) => {
   }
 
   logger.error('Login denied because DB is unavailable', undefined, {
+    ...withRequestContext(c),
     environment: c.env?.ENVIRONMENT || 'unknown',
   });
   return c.json(
@@ -259,13 +263,17 @@ authRoutes.post('/register', async (c) => {
     } catch (err: unknown) {
       if (!isTableMissing(err)) {
         const message = err instanceof Error ? err.message : String(err);
-        logger.error('Registration DB error', err instanceof Error ? err : undefined, { error: message });
+        logger.error('Registration DB error', err instanceof Error ? err : undefined, {
+          ...withRequestContext(c),
+          error: message,
+        });
         if (message.includes('UNIQUE')) {
           return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Email already registered' } }, 409);
         }
         return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Registration failed' } }, 500);
       }
       logger.error('Registration denied because auth tables are unavailable', err instanceof Error ? err : undefined, {
+        ...withRequestContext(c),
         environment: c.env?.ENVIRONMENT || 'unknown',
       });
       return c.json(
@@ -276,6 +284,7 @@ authRoutes.post('/register', async (c) => {
   }
 
   logger.error('Registration denied because DB is unavailable', undefined, {
+    ...withRequestContext(c),
     environment: c.env?.ENVIRONMENT || 'unknown',
   });
   return c.json(

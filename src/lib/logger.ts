@@ -41,8 +41,16 @@ class Logger {
   private emit(entry: LogEntry) {
     if (!this.shouldLog(entry.level)) return;
 
+    const derivedRequestId = entry.requestId
+      ?? (typeof entry.metadata?.requestId === 'string' ? entry.metadata.requestId : undefined);
+    const metadata = entry.metadata && 'requestId' in entry.metadata
+      ? Object.fromEntries(Object.entries(entry.metadata).filter(([key]) => key !== 'requestId'))
+      : entry.metadata;
+
     const output = JSON.stringify({
       ...entry,
+      requestId: derivedRequestId,
+      metadata,
       service: 'klubz-api',
       version: '3.1.0',
     });
@@ -79,7 +87,10 @@ class Logger {
       error = errorOrMeta;
       mergedMeta = meta;
     } else {
-      mergedMeta = errorOrMeta;
+      mergedMeta = {
+        ...(errorOrMeta ?? {}),
+        ...(meta ?? {}),
+      };
     }
     this.emit({
       level: 'error',
@@ -97,7 +108,10 @@ class Logger {
       error = errorOrMeta;
       mergedMeta = meta;
     } else {
-      mergedMeta = errorOrMeta;
+      mergedMeta = {
+        ...(errorOrMeta ?? {}),
+        ...(meta ?? {}),
+      };
     }
     this.emit({
       level: 'fatal',

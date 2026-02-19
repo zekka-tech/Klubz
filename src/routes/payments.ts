@@ -9,6 +9,7 @@ import { AppError, NotFoundError, ValidationError } from '../lib/errors';
 import { eventBus } from '../lib/eventBus';
 import { createNotification } from '../lib/notificationStore';
 import { getUserNotificationPreferences } from '../lib/userPreferences';
+import { withRequestContext } from '../lib/observability';
 
 export const paymentRoutes = new Hono<AppEnv>();
 
@@ -110,6 +111,7 @@ async function getIdempotentPaymentIntentResponse(c: Context<AppEnv>, key: strin
     return parsed;
   } catch (err: unknown) {
     logger.warn('Failed to read idempotent payment intent response', {
+      ...withRequestContext(c),
       key,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -133,6 +135,7 @@ async function setIdempotentPaymentIntentResponse(c: Context<AppEnv>, key: strin
     `).bind(key, responseJson).run();
   } catch (err: unknown) {
     logger.warn('Failed to persist idempotent payment intent response', {
+      ...withRequestContext(c),
       key,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -157,6 +160,7 @@ async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boole
     return Boolean(existing?.event_id);
   } catch (err: unknown) {
     logger.warn('Webhook replay lookup failed', {
+      ...withRequestContext(c),
       eventId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -182,6 +186,7 @@ async function markEventProcessed(c: Context<AppEnv>, eventId: string, eventType
     `).bind(eventId, eventType).run();
   } catch (err: unknown) {
     logger.warn('Failed to persist webhook replay marker', {
+      ...withRequestContext(c),
       eventId,
       eventType,
       error: err instanceof Error ? err.message : String(err),
@@ -223,6 +228,7 @@ async function writePaymentAudit(
     `).bind(Number.isFinite(parsedUserId) ? parsedUserId : null, action, Number.parseInt(bookingId, 10)).run();
   } catch (err: unknown) {
     logger.warn('Audit log insert failed (non-critical)', {
+      ...withRequestContext(c),
       error: err instanceof Error ? err.message : String(err),
       action,
       bookingId,
@@ -312,6 +318,7 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
       }
     } catch (err: unknown) {
       logger.warn('Failed to retrieve existing pending payment intent; creating a new one', {
+        ...withRequestContext(c),
         bookingId: booking.id,
         paymentIntentId: booking.payment_intent_id,
         error: err instanceof Error ? err.message : String(err),
@@ -362,6 +369,7 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
     }
 
     logger.info('Payment intent created', {
+      ...withRequestContext(c),
       paymentIntentId: paymentIntent.id,
       userId: user.id,
       tripId,
@@ -381,6 +389,7 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
   } catch (err: unknown) {
     const parsed = parseError(err);
     logger.error('Payment intent creation failed', {
+      ...withRequestContext(c),
       error: parsed.message,
       userId: user.id,
       tripId,
@@ -417,7 +426,7 @@ paymentRoutes.post('/webhook', async (c) => {
   }
 
   if (!webhookSecret) {
-    logger.warn('Stripe webhook secret not configured, skipping signature verification');
+    logger.warn('Stripe webhook secret not configured, skipping signature verification', withRequestContext(c));
   }
 
   let event: StripeWebhookEvent;
@@ -429,6 +438,7 @@ paymentRoutes.post('/webhook', async (c) => {
     }
   } catch (err: unknown) {
     logger.error('Webhook signature verification failed', {
+      ...withRequestContext(c),
       error: err instanceof Error ? err.message : String(err),
     });
     throw new ValidationError('Invalid webhook signature');
@@ -440,7 +450,7 @@ paymentRoutes.post('/webhook', async (c) => {
     throw new ValidationError('Missing event id');
   }
   if (await isReplayEvent(c, event.id)) {
-    logger.info('Ignoring replayed Stripe webhook event', { eventId: event.id, eventType: event.type });
+    logger.info('Ignoring replayed Stripe webhook event', withRequestContext(c, { eventId: event.id, eventType: event.type }));
     return c.json({ received: true, replay: true });
   }
 
@@ -453,6 +463,7 @@ paymentRoutes.post('/webhook', async (c) => {
       const metadata = getRequiredMetadata(paymentIntent, ['tripId', 'userId', 'bookingId']);
       if (!metadata) {
         logger.warn('Ignoring Stripe success event with missing metadata', {
+          ...withRequestContext(c),
           eventId: event.id,
           paymentIntentId: paymentIntent.id,
         });
@@ -467,6 +478,7 @@ paymentRoutes.post('/webhook', async (c) => {
           .first<BookingPaymentContextRow>();
         if (!booking) {
           logger.warn('Ignoring payment succeeded event for unknown booking', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
           });
@@ -474,6 +486,7 @@ paymentRoutes.post('/webhook', async (c) => {
         }
         if (!booking.payment_intent_id || booking.payment_intent_id !== paymentIntent.id) {
           logger.warn('Ignoring payment succeeded event with mismatched payment intent', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
             storedPaymentIntentId: booking.payment_intent_id,
@@ -490,6 +503,7 @@ paymentRoutes.post('/webhook', async (c) => {
           || metadataUserId !== booking.user_id
         ) {
           logger.warn('Ignoring payment succeeded event with metadata mismatch against booking context', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
           });
@@ -506,6 +520,7 @@ paymentRoutes.post('/webhook', async (c) => {
         const affectedRows = getAffectedRows(updateResult);
         if (affectedRows === 0) {
           logger.warn('Ignoring payment succeeded transition for non-updatable booking state', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
           });
@@ -513,6 +528,7 @@ paymentRoutes.post('/webhook', async (c) => {
         }
 
         logger.info('Payment succeeded', {
+          ...withRequestContext(c),
           paymentIntentId: paymentIntent.id,
           userId: booking.user_id,
           tripId: booking.trip_id,
@@ -545,6 +561,7 @@ paymentRoutes.post('/webhook', async (c) => {
           }
         } catch (err) {
           logger.warn('Failed to persist payment succeeded notification', {
+            ...withRequestContext(c),
             error: err instanceof Error ? err.message : String(err),
             bookingId,
           });
@@ -552,6 +569,7 @@ paymentRoutes.post('/webhook', async (c) => {
       } catch (err: unknown) {
         const parsed = parseError(err);
         logger.error('Failed to update payment status', {
+          ...withRequestContext(c),
           error: parsed.message,
           bookingId,
           eventId: event.id,
@@ -566,6 +584,7 @@ paymentRoutes.post('/webhook', async (c) => {
       const metadata = getRequiredMetadata(paymentIntent, ['bookingId']);
       if (!metadata) {
         logger.warn('Ignoring Stripe payment_failed event with missing metadata', {
+          ...withRequestContext(c),
           eventId: event.id,
           paymentIntentId: paymentIntent.id,
         });
@@ -580,6 +599,7 @@ paymentRoutes.post('/webhook', async (c) => {
           .first<BookingPaymentContextRow>();
         if (!booking) {
           logger.warn('Ignoring payment failed event for unknown booking', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
           });
@@ -587,6 +607,7 @@ paymentRoutes.post('/webhook', async (c) => {
         }
         if (!booking.payment_intent_id || booking.payment_intent_id !== paymentIntent.id) {
           logger.warn('Ignoring payment failed event with mismatched payment intent', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
             storedPaymentIntentId: booking.payment_intent_id,
@@ -604,6 +625,7 @@ paymentRoutes.post('/webhook', async (c) => {
         const affectedRows = getAffectedRows(updateResult);
         if (affectedRows === 0) {
           logger.warn('Ignoring payment failed transition for non-pending booking state', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
           });
@@ -611,6 +633,7 @@ paymentRoutes.post('/webhook', async (c) => {
         }
 
         logger.warn('Payment failed', {
+          ...withRequestContext(c),
           paymentIntentId: paymentIntent.id,
           bookingId,
           reason: paymentIntent.last_payment_error?.message,
@@ -638,6 +661,7 @@ paymentRoutes.post('/webhook', async (c) => {
           }
         } catch (err) {
           logger.warn('Failed to persist payment failed notification', {
+            ...withRequestContext(c),
             error: err instanceof Error ? err.message : String(err),
             bookingId,
           });
@@ -645,6 +669,7 @@ paymentRoutes.post('/webhook', async (c) => {
       } catch (err: unknown) {
         const parsed = parseError(err);
         logger.error('Failed to update payment status', {
+          ...withRequestContext(c),
           error: parsed.message,
           bookingId,
           eventId: event.id,
@@ -659,6 +684,7 @@ paymentRoutes.post('/webhook', async (c) => {
       const metadata = getRequiredMetadata(paymentIntent, ['bookingId']);
       if (!metadata) {
         logger.warn('Ignoring Stripe canceled event with missing metadata', {
+          ...withRequestContext(c),
           eventId: event.id,
           paymentIntentId: paymentIntent.id,
         });
@@ -673,6 +699,7 @@ paymentRoutes.post('/webhook', async (c) => {
           .first<BookingPaymentContextRow>();
         if (!booking) {
           logger.warn('Ignoring payment canceled event for unknown booking', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
           });
@@ -680,6 +707,7 @@ paymentRoutes.post('/webhook', async (c) => {
         }
         if (!booking.payment_intent_id || booking.payment_intent_id !== paymentIntent.id) {
           logger.warn('Ignoring payment canceled event with mismatched payment intent', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
             storedPaymentIntentId: booking.payment_intent_id,
@@ -697,6 +725,7 @@ paymentRoutes.post('/webhook', async (c) => {
         const affectedRows = getAffectedRows(updateResult);
         if (affectedRows === 0) {
           logger.warn('Ignoring payment canceled transition for non-pending booking state', {
+            ...withRequestContext(c),
             bookingId,
             paymentIntentId: paymentIntent.id,
           });
@@ -704,6 +733,7 @@ paymentRoutes.post('/webhook', async (c) => {
         }
 
         logger.info('Payment canceled', {
+          ...withRequestContext(c),
           paymentIntentId: paymentIntent.id,
           bookingId,
         });
@@ -711,6 +741,7 @@ paymentRoutes.post('/webhook', async (c) => {
       } catch (err: unknown) {
         const parsed = parseError(err);
         logger.error('Failed to update payment status', {
+          ...withRequestContext(c),
           error: parsed.message,
           bookingId,
           eventId: event.id,
@@ -721,7 +752,7 @@ paymentRoutes.post('/webhook', async (c) => {
     }
 
     default:
-      logger.debug('Unhandled webhook event type', { eventType: event.type });
+      logger.debug('Unhandled webhook event type', withRequestContext(c, { eventType: event.type }));
   }
 
   await markEventProcessed(c, event.id, event.type);
