@@ -5,12 +5,12 @@ This guide covers migration policy, execution, verification, and recovery.
 ## 1. Migration Policy
 
 Filename format:
-- `NNNN_description.sql` (e.g. `0007_add_feature_x.sql`)
+- `NNNN_description.sql` (e.g. `0011_add_feature_x.sql`)
 
 Ordering and determinism:
-- Numeric prefixes must be contiguous from `0001`.
-- The project currently allows one legacy duplicate prefix (`0003_*`) for backward compatibility.
-- New migrations must use the next unique version.
+- Numeric prefixes must be contiguous from `0001` and unique.
+- Duplicate prefixes are no longer permitted; renumber any legacy duplicates before introducing new migrations.
+- New migrations must use the next unique version (currently `0011_*`).
 
 Policy check:
 
@@ -23,12 +23,17 @@ npm run db:check-migrations
 - `0001_initial_schema.sql`
 - `0002_sample_data.sql`
 - `0003_add_payment_fields.sql`
-- `0003_smart_matching.sql` (legacy duplicate prefix)
 - `0004_performance_indexes.sql`
 - `0005_notifications.sql`
 - `0006_user_preferences.sql`
+- `0007_webhook_event_replay.sql`
+- `0008_idempotency_records.sql`
+- `0009_add_trip_participant_passenger_count.sql`
+- `0010_smart_matching.sql` (renamed from `0003_smart_matching.sql` to enforce prefix uniqueness)
 
-Expected next unique version: `0007_*`
+Expected next unique version: `0011_*`
+
+Migration order matches the numeric prefixes above, so the renamed smart matching migration now executes after the passenger-count upgrade instead of sharing the `0003` slot.
 
 ## 3. Apply Migrations (Local)
 
@@ -101,4 +106,3 @@ Filename/order violations:
 - `DEPLOYMENT.md`
 - `docs/OPERATIONS_RUNBOOK.md`
 - `codex.md`
-

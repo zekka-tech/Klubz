@@ -5,10 +5,6 @@ import path from 'node:path';
 
 const migrationsDir = path.resolve(process.cwd(), 'migrations');
 
-const knownLegacyDuplicatePrefixes = new Map([
-  ['0003', new Set(['0003_add_payment_fields.sql', '0003_smart_matching.sql'])],
-]);
-
 function fail(message) {
   console.error(`[migration-check] ${message}`);
   process.exit(1);
@@ -45,21 +41,7 @@ for (const entry of parsed) {
 
 for (const [prefix, filesForPrefix] of byPrefix.entries()) {
   if (filesForPrefix.length <= 1) continue;
-
-  const allowed = knownLegacyDuplicatePrefixes.get(prefix);
-  if (!allowed) {
-    fail(`Duplicate migration prefix ${prefix}: ${filesForPrefix.join(', ')}`);
-  }
-
-  for (const file of filesForPrefix) {
-    if (!allowed.has(file)) {
-      fail(`Unexpected duplicate for legacy prefix ${prefix}: ${file}`);
-    }
-  }
-
-  if (allowed.size !== filesForPrefix.length) {
-    fail(`Legacy duplicate prefix ${prefix} does not match expected file set.`);
-  }
+  fail(`Duplicate migration prefix ${prefix}: ${filesForPrefix.join(', ')}`);
 }
 
 const uniqueVersions = [...new Set(parsed.map((m) => m.number))].sort((a, b) => a - b);

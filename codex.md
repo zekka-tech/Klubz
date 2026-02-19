@@ -121,9 +121,25 @@ Functional status:
 Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
-Latest entries:
+- `2026-02-19 15:03 UTC` | codex | action | quality-gates | reran `npm run lint`, `npm run type-check`, `npm test` (193) and `npm run build` after migration renumbering and doc updates
+- `2026-02-19 14:53 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (10 files, next 0011) after removing the legacy duplicate migration prefix
+- `2026-02-19 14:52 UTC` | codex | action | migration-number-normalization | renamed `migrations/0003_smart_matching.sql` to `0010_smart_matching.sql`, deleted the legacy duplicate prefix allowance, and updated migration sequencing docs for unique prefixes
 - `2026-02-19 11:50 UTC` | codex | action | admin-stats-cache-hardening | added KV-backed caching to `/admin/stats`, retained `ADMIN_STATS_VIEWED` audit write, and snapshot the SLA/carbon metrics before caching
 - `2026-02-19 11:47 UTC` | codex | action | quality-gates | ran `npm run lint`, `npm run type-check`, and `npm test` (193 tests) after stats cache change
+- `2026-02-19 14:36 UTC` | codex | action | quality-gates | ran `npm run verify` (type-check, lint, test 193, build) to validate the cached admin stats change end-to-end
+Latest entries:
+- `2026-02-19 15:03 UTC` | codex | action | quality-gates | reran `npm run lint`, `npm run type-check`, `npm test` (193) and `npm run build` after migration renumbering and doc updates
+- `2026-02-19 14:53 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (10 files, next 0011) after removing the legacy duplicate migration prefix
+- `2026-02-19 14:52 UTC` | codex | action | migration-number-normalization | renamed `migrations/0003_smart_matching.sql` to `0010_smart_matching.sql`, deleted the legacy duplicate prefix allowance, and updated migration sequencing docs for unique prefixes
+- `2026-02-19 11:50 UTC` | codex | action | admin-stats-cache-hardening | added KV-backed caching to `/admin/stats`, retained `ADMIN_STATS_VIEWED` audit write, and snapshot the SLA/carbon metrics before caching
+- `2026-02-19 11:47 UTC` | codex | action | quality-gates | ran `npm run lint`, `npm run type-check`, and `npm test` (193 tests) after stats cache change
+- `2026-02-19 14:36 UTC` | codex | action | quality-gates | ran `npm run verify` (type-check, lint, test 193, build) to validate the cached admin stats change end-to-end
+- `2026-02-19 15:03 UTC` | codex | action | quality-gates | reran `npm run lint`, `npm run type-check`, `npm test` (193) and `npm run build` after migration renumbering and doc updates
+- `2026-02-19 14:53 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (10 files, next 0011) after removing the legacy duplicate migration prefix
+- `2026-02-19 14:52 UTC` | codex | action | migration-number-normalization | renamed `migrations/0003_smart_matching.sql` to `0010_smart_matching.sql`, deleted the legacy duplicate prefix allowance, and updated migration sequencing docs for unique prefixes
+- `2026-02-19 11:50 UTC` | codex | action | admin-stats-cache-hardening | added KV-backed caching to `/admin/stats`, retained `ADMIN_STATS_VIEWED` audit write, and snapshot the SLA/carbon metrics before caching
+- `2026-02-19 11:47 UTC` | codex | action | quality-gates | ran `npm run lint`, `npm run type-check`, and `npm test` (193 tests) after stats cache change
+- `2026-02-19 14:36 UTC` | codex | action | quality-gates | ran `npm run verify` (type-check, lint, test 193, build) to validate the cached admin stats change end-to-end
 - `2026-02-19 11:03 UTC` | codex | push | `main -> origin/main` | success (`213a812`)
 - `2026-02-19 11:03 UTC` | codex | commit | `213a812` | decoupled in-app trip notifications from email/SMS provider availability for booking request/accept/reject and trip cancel flows; added integration enforcement coverage
 - `2026-02-19 11:02 UTC` | codex | action | notification-channel-decoupling-hardening | decoupled in-app trip notifications from email/SMS provider availability across booking request/accept/reject and trip cancel flows; provider transports remain conditional while persisted notifications honor user preferences
