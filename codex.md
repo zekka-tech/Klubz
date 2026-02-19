@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 08:48:00 UTC  
+Last updated: 2026-02-19 08:50:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -28,8 +28,8 @@ Quality gate status (latest run):
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree has uncommitted changes (trip route hardening + integration tests)
-- `main` ahead of `origin/main` only after next commit/push
+- Working tree clean (no uncommitted changes)
+- `main` aligned with `origin/main`
 
 ---
 
@@ -120,6 +120,8 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 Latest entries:
+- `2026-02-19 08:50 UTC` | codex | push | `main -> origin/main` | success (`0149f05`)
+- `2026-02-19 08:49 UTC` | codex | commit | `0149f05` | hardened trip write endpoints to fail closed on missing/failed DB operations and expanded integration contracts for booking DB-unavailable/runtime-failure paths
 - `2026-02-19 08:48 UTC` | codex | action | quality-gates | ran `npm run verify` (`type-check`, `lint`, `test` 166/166, `build`) all passing
 - `2026-02-19 08:47 UTC` | codex | action | trip-write-fail-closed-hardening | removed false-success fallbacks in trip write endpoints, enforced DB-unavailable fail-closed `CONFIGURATION_ERROR`, and added integration contracts for DB-unavailable and runtime DB-failure paths
 - `2026-02-19 06:15 UTC` | codex | push | `main -> origin/main` | success (`d41dce9`)
