@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-19 11:03:13 UTC  
+Last updated: 2026-02-20 19:00:00 UTC  
 Current branch: `main`  
 Tracking branch: `origin/main`
 
@@ -22,13 +22,13 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (187/187)
+- `npm test`: PASS (200/200)
 - `npm run build`: PASS
 - `npm run db:check-migrations`: PASS (10 files, 9 unique versions, next `0010`)
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
-- Working tree clean (no uncommitted changes)
+- Working tree has local modifications (reliability tests, payment route adjustment, docs)
 - `main` aligned with `origin/main`
 
 ---
@@ -120,6 +120,14 @@ Functional status:
 ## Action Log
 Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
+
+- `2026-02-20 18:45 UTC` | codex | action | phase2-lifecycle-reliability-tests | exercised every `/api/trips` offer/accept/reject/cancel path under KV failure, ensured DB-ledger idempotency responses surface `IDEMPOTENCY_REPLAY`, and verified the monitoring metrics audit test logs the injected `X-Request-ID`.
+- `2026-02-20 18:48 UTC` | codex | action | phase2-payment-reliability-tests | extended payments coverage with KV/DB outage simulations (intent cache failure, webhook replay ledger fallback, config error guards) and asserted structured logging carries the same request ID as the HTTP response.
+- `2026-02-20 18:53 UTC` | codex | action | docs-phase2-reliability-audit | captured the new lifecycle/payment failure-mode contracts plus the monitoring metrics request-ID reasoning in `docs/PHASE2_RELIABILITY_AUDIT.md`.
+- `2026-02-20 19:00 UTC` | codex | action | quality-gates | reran `npm run type-check`, `npm run lint`, `npm test` (200), and `npm run build` to validate the new reliability surface end-to-end.
+- `2026-02-20 19:15 UTC` | codex | action | phase2-monitoring-metrics-failure | added `BatchFailingDB` to simulate `/api/monitoring/metrics` batch failures, ensured the handler still returns zeroed metrics, and asserted the `Metrics DB error` log emitted via `withRequestContext` keeps the propagated `X-Request-ID`.
+- `2026-02-20 19:17 UTC` | codex | action | docs-phase2-reliability-audit | documented the monitoring metrics failure contract and correlated logging expectations in `docs/PHASE2_RELIABILITY_AUDIT.md`.
+- `2026-02-20 19:25 UTC` | codex | action | quality-gates | reran `npm run type-check`, `npm run lint`, `npm test` (205), and `npm run build` after the admin/matching/metrics reliability updates.
 
 - `2026-02-19 15:03 UTC` | codex | action | quality-gates | reran `npm run lint`, `npm run type-check`, `npm test` (193) and `npm run build` after migration renumbering and doc updates
 - `2026-02-19 14:53 UTC` | codex | action | quality-gates | ran `npm run db:check-migrations` (10 files, next 0011) after removing the legacy duplicate migration prefix

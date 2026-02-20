@@ -11,6 +11,7 @@ import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { eventBus } from '../lib/eventBus';
+import { withRequestContext } from '../lib/observability';
 import { getDB, getDBOptional } from '../lib/db';
 import { matchRiderToDrivers } from '../lib/matching/engine';
 import type { RiderRequest, DriverTrip } from '../lib/matching/types';
@@ -174,16 +175,43 @@ function getIdempotencyKey(c: Context<AppEnv>, userId: number, scope: string): s
   return `idempotency:${scope}:${userId}:${requestKey}`;
 }
 
-async function isIdempotentReplay(c: Context<AppEnv>, key: string): Promise<boolean> {
+interface IdempotencyCheckResult {
+  replay: boolean;
+  viaDb: boolean;
+}
+
+async function isIdempotentReplay(c: Context<AppEnv>, key: string): Promise<IdempotencyCheckResult> {
   const cache = c.env?.CACHE;
   if (cache) {
-    const existing = await cache.get(key, 'text');
-    if (existing) return true;
-
-    await cache.put(key, 'seen', { expirationTtl: 10 * 60 }); // 10 minutes
-    return false;
+    try {
+      const existing = await cache.get(key, 'text');
+      if (existing) return { replay: true, viaDb: false };
+    } catch (err: unknown) {
+      logger.warn('Idempotency cache read failed, falling back to DB', {
+        ...withRequestContext(c, { key }),
+        error: err instanceof Error ? err.message : String(err),
+      });
+      const replay = await persistIdempotencyRecord(c, key);
+      return { replay, viaDb: true };
+    }
+    try {
+      await cache.put(key, 'seen', { expirationTtl: 10 * 60 }); // 10 minutes
+    } catch (err: unknown) {
+      logger.warn('Idempotency cache write failed, invoking DB fallback', {
+        ...withRequestContext(c, { key }),
+        error: err instanceof Error ? err.message : String(err),
+      });
+      const replay = await persistIdempotencyRecord(c, key);
+      return { replay, viaDb: true };
+    }
+    return { replay: false, viaDb: false };
   }
 
+  const replay = await persistIdempotencyRecord(c, key);
+  return { replay, viaDb: true };
+}
+
+async function persistIdempotencyRecord(c: Context<AppEnv>, key: string): Promise<boolean> {
   const db = c.env?.DB;
   if (!db) return false;
 
@@ -193,10 +221,14 @@ async function isIdempotentReplay(c: Context<AppEnv>, key: string): Promise<bool
       VALUES (?, CURRENT_TIMESTAMP)
     `).bind(key).run();
     const changes = ((result.meta ?? {}) as IdempotencyInsertResult).changes;
+    logger.debug('Idempotency DB result', {
+      ...withRequestContext(c, { key }),
+      changes,
+    });
     return changes === 0;
   } catch (err: unknown) {
-    logger.warn('Idempotency replay check failed', {
-      key,
+    logger.warn('Idempotency replay check failed (DB fallback)', {
+      ...withRequestContext(c, { key }),
       error: err instanceof Error ? err.message : String(err),
     });
     return false;
@@ -408,13 +440,16 @@ tripRoutes.post('/:tripId/book', async (c) => {
 
   const { pickupLocation, dropoffLocation, passengers } = parsedBody.data;
   const idempotencyKey = getIdempotencyKey(c, user.id, `trip-book:${tripId}`);
-  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
-    return c.json({
-      error: {
-        code: 'IDEMPOTENCY_REPLAY',
-        message: 'Duplicate booking request detected. Original request already processed.',
-      }
-    }, 409);
+  if (idempotencyKey) {
+    const { replay } = await isIdempotentReplay(c, idempotencyKey);
+    if (replay) {
+      return c.json({
+        error: {
+          code: 'IDEMPOTENCY_REPLAY',
+          message: 'Duplicate booking request detected. Original request already processed.',
+        }
+      }, 409);
+    }
   }
   const db = getDBOptional(c);
   if (!db) {
@@ -553,13 +588,20 @@ tripRoutes.post('/offer', async (c) => {
   }
   const { pickupLocation, dropoffLocation, scheduledTime, availableSeats, price, vehicleInfo, notes } = parsed.data;
   const idempotencyKey = getIdempotencyKey(c, user.id, 'trip-offer');
-  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
-    return c.json({
-      error: {
-        code: 'IDEMPOTENCY_REPLAY',
-        message: 'Duplicate trip offer request detected. Original request already processed.',
+  if (idempotencyKey) {
+    const { replay, viaDb } = await isIdempotentReplay(c, idempotencyKey);
+    if (replay) {
+      if (viaDb) {
+        return c.json({
+          error: {
+            code: 'IDEMPOTENCY_REPLAY',
+            message: 'Duplicate trip offer request detected. Original request already processed.',
+          },
+          replay: true,
+        }, 409);
       }
-    }, 409);
+      return c.json({ message: 'Duplicate request ignored', replay: true });
+    }
   }
 
   if (new Date(scheduledTime).getTime() <= Date.now()) {
@@ -639,8 +681,20 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
   const tripId = c.req.param('tripId');
   const bookingId = c.req.param('bookingId');
   const idempotencyKey = getIdempotencyKey(c, user.id, `trip-accept:${tripId}:${bookingId}`);
-  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
-    return c.json({ message: 'Duplicate request ignored', replay: true });
+  if (idempotencyKey) {
+    const { replay, viaDb } = await isIdempotentReplay(c, idempotencyKey);
+    if (replay) {
+      if (viaDb) {
+        return c.json({
+          error: {
+            code: 'IDEMPOTENCY_REPLAY',
+            message: 'Duplicate booking acceptance detected. Original request already processed.',
+          },
+          replay: true,
+        }, 409);
+      }
+      return c.json({ message: 'Duplicate request ignored', replay: true });
+    }
   }
 
   const db = getDBOptional(c);
@@ -801,8 +855,20 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
   const tripId = c.req.param('tripId');
   const bookingId = c.req.param('bookingId');
   const idempotencyKey = getIdempotencyKey(c, user.id, `trip-reject:${tripId}:${bookingId}`);
-  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
-    return c.json({ message: 'Duplicate request ignored', replay: true });
+  if (idempotencyKey) {
+    const { replay, viaDb } = await isIdempotentReplay(c, idempotencyKey);
+    if (replay) {
+      if (viaDb) {
+        return c.json({
+          error: {
+            code: 'IDEMPOTENCY_REPLAY',
+            message: 'Duplicate booking rejection detected. Original request already processed.',
+          },
+          replay: true,
+        }, 409);
+      }
+      return c.json({ message: 'Duplicate request ignored', replay: true });
+    }
   }
   let body: unknown = {};
   try { body = await c.req.json(); } catch { body = {}; /* empty body is OK */ }
@@ -916,8 +982,20 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
   const user = c.get('user') as AuthUser;
   const tripId = c.req.param('tripId');
   const idempotencyKey = getIdempotencyKey(c, user.id, `trip-cancel:${tripId}`);
-  if (idempotencyKey && await isIdempotentReplay(c, idempotencyKey)) {
-    return c.json({ message: 'Duplicate request ignored', replay: true });
+  if (idempotencyKey) {
+    const { replay, viaDb } = await isIdempotentReplay(c, idempotencyKey);
+    if (replay) {
+      if (viaDb) {
+        return c.json({
+          error: {
+            code: 'IDEMPOTENCY_REPLAY',
+            message: 'Duplicate trip cancel request detected. Original request already processed.',
+          },
+          replay: true,
+        }, 409);
+      }
+      return c.json({ message: 'Duplicate request ignored', replay: true });
+    }
   }
   let body: unknown = {};
   try { body = await c.req.json(); } catch { body = {}; }

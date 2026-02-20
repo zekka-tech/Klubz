@@ -6,13 +6,15 @@
 
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import type { AppEnv, AuthUser } from '../types';
+import type { AppEnv, AuthUser, D1Database } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { getDB } from '../lib/db';
 import { getIP, getUserAgent } from '../lib/http';
 import { getCacheService } from '../lib/cache';
 import { parseQueryInteger } from '../lib/validation';
+import { withRequestContext } from '../lib/observability';
+import { AppError } from '../lib/errors';
 
 export const adminRoutes = new Hono<AppEnv>();
 
@@ -166,7 +168,17 @@ adminRoutes.get('/stats', async (c) => {
     }
   }
 
-  const db = getDB(c);
+  let db: D1Database;
+  try {
+    db = getDB(c);
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Admin stats denied because DB is unavailable', err instanceof Error ? err : undefined, {
+      ...withRequestContext(c),
+      error: parsed.message,
+    });
+    throw new AppError('Admin stats unavailable', 'CONFIGURATION_ERROR', 500);
+  }
 
   try {
     const [usersRes, activeUsersRes, tripsRes, completedRes, driversRes, carbonRes] = await db.batch([
@@ -206,7 +218,10 @@ adminRoutes.get('/stats', async (c) => {
     return c.json(stats);
   } catch (err: unknown) {
     const parsed = parseError(err);
-    logger.error('Admin stats DB error', err instanceof Error ? err : undefined, { error: parsed.message });
+    logger.error('Admin stats DB error', err instanceof Error ? err : undefined, {
+      ...withRequestContext(c),
+      error: parsed.message,
+    });
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load admin statistics' } }, 500);
   }
 });

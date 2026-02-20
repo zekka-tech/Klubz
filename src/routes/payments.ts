@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import Stripe from 'stripe';
 import type { Context } from 'hono';
 import { authMiddleware } from '../middleware/auth';
-import type { AppEnv, AuthUser } from '../types';
+import type { AppEnv, AuthUser, D1Database } from '../types';
 import { getDB } from '../lib/db';
 import { logger } from '../lib/logger';
 import { AppError, NotFoundError, ValidationError } from '../lib/errors';
@@ -92,11 +92,18 @@ function getIdempotencyKey(c: Context<AppEnv>, userId: number, tripId: number | 
 async function getIdempotentPaymentIntentResponse(c: Context<AppEnv>, key: string): Promise<PaymentIntentResponse | null> {
   const cache = c.env?.CACHE;
   if (cache) {
-    const cached = await cache.get(key, 'json');
-    if (!cached || typeof cached !== 'object') return null;
-    const response = cached as PaymentIntentResponse;
-    if (!response.paymentIntentId || typeof response.paymentIntentId !== 'string') return null;
-    return response;
+    try {
+      const cached = await cache.get(key, 'json');
+      if (!cached || typeof cached !== 'object') return null;
+      const response = cached as PaymentIntentResponse;
+      if (!response.paymentIntentId || typeof response.paymentIntentId !== 'string') return null;
+      return response;
+    } catch (err: unknown) {
+      logger.warn('Payment intent cache read failed', {
+        ...withRequestContext(c, { key }),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   const db = c.env?.DB;
@@ -123,7 +130,14 @@ async function setIdempotentPaymentIntentResponse(c: Context<AppEnv>, key: strin
   const cache = c.env?.CACHE;
   const responseJson = JSON.stringify(response);
   if (cache) {
-    await cache.put(key, responseJson, { expirationTtl: 10 * 60 });
+    try {
+      await cache.put(key, responseJson, { expirationTtl: 10 * 60 });
+    } catch (err: unknown) {
+      logger.warn('Payment intent cache write failed', {
+        ...withRequestContext(c, { key }),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   const db = c.env?.DB;
@@ -146,8 +160,15 @@ async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boole
   const cache = c.env?.CACHE;
   if (cache) {
     const key = `stripe:webhook:event:${eventId}`;
-    const existing = await cache.get(key, 'text');
-    if (existing) return true;
+    try {
+      const existing = await cache.get(key, 'text');
+      if (existing) return true;
+    } catch (err: unknown) {
+      logger.warn('Webhook replay cache read failed', {
+        ...withRequestContext(c, { eventId }),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   const db = c.env?.DB;
@@ -168,12 +189,34 @@ async function isReplayEvent(c: Context<AppEnv>, eventId: string): Promise<boole
   }
 }
 
+async function logReplayLookup(c: Context<AppEnv>, db: D1Database, event: StripeWebhookEvent): Promise<void> {
+  const metadata = event.data.object.metadata ?? {};
+  if (!metadata.bookingId) return;
+  try {
+    await db.prepare('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?')
+      .bind(metadata.bookingId)
+      .first<BookingPaymentContextRow>();
+  } catch (err: unknown) {
+    logger.warn('Failed to load booking context for replayed webhook', {
+      ...withRequestContext(c, { eventId: event.id, bookingId: metadata.bookingId }),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function markEventProcessed(c: Context<AppEnv>, eventId: string, eventType: string): Promise<void> {
   const cache = c.env?.CACHE;
   if (cache) {
     const key = `stripe:webhook:event:${eventId}`;
-    // Keep event IDs for 7 days to prevent replay processing.
-    await cache.put(key, 'processed', { expirationTtl: 7 * 24 * 60 * 60 });
+    try {
+      // Keep event IDs for 7 days to prevent replay processing.
+      await cache.put(key, 'processed', { expirationTtl: 7 * 24 * 60 * 60 });
+    } catch (err: unknown) {
+      logger.warn('Webhook replay cache write failed', {
+        ...withRequestContext(c, { eventId, eventType }),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   const db = c.env?.DB;
@@ -217,7 +260,17 @@ async function writePaymentAudit(
   bookingId: string,
   userId?: string,
 ): Promise<void> {
-  const db = getDB(c);
+  let db;
+  try {
+    db = getDB(c);
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Stripe webhook denied because DB is unavailable', {
+      ...withRequestContext(c),
+      error: parsed.message,
+    });
+    throw new AppError('Stripe processing unavailable', 'CONFIGURATION_ERROR', 500);
+  }
   if (!db) return;
 
   const parsedUserId = userId ? Number.parseInt(userId, 10) : Number.NaN;
@@ -277,7 +330,12 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
     }
   }
 
-  const db = getDB(c);
+  let db;
+  try {
+    db = getDB(c);
+  } catch (err: unknown) {
+    throw new AppError('Payment database unavailable', 'CONFIGURATION_ERROR', 500);
+  }
 
   // Verify trip exists and user has an accepted booking
   const booking = await db.prepare(`
@@ -444,12 +502,23 @@ paymentRoutes.post('/webhook', async (c) => {
     throw new ValidationError('Invalid webhook signature');
   }
 
-  const db = getDB(c);
+  let db;
+  try {
+    db = getDB(c);
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Stripe webhook denied because DB is unavailable', {
+      ...withRequestContext(c),
+      error: parsed.message,
+    });
+    throw new AppError('Stripe processing unavailable', 'CONFIGURATION_ERROR', 500);
+  }
 
   if (!event.id) {
     throw new ValidationError('Missing event id');
   }
   if (await isReplayEvent(c, event.id)) {
+    await logReplayLookup(c, db, event);
     logger.info('Ignoring replayed Stripe webhook event', withRequestContext(c, { eventId: event.id, eventType: event.type }));
     return c.json({ received: true, replay: true });
   }

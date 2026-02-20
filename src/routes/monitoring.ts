@@ -11,6 +11,7 @@ import { authMiddleware } from '../middleware/auth';
 import { logger } from '../lib/logger';
 import { getDB } from '../lib/db';
 import { getIP, getUserAgent } from '../lib/http';
+import { withRequestContext } from '../lib/observability';
 
 export const monitoringRoutes = new Hono<AppEnv>();
 
@@ -150,7 +151,7 @@ monitoringRoutes.get('/metrics', authMiddleware(['admin', 'super_admin']), async
       await writeMonitoringAudit(c, 'ADMIN_MONITORING_METRICS_VIEWED');
     } catch (err: unknown) {
       const parsed = parseError(err);
-      logger.error('Metrics DB error', err instanceof Error ? err : undefined, { error: parsed.message });
+      logger.error('Metrics DB error', err instanceof Error ? err : undefined, withRequestContext(c, { error: parsed.message }));
     }
   }
 

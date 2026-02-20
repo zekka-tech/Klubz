@@ -59,6 +59,12 @@ class MockDB {
   }
 }
 
+class BatchFailingDB extends MockDB {
+  async batch<T = unknown>(_statements: Array<{ first?: () => Promise<T | null>; all?: () => Promise<{ results?: T[] }> }>): Promise<{ success: boolean; results?: T[] }[]> {
+    throw new Error('Metrics DB failure');
+  }
+}
+
 class MockKV {
   private store = new Map<string, string>();
 
@@ -83,6 +89,20 @@ class MockKV {
       list_complete: true,
       cursor: '',
     };
+  }
+}
+
+class FailingKV extends MockKV {
+  async get() {
+    throw new Error('KV unavailable');
+  }
+
+  async put() {
+    throw new Error('KV unavailable');
+  }
+
+  async delete() {
+    throw new Error('KV unavailable');
   }
 }
 
@@ -387,6 +407,53 @@ describe('Security hardening integration flows', () => {
     expect(res.status).toBe(200);
     expect(insertedAvailableSeats).toBe(4);
     expect(insertedTotalSeats).toBe(4);
+  });
+
+  test('trip offer is idempotent without CACHE using durable DB idempotency records', async () => {
+    const token = await authToken(12, 'user');
+    let idempotencyInsertCalls = 0;
+    let idempotencyInserted = false;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('INSERT OR IGNORE INTO idempotency_records') && kind === 'run') {
+        idempotencyInsertCalls += 1;
+        if (idempotencyInserted) return { changes: 0 };
+        idempotencyInserted = true;
+        return { changes: 1 };
+      }
+      if (query.includes('INSERT INTO trips') && kind === 'run') {
+        return { meta: { last_row_id: 101 } };
+      }
+      if (query.includes('INSERT INTO trip_participants') && kind === 'run') {
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'offer-db-dup-1',
+    };
+    const env = { ...baseEnv, DB: db, CACHE: new FailingKV() };
+    const body = JSON.stringify({
+      pickupLocation: { address: 'Point A' },
+      dropoffLocation: { address: 'Point B' },
+      scheduledTime: new Date(Date.now() + 60000).toISOString(),
+      availableSeats: 2,
+      price: 40,
+      notes: 'db failover test',
+      vehicleInfo: { make: 'Honda', model: 'Civic', licensePlate: 'DB-123' },
+    });
+
+    const first = await app.request('/api/trips/offer', { method: 'POST', headers, body }, env);
+    expect(first.status).toBe(200);
+
+    const second = await app.request('/api/trips/offer', { method: 'POST', headers, body }, env);
+    expect(second.status).toBe(409);
+    const secondBody = (await second.json()) as { error?: { code?: string }; replay?: boolean };
+    expect(secondBody.error?.code).toBe('IDEMPOTENCY_REPLAY');
+    expect(secondBody.replay).toBe(true);
+    expect(idempotencyInsertCalls).toBe(2);
   });
 
   test('trip booking rejects driver booking their own trip', async () => {
@@ -726,20 +793,13 @@ describe('Security hardening integration flows', () => {
     });
 
     const headers = { Authorization: `Bearer ${token}`, 'Idempotency-Key': 'accept-db-dup-1' };
-    const first = await app.request(
-      '/api/trips/1/bookings/2/accept',
-      { method: 'POST', headers },
-      { ...baseEnv, DB: db, CACHE: undefined as unknown as MockKV },
-    );
+    const env = { ...baseEnv, DB: db, CACHE: new FailingKV() };
+    const first = await app.request('/api/trips/1/bookings/2/accept', { method: 'POST', headers }, env);
     expect(first.status).toBe(200);
 
-    const second = await app.request(
-      '/api/trips/1/bookings/2/accept',
-      { method: 'POST', headers },
-      { ...baseEnv, DB: db, CACHE: undefined as unknown as MockKV },
-    );
-    expect(second.status).toBe(200);
-    const secondBody = (await second.json()) as { replay?: boolean };
+    const second = await app.request('/api/trips/1/bookings/2/accept', { method: 'POST', headers }, env);
+    expect(second.status).toBe(409);
+    const secondBody = (await second.json()) as { error?: { code?: string }; replay?: boolean };
     expect(secondBody.replay).toBe(true);
     expect(acceptUpdates).toBe(1);
     expect(seatUpdates).toBe(1);
@@ -893,6 +953,60 @@ describe('Security hardening integration flows', () => {
     const secondBody = (await second.json()) as { replay?: boolean };
     expect(secondBody.replay).toBe(true);
     expect(rejectUpdates).toBe(1);
+  });
+
+  test('trip booking reject is idempotent without CACHE using durable DB idempotency records', async () => {
+    const token = await authToken(10, 'user');
+    let idempotencyInserted = false;
+    let idempotencyInsertCalls = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('INSERT OR IGNORE INTO idempotency_records') && kind === 'run') {
+        idempotencyInsertCalls += 1;
+        if (idempotencyInserted) return { changes: 0 };
+        idempotencyInserted = true;
+        return { changes: 1 };
+      }
+      if (query.includes('SELECT id, driver_id FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 10 };
+      }
+      if (query.includes("SET status = 'rejected'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'reject-db-dup-1',
+    };
+    const env = { ...baseEnv, DB: db, CACHE: new FailingKV() };
+
+    const first = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason: 'No seats left' }),
+      },
+      env,
+    );
+    expect(first.status).toBe(200);
+
+    const second = await app.request(
+      '/api/trips/1/bookings/2/reject',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason: 'No seats left' }),
+      },
+      env,
+    );
+    expect(second.status).toBe(409);
+    const secondBody = (await second.json()) as { error?: { code?: string }; replay?: boolean };
+    expect(secondBody.error?.code).toBe('IDEMPOTENCY_REPLAY');
+    expect(secondBody.replay).toBe(true);
+    expect(idempotencyInsertCalls).toBe(2);
   });
 
   test('trip booking reject fails closed when trip DB is unavailable', async () => {
@@ -1069,6 +1183,55 @@ describe('Security hardening integration flows', () => {
     const secondBody = (await second.json()) as { replay?: boolean };
     expect(secondBody.replay).toBe(true);
     expect(cancelUpdates).toBe(1);
+  });
+
+  test('trip cancel is idempotent without CACHE using durable DB idempotency records', async () => {
+    const token = await authToken(12, 'user');
+    let idempotencyInserted = false;
+    let idempotencyInsertCalls = 0;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('INSERT OR IGNORE INTO idempotency_records') && kind === 'run') {
+        idempotencyInsertCalls += 1;
+        if (idempotencyInserted) return { changes: 0 };
+        idempotencyInserted = true;
+        return { changes: 1 };
+      }
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 12, status: 'scheduled' };
+      }
+      if (query.includes("UPDATE trips SET status = 'cancelled'") && kind === 'run') {
+        return { changes: 1 };
+      }
+      if (query.includes('UPDATE trip_participants') && kind === 'run') {
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'cancel-db-dup-1',
+    };
+    const env = { ...baseEnv, DB: db, CACHE: new FailingKV() };
+
+    const first = await app.request(
+      '/api/trips/1/cancel',
+      { method: 'POST', headers, body: JSON.stringify({ reason: 'Ops issue' }) },
+      env,
+    );
+    expect(first.status).toBe(200);
+
+    const second = await app.request(
+      '/api/trips/1/cancel',
+      { method: 'POST', headers, body: JSON.stringify({ reason: 'Ops issue' }) },
+      env,
+    );
+    expect(second.status).toBe(409);
+    const secondBody = (await second.json()) as { error?: { code?: string }; replay?: boolean };
+    expect(secondBody.error?.code).toBe('IDEMPOTENCY_REPLAY');
+    expect(secondBody.replay).toBe(true);
+    expect(idempotencyInsertCalls).toBe(2);
   });
 
   test('trip cancel fails closed when trip DB is unavailable', async () => {
@@ -1470,6 +1633,69 @@ describe('Security hardening integration flows', () => {
     expect(replayInsertCalls).toBe(1);
   });
 
+  test('webhook replay dedupes using DB ledger when CACHE fails and logs request id', async () => {
+    let replayInserted = false;
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT event_id FROM processed_webhook_events WHERE event_id = ?') && kind === 'first') {
+        return replayInserted ? { event_id: 'evt_kv_fail_1' } : null;
+      }
+      if (query.includes('INSERT OR IGNORE INTO processed_webhook_events') && kind === 'run') {
+        replayInserted = true;
+        return { changes: 1 };
+      }
+      if (query.includes('SELECT user_id, trip_id, payment_intent_id FROM trip_participants WHERE id = ?') && kind === 'first') {
+        return null;
+      }
+      return null;
+    });
+
+    const event = {
+      id: 'evt_kv_fail_1',
+      type: 'payment_intent.canceled',
+      data: { object: { id: 'pi_kv_fail_1', amount: 1200, metadata: { bookingId: '77' } } },
+    };
+
+    const cache = new FailingKV();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const first = await app.request(
+        '/api/payments/webhook',
+        {
+          method: 'POST',
+          headers: { 'stripe-signature': 'dummy' },
+          body: JSON.stringify(event),
+        },
+        { ...baseEnv, DB: db, CACHE: cache },
+      );
+      expect(first.status).toBe(200);
+
+      const second = await app.request(
+        '/api/payments/webhook',
+        {
+          method: 'POST',
+          headers: { 'stripe-signature': 'dummy' },
+          body: JSON.stringify(event),
+        },
+        { ...baseEnv, DB: db, CACHE: cache },
+      );
+      expect(second.status).toBe(200);
+      const body = (await second.json()) as { replay?: boolean };
+      expect(body.replay).toBe(true);
+
+      const requestId = second.headers.get('X-Request-ID');
+      expect(requestId).toBeTruthy();
+      const logs = logSpy.mock.calls.map((call) => String(call[0] ?? ''));
+      const replayLog = logs.find((line) =>
+        line.includes('Ignoring replayed Stripe webhook event')
+        && line.includes('"eventId":"evt_kv_fail_1"')
+        && line.includes(`"requestId":"${requestId}"`)
+      );
+      expect(replayLog).toBeTruthy();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   test('webhook event retries after transient processing failure with same event id', async () => {
     let attempts = 0;
     const db = new MockDB((query, _params, kind) => {
@@ -1740,6 +1966,78 @@ describe('Security hardening integration flows', () => {
     expect(dbCalls).toBe(1);
   });
 
+  test('payment intent replays durable DB response when CACHE fails and logs request id', async () => {
+    const token = await authToken(44, 'user');
+    const idempotencyKey = 'pi-kv-fail-1';
+    const cache = new FailingKV();
+    let dbCalls = 0;
+    const db = new MockDB((query, _params, kind) => {
+      dbCalls += 1;
+      if (query.includes('SELECT response_json FROM idempotency_records WHERE idempotency_key = ?') && kind === 'first') {
+        return {
+          response_json: JSON.stringify({
+            clientSecret: 'cs_test_db_existing',
+            paymentIntentId: 'pi_db_existing_1',
+            amount: 120,
+            currency: 'zar',
+          }),
+        };
+      }
+      return null;
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await app.request(
+        '/api/payments/intent',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'Idempotency-Key': idempotencyKey,
+          },
+          body: JSON.stringify({ tripId: 10, amount: 120 }),
+        },
+        { ...baseEnv, DB: db, CACHE: cache },
+      );
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        replay?: boolean;
+        paymentIntentId?: string;
+        clientSecret?: string;
+        amount?: number;
+        currency?: string;
+      };
+      expect(body.replay).toBe(true);
+      expect(body.paymentIntentId).toBe('pi_db_existing_1');
+      expect(body.clientSecret).toBe('cs_test_db_existing');
+      expect(body.amount).toBe(120);
+      expect(body.currency).toBe('zar');
+      expect(dbCalls).toBe(1);
+
+      const requestId = res.headers.get('X-Request-ID');
+      expect(requestId).toBeTruthy();
+
+      const warnLines = warnSpy.mock.calls
+        .map((call) => String(call[0] ?? ''))
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { message?: string; requestId?: string };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { message?: string; requestId?: string } => !!entry);
+
+      const cacheWarn = warnLines.find((entry) => entry.message === 'Payment intent cache read failed');
+      expect(cacheWarn?.requestId).toBe(requestId);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test('payment intent rejects amount tampering when it does not match trip fare', async () => {
     const token = await authToken(44, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -1764,6 +2062,96 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.code).toBe('VALIDATION_ERROR');
     expect(body.error?.status).toBe(400);
     expect(body.error?.message).toBe('amount does not match trip fare');
+  });
+
+  test('payment intent logs configuration error when DB is unavailable', async () => {
+    const token = await authToken(44, 'user');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await app.request(
+        '/api/payments/intent',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ tripId: 10, amount: 120 }),
+        },
+        { ...baseEnv, DB: undefined as unknown as MockDB, CACHE: new MockKV() },
+      );
+
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error?: { code?: string; message?: string; requestId?: string } };
+      expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+      expect(body.error?.message).toBe('Payment database unavailable');
+      const requestId = body.error?.requestId;
+      expect(requestId).toBeTruthy();
+
+      const parsedLogs = errorSpy.mock.calls
+        .map((call) => String(call[0] ?? ''))
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { code?: string; error?: string; requestId?: string };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { code?: string; error?: string; requestId?: string } => !!entry);
+
+      const configLog = parsedLogs.find((entry) => entry.code === 'CONFIGURATION_ERROR' && entry.error === 'Payment database unavailable');
+      expect(configLog?.requestId).toBe(requestId);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test('payment webhook logs configuration error when DB is unavailable', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await app.request(
+        '/api/payments/webhook',
+        {
+          method: 'POST',
+          headers: { 'stripe-signature': 'dummy' },
+          body: JSON.stringify({
+            id: 'evt_webhook_cfg_err',
+            type: 'payment_intent.succeeded',
+            data: {
+              object: {
+                id: 'pi_cfg_err',
+                amount: 1200,
+                metadata: { bookingId: '77', tripId: '10', userId: '44' },
+              },
+            },
+          }),
+        },
+        { ...baseEnv, DB: undefined as unknown as MockDB, CACHE: new MockKV() },
+      );
+
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error?: { code?: string; message?: string; requestId?: string } };
+      expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+      expect(body.error?.message).toBe('Stripe processing unavailable');
+      const requestId = body.error?.requestId;
+      expect(requestId).toBeTruthy();
+
+      const parsedLogs = errorSpy.mock.calls
+        .map((call) => String(call[0] ?? ''))
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { code?: string; error?: string; requestId?: string };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { code?: string; error?: string; requestId?: string } => !!entry);
+
+      const configLog = parsedLogs.find((entry) => entry.code === 'CONFIGURATION_ERROR' && entry.error === 'Stripe processing unavailable');
+      expect(configLog?.requestId).toBe(requestId);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test('payment failed webhook does not downgrade already-finalized paid booking', async () => {
@@ -2497,6 +2885,229 @@ describe('Security hardening integration flows', () => {
     expect(secondBody.error?.message).toBe('No seats available on driver trip');
   });
 
+  test('matching confirm fails closed when driver seat reservation DB fails', async () => {
+    const token = await authToken(88, 'user');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const db = new MockDB((query, _params, kind) => {
+        if (query.includes('FROM match_results') && kind === 'first') {
+          return {
+            id: 'match-1',
+            driver_trip_id: 'driver-trip-1',
+            rider_request_id: 'rider-request-1',
+            driver_id: 77,
+            rider_id: 88,
+            status: 'pending',
+          };
+        }
+        if (query.includes('FROM rider_requests') && kind === 'first') {
+          return {
+            id: 'rider-request-1',
+            rider_id: 88,
+            organization_id: null,
+            pickup_lat: -26.2,
+            pickup_lng: 28.0,
+            dropoff_lat: -26.1,
+            dropoff_lng: 28.1,
+            earliest_departure: 1700000000000,
+            latest_departure: 1700003600000,
+            seats_needed: 1,
+            preferences_json: null,
+            status: 'pending',
+            matched_driver_trip_id: null,
+            matched_at: null,
+            created_at: '2026-01-01T00:00:00.000Z',
+            updated_at: '2026-01-01T00:00:00.000Z',
+          };
+        }
+        if (query.includes('FROM driver_trips') && kind === 'first') {
+          return {
+            id: 'driver-trip-1',
+            driver_id: 77,
+            organization_id: null,
+            departure_lat: -26.2,
+            departure_lng: 28.0,
+            destination_lat: -26.1,
+            destination_lng: 28.1,
+            shift_lat: null,
+            shift_lng: null,
+            departure_time: 1700000000000,
+            arrival_time: null,
+            available_seats: 1,
+            total_seats: 4,
+            bbox_min_lat: null,
+            bbox_max_lat: null,
+            bbox_min_lng: null,
+            bbox_max_lng: null,
+            route_polyline_encoded: null,
+            route_distance_km: null,
+            status: 'offered',
+            driver_rating: null,
+            vehicle_json: null,
+            created_at: '2026-01-01T00:00:00.000Z',
+            updated_at: '2026-01-01T00:00:00.000Z',
+          };
+        }
+        if (query.includes('available_seats = available_seats - 1') && kind === 'run') {
+          throw new Error('D1 seat reservation failure');
+        }
+        return null;
+      });
+
+      const res = await app.request(
+        '/api/matching/confirm',
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            matchId: 'match-1',
+            driverTripId: 'driver-trip-1',
+            riderRequestId: 'rider-request-1',
+          }),
+        },
+        { ...baseEnv, DB: db, CACHE: new MockKV() },
+      );
+
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error?: { code?: string; requestId?: string } };
+      expect(body.error?.code).toBe('INTERNAL_ERROR');
+      const requestId = body.error?.requestId;
+      expect(requestId).toBeTruthy();
+
+      const parsedLogs = errorSpy.mock.calls
+        .map((call) => String(call[0] ?? ''))
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { code?: string; requestId?: string };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { code?: string; requestId?: string } => !!entry);
+
+      const internalLog = parsedLogs.find((entry) => entry.code === 'INTERNAL_ERROR' && entry.requestId === requestId);
+      expect(internalLog).toBeTruthy();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test('matching confirm releases reserved seat when confirmation update fails', async () => {
+    const token = await authToken(88, 'user');
+    let releaseCalls = 0;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const db = new MockDB((query, _params, kind) => {
+        if (query.includes('FROM match_results') && kind === 'first') {
+          return {
+            id: 'match-1',
+            driver_trip_id: 'driver-trip-1',
+            rider_request_id: 'rider-request-1',
+            driver_id: 77,
+            rider_id: 88,
+            status: 'pending',
+          };
+        }
+        if (query.includes('FROM rider_requests') && kind === 'first') {
+          return {
+            id: 'rider-request-1',
+            rider_id: 88,
+            organization_id: null,
+            pickup_lat: -26.2,
+            pickup_lng: 28.0,
+            dropoff_lat: -26.1,
+            dropoff_lng: 28.1,
+            earliest_departure: 1700000000000,
+            latest_departure: 1700003600000,
+            seats_needed: 1,
+            preferences_json: null,
+            status: 'pending',
+            matched_driver_trip_id: null,
+            matched_at: null,
+            created_at: '2026-01-01T00:00:00.000Z',
+            updated_at: '2026-01-01T00:00:00.000Z',
+          };
+        }
+        if (query.includes('FROM driver_trips') && kind === 'first') {
+          return {
+            id: 'driver-trip-1',
+            driver_id: 77,
+            organization_id: null,
+            departure_lat: -26.2,
+            departure_lng: 28.0,
+            destination_lat: -26.1,
+            destination_lng: 28.1,
+            shift_lat: null,
+            shift_lng: null,
+            departure_time: 1700000000000,
+            arrival_time: null,
+            available_seats: 1,
+            total_seats: 4,
+            bbox_min_lat: null,
+            bbox_max_lat: null,
+            bbox_min_lng: null,
+            bbox_max_lng: null,
+            route_polyline_encoded: null,
+            route_distance_km: null,
+            status: 'offered',
+            driver_rating: null,
+            vehicle_json: null,
+            created_at: '2026-01-01T00:00:00.000Z',
+            updated_at: '2026-01-01T00:00:00.000Z',
+          };
+        }
+        if (query.includes('available_seats = available_seats - 1') && kind === 'run') {
+          return { changes: 1 };
+        }
+        if (query.includes("SET status = 'confirmed'") && kind === 'run') {
+          throw new Error('D1 confirm update failure');
+        }
+        if (query.includes('UPDATE driver_trips') && query.includes('MIN') && kind === 'run') {
+          releaseCalls += 1;
+          return { changes: 1 };
+        }
+        return null;
+      });
+
+      const res = await app.request(
+        '/api/matching/confirm',
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            matchId: 'match-1',
+            driverTripId: 'driver-trip-1',
+            riderRequestId: 'rider-request-1',
+          }),
+        },
+        { ...baseEnv, DB: db, CACHE: new MockKV() },
+      );
+
+      expect(res.status).toBe(500);
+      expect(releaseCalls).toBe(1);
+      const body = (await res.json()) as { error?: { code?: string; requestId?: string } };
+      expect(body.error?.code).toBe('INTERNAL_ERROR');
+      const requestId = body.error?.requestId;
+      expect(requestId).toBeTruthy();
+
+      const parsedLogs = errorSpy.mock.calls
+        .map((call) => String(call[0] ?? ''))
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { code?: string; requestId?: string };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { code?: string; requestId?: string } => !!entry);
+
+      const internalLog = parsedLogs.find((entry) => entry.code === 'INTERNAL_ERROR' && entry.requestId === requestId);
+      expect(internalLog).toBeTruthy();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test('matching reject endpoint returns conflict when match is not pending', async () => {
     const token = await authToken(77, 'user');
     const db = new MockDB((query, _params, kind) => {
@@ -2527,6 +3138,61 @@ describe('Security hardening integration flows', () => {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(body.error?.code).toBe('CONFLICT');
     expect(body.error?.message).toBe('Match is no longer pending');
+  });
+
+  test('matching reject fails closed when DB update fails', async () => {
+    const token = await authToken(77, 'user');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const db = new MockDB((query, _params, kind) => {
+        if (query.includes('FROM match_results') && kind === 'first') {
+          return {
+            id: 'match-3',
+            driver_trip_id: 'driver-trip-3',
+            rider_request_id: 'rider-request-3',
+            driver_id: 77,
+            rider_id: 88,
+            status: 'pending',
+          };
+        }
+        if (query.includes("SET status = 'rejected'") && kind === 'run') {
+          throw new Error('D1 reject update failure');
+        }
+        return null;
+      });
+
+      const res = await app.request(
+        '/api/matching/reject',
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ matchId: 'match-3', reason: 'db issue' }),
+        },
+        { ...baseEnv, DB: db, CACHE: new MockKV() },
+      );
+
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error?: { code?: string; requestId?: string } };
+      expect(body.error?.code).toBe('INTERNAL_ERROR');
+      const requestId = body.error?.requestId;
+      expect(requestId).toBeTruthy();
+
+      const parsedLogs = errorSpy.mock.calls
+        .map((call) => String(call[0] ?? ''))
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { code?: string; requestId?: string };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { code?: string; requestId?: string } => !!entry);
+
+      const internalLog = parsedLogs.find((entry) => entry.code === 'INTERNAL_ERROR' && entry.requestId === requestId);
+      expect(internalLog).toBeTruthy();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test('monitoring sla endpoint requires authentication', async () => {
@@ -2567,15 +3233,69 @@ describe('Security hardening integration flows', () => {
       }
       return null;
     });
-
-    const res = await app.request(
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    
+    try {
+      const res = await app.request(
       '/api/monitoring/metrics',
       { method: 'GET', headers: { Authorization: `Bearer ${adminToken}` } },
       { ...baseEnv, DB: db, CACHE: new MockKV() },
-    );
+      );
 
-    expect(res.status).toBe(200);
-    expect(auditWrites).toBe(1);
+      expect(res.status).toBe(200);
+      expect(auditWrites).toBe(1);
+
+      const requestId = res.headers.get('X-Request-ID');
+      expect(requestId).toBeTruthy();
+      const loggedLines = logSpy.mock.calls.map((call) => String(call[0] ?? ''));
+      const metricsLog = loggedLines.find((line) =>
+        line.includes('"/api/monitoring/metrics"') && line.includes(`"requestId":"${requestId}"`)
+      );
+      expect(metricsLog).toBeTruthy();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test('monitoring metrics logs error when DB batch fails', async () => {
+    const adminToken = await authToken(1, 'admin');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await app.request(
+        '/api/monitoring/metrics',
+        { method: 'GET', headers: { Authorization: `Bearer ${adminToken}` } },
+        { ...baseEnv, DB: new BatchFailingDB(() => null), CACHE: new MockKV() },
+      );
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        application: { requests: { total: number } };
+        business: { activeTrips: number };
+      };
+      expect(body.application.requests.total).toBe(0);
+      expect(body.business.activeTrips).toBe(0);
+
+      const requestId = res.headers.get('X-Request-ID');
+      expect(requestId).toBeTruthy();
+
+      const parsedLogs = errorSpy.mock.calls
+        .map((call) => String(call[0] ?? ''))
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { message?: string; requestId?: string };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { message?: string; requestId?: string } => !!entry);
+
+      const metricsErrorLog = parsedLogs.find((entry) =>
+        entry.message === 'Metrics DB error' && entry.requestId === requestId,
+      );
+      expect(metricsErrorLog).toBeTruthy();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test('monitoring security endpoint writes admin audit log on success', async () => {
@@ -2597,6 +3317,44 @@ describe('Security hardening integration flows', () => {
 
     expect(res.status).toBe(200);
     expect(auditWrites).toBe(1);
+  });
+
+  test('admin stats logs configuration error when DB is unavailable', async () => {
+    const adminToken = await authToken(1, 'admin');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await app.request(
+        '/api/admin/stats',
+        { method: 'GET', headers: { Authorization: `Bearer ${adminToken}` } },
+        { ...baseEnv, DB: undefined as unknown as MockDB, CACHE: new MockKV() },
+      );
+
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error?: { code?: string; requestId?: string } };
+      expect(body.error?.code).toBe('CONFIGURATION_ERROR');
+      const requestId = body.error?.requestId;
+      expect(requestId).toBeTruthy();
+
+      const parsedLogs = errorSpy.mock.calls
+        .map((call) => String(call[0] ?? ''))
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { code?: string; requestId?: string; error?: string };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { code?: string; requestId?: string; error?: string } => !!entry);
+
+      const configLog = parsedLogs.find((entry) =>
+        entry.code === 'CONFIGURATION_ERROR'
+        && entry.requestId === requestId
+        && entry.error === 'Admin stats unavailable'
+      );
+      expect(configLog).toBeTruthy();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test('account deletion is blocked when user is driving active trips', async () => {
