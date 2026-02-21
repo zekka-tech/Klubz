@@ -19,17 +19,12 @@
 		},
 		{
 			"binding": "RATE_LIMIT_KV",
-			"id": "249d6424e1614d90aac805bb09de6295",
-			"remote": true
+			"id": "249d6424e1614d90aac805bb09de6295"
 		},
 		{
 			"binding": "SESSIONS",
-			"id": "921988bcd6504ee3bd0e96fb0da840f1",
-			"remote": true
+			"id": "921988bcd6504ee3bd0e96fb0da840f1"
 		}
-		// ── To provision (run: wrangler kv namespace create <NAME>) ───────────
-		// { "binding": "RATE_LIMIT_KV", "id": "<KV namespace ID>" }
-		// { "binding": "SESSIONS",      "id": "<KV namespace ID>" }
 	],
 	"r2_buckets": [
 		{
