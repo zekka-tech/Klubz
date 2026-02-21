@@ -151,7 +151,7 @@ const BCRYPT_ROUNDS = 12; // Good balance of security vs. performance
  * Cost factor 12 provides ~250ms hash time, resistant to brute-force.
  */
 export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hashSync(password, BCRYPT_ROUNDS);
+  return bcrypt.hash(password, BCRYPT_ROUNDS);
 }
 
 /**
@@ -169,7 +169,7 @@ export async function verifyPassword(
   }
 
   // Standard bcrypt verification
-  return bcrypt.compareSync(password, stored);
+  return bcrypt.compare(password, stored);
 }
 
 /**

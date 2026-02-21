@@ -256,6 +256,23 @@
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
   };
 
+  // ═══ Geocoding ═══
+
+  async function geocodeAddress(address) {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`,
+        { headers: { 'User-Agent': 'Klubz-Carpooling/3.0', 'Accept-Language': 'en' } }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data.length) return null;
+      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+    } catch {
+      return null;
+    }
+  }
+
   // ═══ Screen Renderers ═══
 
   function renderLoginScreen() {
@@ -282,7 +299,7 @@
             <label style="display:flex;align-items:center;gap:6px;font-size:0.8125rem;color:var(--text-secondary);cursor:pointer">
               <input type="checkbox" id="login-remember"> Remember me
             </label>
-            <a href="#forgot-password" style="font-size:0.8125rem;font-weight:500">Forgot password?</a>
+            <a href="#forgot-password" id="link-to-forgot" style="font-size:0.8125rem;font-weight:500">Forgot password?</a>
           </div>
           <button type="submit" class="btn btn--primary btn--full btn--lg" id="login-btn">
             ${Store.state.isLoading ? '<span class="animate-spin">&#9696;</span>' : 'Sign In'}
@@ -677,6 +694,58 @@
     `;
   }
 
+  function renderSettingsScreen() {
+    return `
+      <div style="padding:var(--space-lg)">
+        <div style="display:flex;align-items:center;gap:var(--space-md);margin-bottom:var(--space-xl)">
+          <button class="icon-btn" id="settings-back-btn" style="background:none;border:none;cursor:pointer;font-size:1.5rem;color:var(--text-primary)">&#8592;</button>
+          <h2 style="font-size:1.25rem;font-weight:700">Settings</h2>
+        </div>
+        <div class="card" style="margin-bottom:var(--space-md)">
+          <h3 style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:var(--space-md)">Account</h3>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-md) 0;border-bottom:1px solid var(--border)">
+            <span>${Icons.user} Edit Profile</span><span style="color:var(--text-muted)">&#8250;</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-md) 0">
+            <span>${Icons.shield} Privacy &amp; Security</span><span style="color:var(--text-muted)">&#8250;</span>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:var(--space-md)">
+          <h3 style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:var(--space-md)">Appearance</h3>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span>${Store.state.theme === 'dark' ? Icons.moon : Icons.sun} ${Store.state.theme === 'dark' ? 'Dark' : 'Light'} Mode</span>
+            <button class="btn btn--secondary btn--sm" id="settings-theme-btn">Toggle</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:var(--space-md)">About</h3>
+          <div style="color:var(--text-muted);font-size:0.875rem">Klubz v${CONFIG.APP_VERSION}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderForgotPasswordScreen() {
+    return `
+      <div class="auth-screen">
+        <div class="auth-screen__header">
+          <div class="auth-screen__logo">Klubz</div>
+          <p class="auth-screen__subtitle">Reset your password</p>
+        </div>
+        <form id="forgot-form" style="margin-top:var(--space-xl)">
+          <div class="form-group" style="margin-bottom:var(--space-md)">
+            <label class="form-label">Email Address</label>
+            <input type="email" id="forgot-email" class="form-input" placeholder="your@email.com" required autocomplete="email">
+          </div>
+          <button type="submit" class="btn btn--primary btn--full btn--lg" id="forgot-btn">Send Reset Link</button>
+        </form>
+        <p style="text-align:center;margin-top:var(--space-lg);font-size:0.875rem;color:var(--text-secondary)">
+          Remember your password? <a href="#login" id="link-forgot-to-login" style="font-weight:600">Sign In</a>
+        </p>
+      </div>
+    `;
+  }
+
   function renderTripCard(trip) {
     const statusColors = { scheduled: 'active', active: 'live', completed: 'completed', pending: 'pending', cancelled: 'cancelled' };
     return `
@@ -763,7 +832,7 @@
 
         ${match.explanation ? `<p style="font-size:0.75rem;color:var(--text-muted);margin-top:var(--space-sm);font-style:italic">"${escapeHtml(match.explanation)}"</p>` : ''}
 
-        <button class="btn btn--primary btn--full confirm-match-btn" style="margin-top:var(--space-md)" data-trip-id="${match.driverTripId}">
+        <button class="btn btn--primary btn--full confirm-match-btn" style="margin-top:var(--space-md)" data-match-id="${escapeHtml(match.matchId || '')}" data-driver-trip-id="${escapeHtml(match.driverTripId)}" data-rider-request-id="${escapeHtml(match.riderRequestId)}">
           Request This Ride
         </button>
       </div>
@@ -810,6 +879,8 @@
         case 'my-trips': content.innerHTML = renderMyTripsScreen(); break;
         case 'carbon': content.innerHTML = renderCarbonScreen(); break;
         case 'profile': content.innerHTML = renderProfileScreen(); break;
+        case 'settings': content.innerHTML = renderSettingsScreen(); break;
+        case 'forgot-password': content.innerHTML = renderForgotPasswordScreen(); break;
         default: content.innerHTML = renderHomeScreen(); break;
       }
 
@@ -830,6 +901,10 @@
           document.getElementById('link-to-register')?.addEventListener('click', (e) => {
             e.preventDefault();
             Router.navigate('register');
+          });
+          document.getElementById('link-to-forgot')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            Router.navigate('forgot-password');
           });
           break;
         case 'register':
@@ -896,6 +971,17 @@
             Auth.logout();
           });
           break;
+        case 'settings':
+          document.getElementById('settings-back-btn')?.addEventListener('click', () => Router.navigate('profile'));
+          document.getElementById('settings-theme-btn')?.addEventListener('click', toggleTheme);
+          break;
+        case 'forgot-password':
+          document.getElementById('forgot-form')?.addEventListener('submit', handleForgotPassword);
+          document.getElementById('link-forgot-to-login')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            Router.navigate('login');
+          });
+          break;
       }
 
     },
@@ -909,6 +995,24 @@
   };
 
   // ═══ Event Handlers ═══
+
+  async function handleForgotPassword(e) {
+    e.preventDefault();
+    const email = document.getElementById('forgot-email')?.value?.trim();
+    if (!email) {
+      Toast.show('Please enter your email address', 'warning');
+      return;
+    }
+    const btn = document.getElementById('forgot-btn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="animate-spin">&#9696;</span> Sending...'; }
+    try {
+      await API.post('/auth/forgot-password', { email });
+    } catch { /* intentionally swallow — show generic message for security */ }
+    // Always show generic success to avoid email enumeration
+    Toast.show('If that email is registered, a reset link has been sent.', 'success');
+    Router.navigate('login');
+    if (btn) { btn.disabled = false; btn.innerHTML = 'Send Reset Link'; }
+  }
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -970,11 +1074,21 @@
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="animate-spin">&#9696;</span> Searching...'; }
 
     try {
+      // Geocode user-entered addresses to coordinates
+      const [pickupCoords, dropoffCoords] = await Promise.all([
+        geocodeAddress(pickup),
+        geocodeAddress(dropoff),
+      ]);
+      if (!pickupCoords || !dropoffCoords) {
+        Toast.show('Could not resolve one or both locations. Try a more specific address.', 'error');
+        return;
+      }
+
       // Use the smart matching API
       const timestamp = date && time ? new Date(`${date}T${time}`).getTime() : Date.now() + 3600000;
       const data = await API.post('/matching/find', {
-        pickup: { lat: -26.2041, lng: 28.0473 },
-        dropoff: { lat: -26.1076, lng: 28.0567 },
+        pickup: pickupCoords,
+        dropoff: dropoffCoords,
         earliestDeparture: timestamp - 30 * 60000,
         latestDeparture: timestamp + 30 * 60000,
         seatsNeeded: seats,
@@ -990,7 +1104,7 @@
             ${data.matches.map(renderMatchResult).join('')}
           `;
           resultsContainer.querySelectorAll('.confirm-match-btn').forEach(btn => {
-            btn.addEventListener('click', () => handleConfirmMatch(btn.dataset.tripId));
+            btn.addEventListener('click', () => handleConfirmMatch(btn.dataset.matchId, btn.dataset.driverTripId, btn.dataset.riderRequestId));
           });
         } else {
           resultsContainer.innerHTML = `
@@ -1043,10 +1157,19 @@
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="animate-spin">&#9696;</span> Publishing...'; }
 
     try {
-      const scheduledTime = new Date(`${date}T${time}`).toISOString();
+      // Geocode driver's departure/destination addresses
+      const [departureCoords, destinationCoords] = await Promise.all([
+        geocodeAddress(departure),
+        geocodeAddress(destination),
+      ]);
+      if (!departureCoords || !destinationCoords) {
+        Toast.show('Could not resolve one or both locations. Try a more specific address.', 'error');
+        return;
+      }
+
       await API.post('/matching/driver-trips', {
-        departure: { lat: -26.2041, lng: 28.0473 },
-        destination: { lat: -26.1076, lng: 28.0567 },
+        departure: departureCoords,
+        destination: destinationCoords,
         departureTime: new Date(`${date}T${time}`).getTime(),
         arrivalTime: new Date(`${date}T${time}`).getTime() + 30 * 60000,
         availableSeats: seats,
@@ -1062,11 +1185,17 @@
     }
   }
 
-  async function handleConfirmMatch(driverTripId) {
+  async function handleConfirmMatch(matchId, driverTripId, riderRequestId) {
+    if (!matchId || !driverTripId || !riderRequestId) {
+      Toast.show('Match data missing. Please search again.', 'error');
+      return;
+    }
     try {
-      Toast.show('Ride request sent to driver!', 'success');
+      await API.post('/matching/confirm', { matchId, driverTripId, riderRequestId });
+      Toast.show('Ride confirmed! The driver will be notified.', 'success');
+      Router.navigate('my-trips');
     } catch (err) {
-      Toast.show(err.message || 'Failed to confirm', 'error');
+      Toast.show(err.message || 'Failed to confirm ride. Please try again.', 'error');
     }
   }
 

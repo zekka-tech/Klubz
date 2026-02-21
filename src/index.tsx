@@ -12,7 +12,7 @@ import { logger } from './lib/logger'
 import { getAnonymizedIP } from './lib/http'
 import { AppError } from './lib/errors'
 import { authMiddleware } from './middleware/auth'
-import { rateLimiter } from './middleware/rateLimiter'
+import { rateLimiter, authRateLimiter } from './middleware/rateLimiter'
 import type { Context } from 'hono'
 import type { AppEnv, AuthUser } from './types'
 type AppJsonInit = Parameters<Context<AppEnv>['json']>[1]
@@ -348,7 +348,9 @@ app.get('/api/hello', (c) => {
   return c.json({ message: 'Hello from Klubz API!' })
 })
 
-// Auth routes: /api/auth/login, /api/auth/register, /api/auth/refresh, /api/auth/logout
+// Auth routes: strict rate limit on brute-force targets (login + register only)
+app.use('/api/auth/login', authRateLimiter())
+app.use('/api/auth/register', authRateLimiter())
 app.route('/api/auth', authRoutes)
 
 // User routes: /api/users/profile, /api/users/trips, /api/users/preferences

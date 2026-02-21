@@ -47,6 +47,7 @@ import type {
   RiderRequest,
   GeoPoint,
   FindMatchesResponse,
+  MatchResult,
   DriverTripStatus,
   RiderRequestStatus,
 } from '../lib/matching';
@@ -624,23 +625,25 @@ export function createMatchingRoutes() {
     // Run matching engine
     const { matches, stats } = matchRiderToDrivers(riderRequest, candidates, config);
 
-    // Persist match results
+    // Persist match results and augment with server-generated matchIds
+    const matchesWithIds: Array<MatchResult & { matchId: string }> = [];
     for (const match of matches) {
-      await repo.saveMatchResult(uuid(), match);
+      const matchId = uuid();
+      await repo.saveMatchResult(matchId, match);
+      matchesWithIds.push({ ...match, matchId });
     }
 
-    const response: FindMatchesResponse = {
-      matches,
+    return c.json({
+      matches: matchesWithIds,
       pool: null,
+      stats: { candidatesTotal: stats.candidatesTotal },
       meta: {
         candidatesEvaluated: stats.candidatesTotal,
         matchesFound: stats.matchesReturned,
         executionTimeMs: Date.now() - t0,
         configUsed: config,
       },
-    };
-
-    return c.json(response);
+    });
   });
 
   /**

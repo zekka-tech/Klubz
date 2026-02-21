@@ -265,7 +265,7 @@ userRoutes.put('/profile', async (c) => {
 
 userRoutes.get('/trips', async (c) => {
   const user = c.get('user') as AuthUser;
-  const page = parseQueryInteger(c.req.query('page'), 1, { min: 1, max: 100000 });
+  const page = parseQueryInteger(c.req.query('page'), 1, { min: 1, max: 1000 });
   if (page === null) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid page query parameter' } }, 400);
   }
