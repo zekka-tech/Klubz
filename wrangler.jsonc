@@ -13,9 +13,8 @@
 	},
 	"kv_namespaces": [
 		{
-			// Klubz production cache namespace
 			"binding": "CACHE",
-			"id": "8f8dcf30a8d8933773a5055b35cd7052"
+			"id": "12dd9cdd5e1f495c916a787bcfa98881"
 		},
 		{
 			"binding": "RATE_LIMIT_KV",
