@@ -56,7 +56,9 @@ export function haversine(a: GeoPoint, b: GeoPoint): number {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
 
-  return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(h));
+  // Clamp h to [0, 1] to guard against floating-point rounding errors
+  // near antipodal points that would produce NaN from Math.asin(sqrt(>1)).
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(Math.min(h, 1)));
 }
 
 /**

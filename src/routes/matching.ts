@@ -450,6 +450,12 @@ export function createMatchingRoutes() {
         400,
       );
     }
+    if (data.earliestDeparture < Date.now() - 5 * 60_000) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: 'earliestDeparture must not be in the past' } },
+        400,
+      );
+    }
 
     const request = await repo.createRiderRequest(id, Number(user?.id) || 0, {
       pickup: data.pickup,
@@ -975,6 +981,15 @@ export function createMatchingRoutes() {
       );
     }
 
+    // Non-super-admins can only update their own organization's config
+    const targetOrgId = c.req.query('organizationId') || user.organizationId;
+    if (!isSuperAdmin(user) && targetOrgId !== user.organizationId) {
+      return c.json(
+        { error: { code: 'AUTHORIZATION_ERROR', message: 'Not allowed to update matching config for another organization' } },
+        403,
+      );
+    }
+
     let body: unknown;
     try {
       body = await c.req.json();
@@ -990,7 +1005,7 @@ export function createMatchingRoutes() {
     }
     const repo = getRepo(c);
 
-    await repo.saveMatchConfig(user.organizationId, parsed.data);
+    await repo.saveMatchConfig(targetOrgId, parsed.data);
     return c.json({ message: 'Matching config updated' });
   });
 

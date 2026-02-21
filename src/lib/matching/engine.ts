@@ -242,7 +242,9 @@ function computeScore(
   // A car with 1 seat left scores better than one with 4, encouraging pooling
   const seatScore = driver.availableSeats <= rider.seatsNeeded
     ? 0 // perfect fit
-    : Math.min((driver.availableSeats - rider.seatsNeeded) / driver.totalSeats, 1);
+    : driver.totalSeats > 0
+      ? Math.min((driver.availableSeats - rider.seatsNeeded) / driver.totalSeats, 1)
+      : 1; // treat zero/corrupt totalSeats as worst possible score
 
   // --- Shift alignment score ---
   let shiftScore = 0;
