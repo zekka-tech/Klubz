@@ -12,7 +12,7 @@ database_id = "4bc82a64-6197-42cb-b378-f7dbadcf6266"
 # KV Namespaces
 [[kv_namespaces]]
 binding = "CACHE"
-id = "YOUR_KV_CACHE_ID"
+id = "12dd9cdd5e1f495c916a787bcfa98881"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
