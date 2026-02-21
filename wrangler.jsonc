@@ -15,6 +15,14 @@
       "binding": "CACHE",
       "id": "12dd9cdd5e1f495c916a787bcfa98881",
       "preview_id": "klubz-cache-preview"
+    },
+    {
+      "binding": "RATE_LIMIT_KV",
+      "id": "249d6424e1614d90aac805bb09de6295"
+    },
+    {
+      "binding": "SESSIONS",
+      "id": "921988bcd6504ee3bd0e96fb0da840f1"
     }
   ],
   "r2_buckets": [
