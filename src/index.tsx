@@ -97,7 +97,7 @@ function buildCspHeader(c: Context<AppEnv>, nonce: string): string {
     "media-src 'self'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com",
-    `script-src 'self' 'unsafe-hashes' 'nonce-${nonce}' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net`,
+    `script-src 'self' 'nonce-${nonce}' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net`,
     // Inline style attributes are used in server-rendered shell HTML.
     "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com https://fonts.googleapis.com https://cdn.jsdelivr.net",
     `connect-src ${buildConnectSources(c).join(' ')}`,

@@ -196,7 +196,7 @@
         <span class="toast__message">${escapeHtml(message)}</span>
         <button class="toast__close" aria-label="Dismiss">&times;</button>
       `;
-      toast.querySelector('.toast__close').onclick = () => toast.remove();
+      toast.querySelector('.toast__close').addEventListener('click', () => toast.remove());
       container.appendChild(toast);
       setTimeout(() => toast.remove(), CONFIG.TOAST_DURATION);
     }
@@ -297,7 +297,7 @@
         </button>
 
         <p style="text-align:center;margin-top:var(--space-lg);font-size:0.875rem;color:var(--text-secondary)">
-          Don't have an account? <a href="#register" onclick="event.preventDefault();Router.navigate('register');" style="font-weight:600">Sign Up</a>
+          Don't have an account? <a href="#register" id="link-to-register" style="font-weight:600">Sign Up</a>
         </p>
       </div>
     `;
@@ -339,7 +339,7 @@
         </form>
 
         <p style="text-align:center;margin-top:var(--space-lg);font-size:0.875rem;color:var(--text-secondary)">
-          Already have an account? <a href="#login" onclick="event.preventDefault();Router.navigate('login');" style="font-weight:600">Sign In</a>
+          Already have an account? <a href="#login" id="link-to-login" style="font-weight:600">Sign In</a>
         </p>
       </div>
     `;
@@ -370,22 +370,22 @@
 
         <!-- Quick Actions (Bolt-style) -->
         <div class="quick-actions">
-          <div class="quick-action" onclick="Router.navigate('find-ride')">
+          <div class="quick-action" data-action="find-ride">
             <div class="quick-action__icon quick-action__icon--ride">${Icons.search}</div>
             <span class="quick-action__label">Find a Ride</span>
             <span class="quick-action__desc">Match with drivers</span>
           </div>
-          <div class="quick-action" onclick="Router.navigate('offer-ride')">
+          <div class="quick-action" data-action="offer-ride">
             <div class="quick-action__icon quick-action__icon--drive">${Icons.car}</div>
             <span class="quick-action__label">Offer a Ride</span>
             <span class="quick-action__desc">Drive & earn</span>
           </div>
-          <div class="quick-action" onclick="Router.navigate('my-trips')">
+          <div class="quick-action" data-action="my-trips">
             <div class="quick-action__icon quick-action__icon--schedule">${Icons.trips}</div>
             <span class="quick-action__label">My Trips</span>
             <span class="quick-action__desc">Upcoming & past</span>
           </div>
-          <div class="quick-action" onclick="Router.navigate('carbon')">
+          <div class="quick-action" data-action="carbon">
             <div class="quick-action__icon quick-action__icon--carbon">${Icons.leaf}</div>
             <span class="quick-action__label">Impact</span>
             <span class="quick-action__desc">CO2 saved</span>
@@ -401,7 +401,7 @@
         <!-- Upcoming Trips -->
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-md)">
           <h3 class="section-title" style="margin-bottom:0">Upcoming Trips</h3>
-          <a href="#my-trips" onclick="event.preventDefault();Router.navigate('my-trips')" style="font-size:0.8125rem;font-weight:600">View All</a>
+          <a href="#my-trips" id="view-all-trips" style="font-size:0.8125rem;font-weight:600">View All</a>
         </div>
 
         <div id="upcoming-trips-container">
@@ -632,7 +632,7 @@
         </div>
 
         <div class="card" style="padding:0;overflow:hidden">
-          <div class="list-item" onclick="Router.navigate('settings')" style="cursor:pointer">
+          <div class="list-item" id="profile-settings-item" style="cursor:pointer">
             <div class="list-item__icon" style="background:var(--primary-bg);color:var(--primary)">${Icons.settings}</div>
             <div class="list-item__content">
               <div class="list-item__title">Settings</div>
@@ -640,7 +640,7 @@
             </div>
             <div class="list-item__action">&rsaquo;</div>
           </div>
-          <div class="list-item" onclick="Router.navigate('carbon')" style="cursor:pointer">
+          <div class="list-item" id="profile-carbon-item" style="cursor:pointer">
             <div class="list-item__icon" style="background:rgba(16,185,129,0.12);color:var(--accent)">${Icons.leaf}</div>
             <div class="list-item__content">
               <div class="list-item__title">Carbon Impact</div>
@@ -666,7 +666,7 @@
           </div>
         </div>
 
-        <button class="btn btn--danger btn--full" style="margin-top:var(--space-xl)" onclick="Auth.logout()">
+        <button class="btn btn--danger btn--full" style="margin-top:var(--space-xl)" id="logout-btn">
           ${Icons.logout} Sign Out
         </button>
 
@@ -763,7 +763,7 @@
 
         ${match.explanation ? `<p style="font-size:0.75rem;color:var(--text-muted);margin-top:var(--space-sm);font-style:italic">"${escapeHtml(match.explanation)}"</p>` : ''}
 
-        <button class="btn btn--primary btn--full" style="margin-top:var(--space-md)" onclick="handleConfirmMatch('${match.driverTripId}')">
+        <button class="btn btn--primary btn--full confirm-match-btn" style="margin-top:var(--space-md)" data-trip-id="${match.driverTripId}">
           Request This Ride
         </button>
       </div>
@@ -827,9 +827,17 @@
       switch (screen) {
         case 'login':
           document.getElementById('login-form')?.addEventListener('submit', handleLogin);
+          document.getElementById('link-to-register')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            Router.navigate('register');
+          });
           break;
         case 'register':
           document.getElementById('register-form')?.addEventListener('submit', handleRegister);
+          document.getElementById('link-to-login')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            Router.navigate('login');
+          });
           document.querySelectorAll('#role-tabs .tab').forEach(tab => {
             tab.addEventListener('click', () => {
               document.querySelectorAll('#role-tabs .tab').forEach(t => t.classList.remove('active'));
@@ -865,10 +873,31 @@
             });
           });
           break;
+        case 'home':
+          document.querySelectorAll('[data-action]').forEach(el => {
+            el.addEventListener('click', () => {
+              Router.navigate(el.dataset.action);
+            });
+          });
+          document.getElementById('view-all-trips')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            Router.navigate('my-trips');
+          });
+          break;
         case 'profile':
           document.getElementById('theme-toggle-item')?.addEventListener('click', toggleTheme);
+          document.getElementById('profile-settings-item')?.addEventListener('click', () => {
+            Router.navigate('settings');
+          });
+          document.getElementById('profile-carbon-item')?.addEventListener('click', () => {
+            Router.navigate('carbon');
+          });
+          document.getElementById('logout-btn')?.addEventListener('click', () => {
+            Auth.logout();
+          });
           break;
       }
+
     },
 
     loadScreenData(screen) {
@@ -960,15 +989,21 @@
             </div>
             ${data.matches.map(renderMatchResult).join('')}
           `;
+          resultsContainer.querySelectorAll('.confirm-match-btn').forEach(btn => {
+            btn.addEventListener('click', () => handleConfirmMatch(btn.dataset.tripId));
+          });
         } else {
           resultsContainer.innerHTML = `
             <div class="empty-state">
               <div class="empty-state__icon">&#128663;</div>
               <div class="empty-state__title">No Matches Found</div>
               <div class="empty-state__desc">Try adjusting your time window or locations. We'll notify you when new drivers match your route.</div>
-              <button class="btn btn--secondary" onclick="Router.navigate('home')">Back to Home</button>
+              <button class="btn btn--secondary" id="no-match-home-btn">Back to Home</button>
             </div>
           `;
+          document.getElementById('no-match-home-btn')?.addEventListener('click', () => {
+            Router.navigate('home');
+          });
         }
       }
     } catch (err) {
@@ -1165,11 +1200,11 @@
           <span class="app-header__logo">K<span>lubz</span></span>
         </div>
         <div class="app-header__actions">
-          <button class="header-btn" aria-label="Notifications" onclick="Toast.show('Notifications coming soon!','info')">
+          <button class="header-btn" aria-label="Notifications" id="notifications-btn">
             ${Icons.bell}
             <span class="header-btn__badge">3</span>
           </button>
-          <div class="avatar-sm" onclick="Router.navigate('profile')" style="cursor:pointer" role="button" aria-label="Profile">
+          <div class="avatar-sm" id="profile-avatar-btn" style="cursor:pointer" role="button" aria-label="Profile">
             ${getInitials(Store.state.user?.name || Store.state.user?.email || 'U')}
           </div>
         </div>
@@ -1183,23 +1218,23 @@
 
       <!-- Bottom Navigation -->
       <nav class="bottom-nav" id="bottom-nav" style="display:none" role="navigation" aria-label="Main navigation">
-        <button class="nav-item active" data-screen="home" aria-label="Home" onclick="Router.navigate('home')">
+        <button class="nav-item active" data-screen="home" aria-label="Home">
           ${Icons.home}
           <span class="nav-item__label">Home</span>
         </button>
-        <button class="nav-item" data-screen="find-ride" aria-label="Find Ride" onclick="Router.navigate('find-ride')">
+        <button class="nav-item" data-screen="find-ride" aria-label="Find Ride">
           ${Icons.search}
           <span class="nav-item__label">Find</span>
         </button>
-        <button class="nav-item" data-screen="offer-ride" aria-label="Offer Ride" onclick="Router.navigate('offer-ride')">
+        <button class="nav-item" data-screen="offer-ride" aria-label="Offer Ride">
           ${Icons.car}
           <span class="nav-item__label">Offer</span>
         </button>
-        <button class="nav-item" data-screen="my-trips" aria-label="My Trips" onclick="Router.navigate('my-trips')">
+        <button class="nav-item" data-screen="my-trips" aria-label="My Trips">
           ${Icons.trips}
           <span class="nav-item__label">Trips</span>
         </button>
-        <button class="nav-item" data-screen="profile" aria-label="Profile" onclick="Router.navigate('profile')">
+        <button class="nav-item" data-screen="profile" aria-label="Profile">
           ${Icons.user}
           <span class="nav-item__label">Profile</span>
         </button>
@@ -1231,20 +1266,35 @@
     }
   }
 
+  // ═══ Shell-Level Event Bindings ═══
+  // These elements are rendered once in renderAppShell() and persist across screen changes.
+  function bindShellEvents() {
+    // Bottom navigation — navigate to the screen stored in data-screen
+    document.querySelectorAll('.nav-item[data-screen]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        Router.navigate(btn.dataset.screen);
+      });
+    });
+
+    // Notifications button in header
+    document.getElementById('notifications-btn')?.addEventListener('click', () => {
+      Toast.show('Notifications coming soon!', 'info');
+    });
+
+    // Profile avatar in header
+    document.getElementById('profile-avatar-btn')?.addEventListener('click', () => {
+      Router.navigate('profile');
+    });
+  }
+
   // ═══ Initialize App ═══
   function initApp() {
     Store.init();
     Router.init();
     renderAppShell();
+    bindShellEvents();
     Renderer.render();
     registerSW();
-
-    // Expose globals for inline handlers
-    window.Router = Router;
-    window.Auth = Auth;
-    window.Toast = Toast;
-    window.handleConfirmMatch = handleConfirmMatch;
-    window.toggleTheme = toggleTheme;
   }
 
   // Run when DOM is ready
