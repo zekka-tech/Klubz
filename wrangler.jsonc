@@ -13,38 +13,25 @@
 	},
 	"kv_namespaces": [
 		{
-			// Klubz production cache namespace (real ID)
+			// Klubz production cache namespace
 			"binding": "CACHE",
 			"id": "8f8dcf30a8d8933773a5055b35cd7052"
-		},
-		{
-			"binding": "klubz_cache_prod",
-			"id": "12dd9cdd5e1f495c916a787bcfa98881",
-			"remote": true
 		}
+		// ── To provision (run: wrangler kv namespace create <NAME>) ───────────
+		// { "binding": "RATE_LIMIT_KV", "id": "<KV namespace ID>" }
+		// { "binding": "SESSIONS",      "id": "<KV namespace ID>" }
 	],
 	"r2_buckets": [
 		{
 			"binding": "STORAGE",
 			"bucket_name": "klubz-storage-prod"
-		},
+		}
+	],
+	"d1_databases": [
 		{
-			"bucket_name": "klubz-storage-prod",
-			"binding": "klubz_storage_prod",
-			"remote": true
+			"binding": "DB",
+			"database_name": "klubz-db-prod",
+			"database_id": "4bc82a64-6197-42cb-b378-f7dbadcf6266"
 		}
 	]
-	// ── Bindings to add once provisioned ──────────────────────────────────────
-	//
-	// D1 database — configure via Cloudflare Pages dashboard (Settings > Functions > D1 databases)
-	// or add below after: wrangler d1 create klubz-db-prod
-	//
-	// "d1_databases": [
-	//   { "binding": "DB", "database_name": "klubz-db-prod", "database_id": "<UUID from `wrangler d1 list`>" }
-	// ],
-	//
-	// KV namespaces — add via dashboard or after: wrangler kv namespace create <NAME>
-	//
-	// { "binding": "RATE_LIMIT_KV", "id": "<KV namespace ID>" }
-	// { "binding": "SESSIONS",      "id": "<KV namespace ID>" }
 }
