@@ -121,6 +121,7 @@ describe('Audit taxonomy contracts', () => {
           last_name_encrypted: 'User',
           role: 'user',
           is_active: 1,
+          email_verified: 1,
           mfa_enabled: 0,
         };
       }

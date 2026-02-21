@@ -106,6 +106,8 @@
       try {
         const data = await this.post('/auth/refresh', { refreshToken }, { skipRefresh: true });
         localStorage.setItem(CONFIG.TOKEN_KEY, data.accessToken);
+        // Store rotated refresh token if server issued a new one
+        if (data.refreshToken) localStorage.setItem(CONFIG.REFRESH_KEY, data.refreshToken);
         return true;
       } catch { return false; }
     }
@@ -135,7 +137,7 @@
       try {
         const res = await API.post('/auth/register', data);
         Store.setState({ isLoading: false });
-        Toast.show('Account created! Please login.', 'success');
+        Toast.show('Account created! Check your email to verify before logging in.', 'success');
         Router.navigate('login');
         return res;
       } catch (err) {
@@ -146,7 +148,8 @@
     },
 
     logout() {
-      API.post('/auth/logout', {}).catch(() => {});
+      const rt = localStorage.getItem(CONFIG.REFRESH_KEY);
+      API.post('/auth/logout', rt ? { refreshToken: rt } : {}).catch(() => {});
       localStorage.removeItem(CONFIG.TOKEN_KEY);
       localStorage.removeItem(CONFIG.REFRESH_KEY);
       localStorage.removeItem(CONFIG.USER_KEY);
@@ -746,6 +749,31 @@
     `;
   }
 
+  function renderResetPasswordScreen() {
+    return `
+      <div class="auth-screen">
+        <div class="auth-screen__header">
+          <div class="auth-screen__logo">Klubz</div>
+          <p class="auth-screen__subtitle">Choose a new password</p>
+        </div>
+        <form id="reset-form" style="margin-top:var(--space-xl)">
+          <div class="form-group" style="margin-bottom:var(--space-md)">
+            <label class="form-label">New Password</label>
+            <input type="password" id="reset-password" class="form-input" placeholder="At least 8 characters" minlength="8" required autocomplete="new-password">
+          </div>
+          <div class="form-group" style="margin-bottom:var(--space-md)">
+            <label class="form-label">Confirm Password</label>
+            <input type="password" id="reset-confirm" class="form-input" placeholder="Repeat new password" minlength="8" required autocomplete="new-password">
+          </div>
+          <button type="submit" class="btn btn--primary btn--full btn--lg" id="reset-btn">Set New Password</button>
+        </form>
+        <p style="text-align:center;margin-top:var(--space-lg);font-size:0.875rem;color:var(--text-secondary)">
+          Remembered it? <a href="#login" id="link-reset-to-login" style="font-weight:600">Sign In</a>
+        </p>
+      </div>
+    `;
+  }
+
   function renderTripCard(trip) {
     const statusColors = { scheduled: 'active', active: 'live', completed: 'completed', pending: 'pending', cancelled: 'cancelled' };
     return `
@@ -853,7 +881,7 @@
       const { currentScreen, isAuthenticated } = Store.state;
 
       // Auth guard
-      const publicScreens = ['login', 'register', 'forgot-password'];
+      const publicScreens = ['login', 'register', 'forgot-password', 'reset-password'];
       if (!isAuthenticated && !publicScreens.includes(currentScreen)) {
         Router.navigate('login');
         return;
@@ -881,6 +909,7 @@
         case 'profile': content.innerHTML = renderProfileScreen(); break;
         case 'settings': content.innerHTML = renderSettingsScreen(); break;
         case 'forgot-password': content.innerHTML = renderForgotPasswordScreen(); break;
+        case 'reset-password': content.innerHTML = renderResetPasswordScreen(); break;
         default: content.innerHTML = renderHomeScreen(); break;
       }
 
@@ -982,6 +1011,13 @@
             Router.navigate('login');
           });
           break;
+        case 'reset-password':
+          document.getElementById('reset-form')?.addEventListener('submit', handleResetPassword);
+          document.getElementById('link-reset-to-login')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            Router.navigate('login');
+          });
+          break;
       }
 
     },
@@ -1012,6 +1048,40 @@
     Toast.show('If that email is registered, a reset link has been sent.', 'success');
     Router.navigate('login');
     if (btn) { btn.disabled = false; btn.innerHTML = 'Send Reset Link'; }
+  }
+
+  async function handleResetPassword(e) {
+    e.preventDefault();
+    const password = document.getElementById('reset-password')?.value;
+    const confirm = document.getElementById('reset-confirm')?.value;
+
+    if (!password || password.length < 8) {
+      Toast.show('Password must be at least 8 characters', 'warning');
+      return;
+    }
+    if (password !== confirm) {
+      Toast.show('Passwords do not match', 'warning');
+      return;
+    }
+
+    // Read the reset token from the URL query string (?token=...)
+    const token = new URLSearchParams(window.location.search).get('token');
+    if (!token) {
+      Toast.show('Invalid or missing reset link. Please request a new one.', 'error');
+      Router.navigate('forgot-password');
+      return;
+    }
+
+    const btn = document.getElementById('reset-btn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="animate-spin">&#9696;</span> Saving...'; }
+    try {
+      await API.post('/auth/reset-password', { token, newPassword: password });
+      Toast.show('Password reset successful! Please log in.', 'success');
+      Router.navigate('login');
+    } catch (err) {
+      Toast.show(err.message || 'Reset failed. The link may have expired.', 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = 'Set New Password'; }
+    }
   }
 
   async function handleLogin(e) {
@@ -1424,6 +1494,14 @@
     bindShellEvents();
     Renderer.render();
     registerSW();
+
+    // Show success toast after email verification redirect (?verified=1)
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('verified') === '1') {
+      setTimeout(() => Toast.show('Email verified! You can now log in.', 'success'), 300);
+      // Clean the query string without a page reload
+      window.history.replaceState({}, '', window.location.hash || '/');
+    }
   }
 
   // Run when DOM is ready

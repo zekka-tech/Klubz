@@ -2,8 +2,14 @@
  * Klubz - Auth Routes (Production D1)
  *
  * Real D1 queries for login, register, refresh, logout.
- * Uses PBKDF2 password hashing (Workers-compatible via encryption.ts).
+ * Uses bcrypt password hashing (Workers-compatible via encryption.ts).
  * JWT issued via auth middleware helpers.
+ *
+ * Security:
+ *   - Refresh tokens are tracked in the sessions table (SHA-256 hash)
+ *     and rotated on every use (prevents replay / stolen token reuse)
+ *   - Email verification is enforced before login is permitted
+ *   - Password reset uses short-lived KV tokens (1h TTL)
  */
 
 import { Hono } from 'hono';
@@ -15,6 +21,7 @@ import { logger } from '../lib/logger';
 import { getDBOptional } from '../lib/db';
 import { getAnonymizedIP, getUserAgent } from '../lib/http';
 import { withRequestContext } from '../lib/observability';
+import { NotificationService } from '../integrations/notifications';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -35,6 +42,16 @@ const registerSchema = z.object({
   role: z.enum(['passenger', 'driver']).optional(),
 }).strict();
 
+const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+}).strict();
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(32),
+  newPassword: z.string().min(8),
+}).strict();
+
+
 interface LoginUserRow {
   id: number;
   email: string;
@@ -43,6 +60,7 @@ interface LoginUserRow {
   last_name_encrypted: string | null;
   role: string;
   is_active: number;
+  email_verified: number;
   mfa_enabled: number;
 }
 
@@ -64,6 +82,31 @@ function getJWTSecret(c: { env?: { JWT_SECRET?: string } }): string {
   }
   return secret;
 }
+
+/**
+ * SHA-256 hash a token string → lowercase hex.
+ * Used to store refresh/reset/verification tokens safely in DB or KV.
+ */
+async function hashToken(token: string): Promise<string> {
+  const data = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Generate a cryptographically random URL-safe hex token (32 bytes = 256 bits).
+ */
+function generateSecureToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** SESSIONS KV prefix for email verification tokens */
+const KV_EMAIL_VERIFY_PREFIX = 'ev:';
+/** SESSIONS KV prefix for password reset tokens */
+const KV_PWD_RESET_PREFIX = 'pr:';
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -96,7 +139,7 @@ authRoutes.post('/login', async (c) => {
       const emailHash = await hashForLookup(email);
 
       const user = await db
-        .prepare('SELECT id, email, password_hash, first_name_encrypted, last_name_encrypted, role, is_active, mfa_enabled, last_login_at, created_at FROM users WHERE email_hash = ? AND deleted_at IS NULL')
+        .prepare('SELECT id, email, password_hash, first_name_encrypted, last_name_encrypted, role, is_active, email_verified, mfa_enabled FROM users WHERE email_hash = ? AND deleted_at IS NULL')
         .bind(emailHash)
         .first<LoginUserRow>();
 
@@ -112,6 +155,16 @@ authRoutes.post('/login', async (c) => {
       const passwordValid = await verifyPassword(password, user.password_hash as string);
       if (!passwordValid) {
         return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Invalid email or password' } }, 401);
+      }
+
+      // Enforce email verification
+      if (!user.email_verified) {
+        return c.json({
+          error: {
+            code: 'EMAIL_UNVERIFIED',
+            message: 'Please verify your email address before logging in. Check your inbox for a verification link.',
+          },
+        }, 403);
       }
 
       // Re-hash legacy PBKDF2 passwords to bcrypt on successful login
@@ -147,6 +200,18 @@ authRoutes.post('/login', async (c) => {
         },
         secret,
       );
+
+      // Store refresh token hash in sessions table for rotation tracking
+      try {
+        const tokenHash = await hashToken(refreshToken);
+        const sessionId = crypto.randomUUID();
+        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
+        await db
+          .prepare(`INSERT INTO sessions (id, user_id, token_hash, ip_address, user_agent, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?)`)
+          .bind(sessionId, user.id, tokenHash, getAnonymizedIP(c), getUserAgent(c), expiresAt)
+          .run();
+      } catch { /* session tracking is best-effort; auth still succeeds */ }
 
       // Log audit
       try {
@@ -266,6 +331,31 @@ authRoutes.post('/register', async (c) => {
         } catch { /* best-effort — account created, PII encryption non-fatal */ }
       }
 
+      // Send email verification (best-effort; registration succeeds regardless)
+      try {
+        const verifyToken = generateSecureToken();
+        const tokenHash = await hashToken(verifyToken);
+        const kv = c.env?.SESSIONS;
+        if (kv) {
+          await kv.put(
+            `${KV_EMAIL_VERIFY_PREFIX}${tokenHash}`,
+            JSON.stringify({ userId, email }),
+            { expirationTtl: 86400 }, // 24 hours
+          );
+
+          const appUrl = c.env?.APP_URL || 'https://klubz.com';
+          const notif = new NotificationService(c.env);
+          const sg = notif.getSendGrid();
+          if (sg) {
+            await sg.sendVerificationEmail(
+              email,
+              firstName,
+              `${appUrl}/api/auth/verify-email?token=${verifyToken}`,
+            );
+          }
+        }
+      } catch { /* non-fatal */ }
+
       // Log audit
       try {
         await db
@@ -275,7 +365,7 @@ authRoutes.post('/register', async (c) => {
       } catch { /* best-effort */ }
 
       return c.json({
-        message: 'Registration successful',
+        message: 'Registration successful. Please check your email to verify your account.',
         userId,
       });
     } catch (err: unknown) {
@@ -309,6 +399,183 @@ authRoutes.post('/register', async (c) => {
     { error: { code: 'CONFIGURATION_ERROR', message: 'Authentication service unavailable' } },
     500,
   );
+});
+
+// ── Email Verification ─────────────────────────────────────────────────────
+
+authRoutes.get('/verify-email', async (c) => {
+  const token = c.req.query('token');
+  if (!token || token.length < 32) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid verification token' } }, 400);
+  }
+
+  const kv = c.env?.SESSIONS;
+  if (!kv) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Verification service unavailable' } }, 500);
+  }
+
+  try {
+    const tokenHash = await hashToken(token);
+    const raw = await kv.get(`${KV_EMAIL_VERIFY_PREFIX}${tokenHash}`);
+    if (!raw) {
+      return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Verification link is invalid or has expired' } }, 400);
+    }
+
+    const { userId } = JSON.parse(raw) as { userId: number; email: string };
+    const db = getDBOptional(c);
+    if (db) {
+      await db
+        .prepare('UPDATE users SET email_verified = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .bind(userId)
+        .run();
+    }
+
+    // Invalidate token immediately after use
+    await kv.delete(`${KV_EMAIL_VERIFY_PREFIX}${tokenHash}`);
+
+    // Redirect to login page with success flag (works for both PWA and browser)
+    const appUrl = c.env?.APP_URL || 'https://klubz.com';
+    return c.redirect(`${appUrl}/?verified=1#login`, 302);
+  } catch (err) {
+    logger.error('Email verification error', err instanceof Error ? err : undefined, withRequestContext(c));
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Verification failed' } }, 500);
+  }
+});
+
+// ── Forgot Password ─────────────────────────────────────────────────────────
+
+authRoutes.post('/forgot-password', async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON body' } }, 400);
+  }
+
+  const parsed = forgotPasswordSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Valid email is required' } }, 400);
+  }
+
+  const { email } = parsed.data;
+
+  // Always return success to prevent user enumeration
+  const genericResponse = c.json({
+    message: 'If that email is registered, you will receive a password reset link shortly.',
+  });
+
+  const db = getDBOptional(c);
+  const kv = c.env?.SESSIONS;
+
+  if (!db || !kv) return genericResponse;
+
+  try {
+    const emailHash = await hashForLookup(email);
+    const user = await db
+      .prepare('SELECT id FROM users WHERE email_hash = ? AND deleted_at IS NULL AND is_active = TRUE')
+      .bind(emailHash)
+      .first<{ id: number }>();
+
+    if (!user) return genericResponse;
+
+    const resetToken = generateSecureToken();
+    const tokenHash = await hashToken(resetToken);
+    await kv.put(
+      `${KV_PWD_RESET_PREFIX}${tokenHash}`,
+      JSON.stringify({ userId: user.id }),
+      { expirationTtl: 3600 }, // 1 hour
+    );
+
+    const appUrl = c.env?.APP_URL || 'https://klubz.com';
+    const notif = new NotificationService(c.env);
+    const sg = notif.getSendGrid();
+    if (sg) {
+      await sg.sendEmail({
+        to: email,
+        subject: 'Reset your Klubz password',
+        html: `
+          <div style="font-family:system-ui;max-width:600px;margin:0 auto;padding:20px">
+            <h1 style="color:#3B82F6">Password Reset</h1>
+            <p>We received a request to reset your Klubz password.</p>
+            <a href="${appUrl}/?token=${resetToken}#reset-password"
+               style="display:inline-block;background:#3B82F6;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">
+              Reset Password
+            </a>
+            <p style="color:#6B7280;font-size:0.875rem;margin-top:20px">
+              This link expires in 1 hour. If you didn't request a reset, please ignore this email.
+            </p>
+          </div>
+        `,
+        text: `Reset your Klubz password: ${appUrl}/?token=${resetToken}#reset-password (expires in 1 hour)`,
+      });
+    }
+  } catch (err) {
+    logger.error('Forgot-password error', err instanceof Error ? err : undefined, withRequestContext(c));
+  }
+
+  return genericResponse;
+});
+
+// ── Reset Password ──────────────────────────────────────────────────────────
+
+authRoutes.post('/reset-password', async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON body' } }, 400);
+  }
+
+  const parsed = resetPasswordSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Token and new password (min 8 chars) are required' } }, 400);
+  }
+
+  const { token, newPassword } = parsed.data;
+  const kv = c.env?.SESSIONS;
+  const db = getDBOptional(c);
+
+  if (!kv || !db) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Password reset service unavailable' } }, 500);
+  }
+
+  try {
+    const tokenHash = await hashToken(token);
+    const raw = await kv.get(`${KV_PWD_RESET_PREFIX}${tokenHash}`);
+    if (!raw) {
+      return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Reset link is invalid or has expired' } }, 400);
+    }
+
+    const { userId } = JSON.parse(raw) as { userId: number };
+
+    // Invalidate token immediately (single-use)
+    await kv.delete(`${KV_PWD_RESET_PREFIX}${tokenHash}`);
+
+    const newHash = await hashPassword(newPassword);
+    await db
+      .prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .bind(newHash, userId)
+      .run();
+
+    // Invalidate all existing sessions for this user
+    await db
+      .prepare('UPDATE sessions SET is_active = FALSE WHERE user_id = ?')
+      .bind(userId)
+      .run();
+
+    // Log audit
+    try {
+      await db
+        .prepare('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(userId, 'PASSWORD_RESET', 'user', userId, getAnonymizedIP(c), getUserAgent(c))
+        .run();
+    } catch { /* best-effort */ }
+
+    return c.json({ message: 'Password reset successful. Please log in with your new password.' });
+  } catch (err) {
+    logger.error('Reset-password error', err instanceof Error ? err : undefined, withRequestContext(c));
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Password reset failed' } }, 500);
+  }
 });
 
 // ── MFA Verify ─────────────────────────────────────────────────────────────
@@ -352,7 +619,46 @@ authRoutes.post('/refresh', async (c) => {
       return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Invalid token type' } }, 401);
     }
 
-    // Issue new access token
+    // Validate refresh token is still active in sessions table (rotation check)
+    const db = getDBOptional(c);
+    const tokenHash = await hashToken(refreshToken);
+
+    if (db) {
+      const session = await db
+        .prepare(`SELECT id FROM sessions WHERE user_id = ? AND token_hash = ? AND is_active = TRUE AND expires_at > datetime('now')`)
+        .bind(payload.sub, tokenHash)
+        .first<{ id: string }>();
+
+      if (!session) {
+        // Token not found or already rotated — possible replay attack
+        logger.warn('Refresh token not found in sessions (possible replay)', { userId: payload.sub });
+        return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Refresh token has been revoked or expired' } }, 401);
+      }
+
+      // Issue new token pair
+      const { accessToken: newAccess, refreshToken: newRefresh } = await issueTokenPair(
+        {
+          id: payload.sub,
+          email: payload.email,
+          name: payload.name,
+          role: payload.role,
+          organizationId: payload.orgId,
+        },
+        secret,
+      );
+
+      // Rotate: update session with new token hash
+      const newTokenHash = await hashToken(newRefresh);
+      const newExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
+      await db
+        .prepare(`UPDATE sessions SET token_hash = ?, last_accessed_at = CURRENT_TIMESTAMP, expires_at = ? WHERE id = ?`)
+        .bind(newTokenHash, newExpires, session.id)
+        .run();
+
+      return c.json({ accessToken: newAccess, refreshToken: newRefresh });
+    }
+
+    // No DB available — fallback to stateless (issue new access token only)
     const now = Math.floor(Date.now() / 1000);
     const accessToken = await createToken(
       {
@@ -377,6 +683,14 @@ authRoutes.post('/refresh', async (c) => {
 // ── Logout ─────────────────────────────────────────────────────────────────
 
 authRoutes.post('/logout', async (c) => {
+  let body: unknown;
+  try { body = await c.req.json(); } catch { body = {}; }
+
+  const refreshToken =
+    typeof body === 'object' && body !== null && 'refreshToken' in body
+      ? (body as { refreshToken?: string }).refreshToken
+      : undefined;
+
   const authHeader = c.req.header('Authorization');
   const db = getDBOptional(c);
   const secret = getJWTSecret(c);
@@ -385,6 +699,16 @@ authRoutes.post('/logout', async (c) => {
     try {
       const token = authHeader.substring(7);
       const payload = await verifyToken(token, secret);
+
+      // Invalidate the specific session if refresh token was provided
+      if (refreshToken) {
+        const rtHash = await hashToken(refreshToken);
+        await db
+          .prepare('UPDATE sessions SET is_active = FALSE WHERE user_id = ? AND token_hash = ?')
+          .bind(payload.sub, rtHash)
+          .run();
+      }
+
       await db
         .prepare('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)')
         .bind(
