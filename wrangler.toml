@@ -56,6 +56,14 @@ database_id = "YOUR_STAGING_D1_ID"
 binding = "CACHE"
 id = "YOUR_STAGING_KV_CACHE_ID"
 
+[[env.staging.kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "YOUR_STAGING_KV_RATE_LIMIT_ID"
+
+[[env.staging.kv_namespaces]]
+binding = "SESSIONS"
+id = "YOUR_STAGING_KV_SESSIONS_ID"
+
 # Development environment
 [env.development]
 name = "klubz-dev"
@@ -63,3 +71,20 @@ name = "klubz-dev"
 [env.development.vars]
 ENVIRONMENT = "development"
 APP_URL = "http://localhost:3001"
+
+[[env.development.d1_databases]]
+binding = "DB"
+database_name = "klubz-dev"
+database_id = "YOUR_DEV_D1_ID"
+
+[[env.development.kv_namespaces]]
+binding = "CACHE"
+id = "YOUR_DEV_KV_CACHE_ID"
+
+[[env.development.kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "YOUR_DEV_KV_RATE_LIMIT_ID"
+
+[[env.development.kv_namespaces]]
+binding = "SESSIONS"
+id = "YOUR_DEV_KV_SESSIONS_ID"

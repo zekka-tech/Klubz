@@ -17,7 +17,7 @@ import { matchRiderToDrivers } from '../lib/matching/engine';
 import type { RiderRequest, DriverTrip } from '../lib/matching/types';
 import { ValidationError } from '../lib/errors';
 import { NotificationService } from '../integrations/notifications';
-import { decrypt } from '../lib/encryption';
+import { safeDecryptPII } from '../lib/encryption';
 import { getCacheService } from '../lib/cache';
 import { createNotification } from '../lib/notificationStore';
 import { getUserNotificationPreferences } from '../lib/userPreferences';
@@ -524,17 +524,18 @@ tripRoutes.post('/:tripId/book', async (c) => {
           }
 
           if (notifications.emailAvailable && driverNotificationPrefs.tripUpdates) {
-            const driverFirstName = tripDetails.first_name_encrypted
-              ? await decrypt(JSON.parse(tripDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, tripDetails.driver_id.toString())
-              : 'Driver';
+            const encKey = c.env?.ENCRYPTION_KEY;
+            const driverFirstName = await safeDecryptPII(
+              tripDetails.first_name_encrypted, encKey, tripDetails.driver_id,
+            ) ?? 'Driver';
 
             const riderDetails = await db.prepare('SELECT first_name_encrypted, last_name_encrypted FROM users WHERE id = ?').bind(user.id).first<RiderNameRow>();
-            const riderFirstName = riderDetails?.first_name_encrypted
-              ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
-              : 'A rider';
-            const riderLastName = riderDetails?.last_name_encrypted
-              ? await decrypt(JSON.parse(riderDetails.last_name_encrypted).data, c.env.ENCRYPTION_KEY, user.id.toString())
-              : '';
+            const riderFirstName = await safeDecryptPII(
+              riderDetails?.first_name_encrypted, encKey, user.id,
+            ) ?? 'A rider';
+            const riderLastName = await safeDecryptPII(
+              riderDetails?.last_name_encrypted, encKey, user.id,
+            ) ?? '';
 
             await notifications.sendEmail(
               tripDetails.email,
@@ -789,13 +790,14 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
             }
 
           if (notifications.emailAvailable || notifications.smsAvailable) {
-            const riderFirstName = bookingDetails.first_name_encrypted
-              ? await decrypt(JSON.parse(bookingDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, bookingDetails.user_id.toString())
-              : 'Rider';
+            const encKey = c.env?.ENCRYPTION_KEY;
+            const riderFirstName = await safeDecryptPII(
+              bookingDetails.first_name_encrypted, encKey, bookingDetails.user_id,
+            ) ?? 'Rider';
 
-            const driverFirstName = bookingDetails.driver_first_name
-              ? await decrypt(JSON.parse(bookingDetails.driver_first_name).data, c.env.ENCRYPTION_KEY, user.id.toString())
-              : 'Your driver';
+            const driverFirstName = await safeDecryptPII(
+              bookingDetails.driver_first_name, encKey, user.id,
+            ) ?? 'Your driver';
 
             // Send email confirmation
             if (notifications.emailAvailable && riderNotificationPrefs.tripUpdates) {
@@ -823,7 +825,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
             // Send SMS confirmation if phone available
             if (notifications.smsAvailable && bookingDetails.phone_encrypted && riderNotificationPrefs.tripUpdates && riderNotificationPrefs.smsNotifications) {
               try {
-                const phone = await decrypt(JSON.parse(bookingDetails.phone_encrypted).data, c.env.ENCRYPTION_KEY, bookingDetails.user_id.toString());
+                const phone = await safeDecryptPII(bookingDetails.phone_encrypted, c.env?.ENCRYPTION_KEY, bookingDetails.user_id) ?? bookingDetails.phone_encrypted;
                 await notifications.sendSMS(
                   phone,
                   `Klubz: Your booking is confirmed! Trip with ${driverFirstName} on ${new Date(bookingDetails.departure_time).toLocaleDateString()} at ${new Date(bookingDetails.departure_time).toLocaleTimeString()}. Check your email for details.`
@@ -938,9 +940,9 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
             }
 
           if (notifications.emailAvailable && riderNotificationPrefs.tripUpdates) {
-            const riderFirstName = riderDetails.first_name_encrypted
-              ? await decrypt(JSON.parse(riderDetails.first_name_encrypted).data, c.env.ENCRYPTION_KEY, riderDetails.user_id.toString())
-              : 'Rider';
+            const riderFirstName = await safeDecryptPII(
+              riderDetails.first_name_encrypted, c.env?.ENCRYPTION_KEY, riderDetails.user_id,
+            ) ?? 'Rider';
 
             const reason = parsedBody.data.reason || 'The driver is unable to accommodate this booking';
 
@@ -1099,9 +1101,9 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
             }
 
             if (notifications.emailAvailable && participantNotificationPrefs.tripUpdates) {
-              const firstName = participant.first_name_encrypted
-                ? await decrypt(JSON.parse(participant.first_name_encrypted).data, c.env.ENCRYPTION_KEY, participant.user_id.toString())
-                : 'Rider';
+              const firstName = await safeDecryptPII(
+                participant.first_name_encrypted, c.env?.ENCRYPTION_KEY, participant.user_id,
+              ) ?? 'Rider';
 
               await notifications.sendEmail(
                 participant.email,

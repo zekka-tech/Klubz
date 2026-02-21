@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../types';
 import { createToken, verifyToken, issueTokenPair } from '../middleware/auth';
-import { hashPassword, verifyPassword, hashForLookup, isLegacyHash } from '../lib/encryption';
+import { hashPassword, verifyPassword, hashForLookup, isLegacyHash, encryptPII, safeDecryptPII } from '../lib/encryption';
 import { logger } from '../lib/logger';
 import { getDBOptional } from '../lib/db';
 import { getAnonymizedIP, getUserAgent } from '../lib/http';
@@ -131,7 +131,10 @@ authRoutes.post('/login', async (c) => {
         .bind(user.id)
         .run();
 
-      const userName = [user.first_name_encrypted, user.last_name_encrypted].filter(Boolean).join(' ') || email.split('@')[0];
+      const encKey = c.env?.ENCRYPTION_KEY;
+      const decryptedFirst = await safeDecryptPII(user.first_name_encrypted, encKey, user.id);
+      const decryptedLast = await safeDecryptPII(user.last_name_encrypted, encKey, user.id);
+      const userName = [decryptedFirst, decryptedLast].filter(Boolean).join(' ') || email.split('@')[0];
 
       const { accessToken, refreshToken } = await issueTokenPair(
         {
@@ -246,7 +249,21 @@ authRoutes.post('/register', async (c) => {
         .bind(email, emailHash, passwordHash, firstName, lastName, phone || null, 'user', ip)
         .run();
 
-      const userId = result?.meta?.last_row_id ?? 0;
+      const userId = Number(result?.meta?.last_row_id ?? 0);
+
+      // Encrypt PII now that we have the userId (best-effort; non-fatal if key is absent)
+      const encKey = c.env?.ENCRYPTION_KEY;
+      if (encKey && userId > 0) {
+        try {
+          const encFirst = firstName ? await encryptPII(firstName, encKey, userId) : null;
+          const encLast = lastName ? await encryptPII(lastName, encKey, userId) : null;
+          const encPhone = phone ? await encryptPII(phone, encKey, userId) : null;
+          await db
+            .prepare('UPDATE users SET first_name_encrypted = ?, last_name_encrypted = ?, phone_encrypted = ? WHERE id = ?')
+            .bind(encFirst, encLast, encPhone, userId)
+            .run();
+        } catch { /* best-effort — account created, PII encryption non-fatal */ }
+      }
 
       // Log audit
       try {

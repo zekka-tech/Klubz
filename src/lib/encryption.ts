@@ -263,6 +263,33 @@ export async function encryptPII(
 }
 
 /**
+ * Safely decrypt PII, falling back to the raw value for legacy plaintext data
+ * or when the encryption key is unavailable.
+ *
+ * This is the preferred read helper for `*_encrypted` columns:
+ * - New data (properly encrypted JSON) is decrypted normally.
+ * - Legacy plaintext data (stored before encryption was enforced) is returned as-is.
+ * - If the encryption key is not configured the raw string is returned unchanged.
+ */
+export async function safeDecryptPII(
+  encryptedStr: string | null | undefined,
+  encryptionKey: string | undefined,
+  userId: number | string,
+): Promise<string | null> {
+  if (!encryptedStr) return null;
+  if (!encryptionKey) return encryptedStr;
+  try {
+    const parsed: EncryptedData = JSON.parse(encryptedStr);
+    if (parsed.ct && parsed.iv && typeof parsed.v === 'number') {
+      return await decrypt(parsed, encryptionKey, `user:${userId}`);
+    }
+  } catch {
+    // Not encrypted JSON — legacy plaintext value, return as-is
+  }
+  return encryptedStr;
+}
+
+/**
  * Decrypt PII with user-scoped AAD.
  */
 export async function decryptPII(

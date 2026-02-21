@@ -66,6 +66,7 @@ export class StripeService {
     currency: string;     // 'zar'
     tripId: number;
     userId: number;
+    bookingId?: number;
     description?: string;
   }): Promise<StripePaymentIntent> {
     logger.info('Creating Stripe payment intent', {
@@ -74,15 +75,20 @@ export class StripeService {
       tripId: params.tripId,
     });
 
-    return this.request<StripePaymentIntent>('POST', '/payment_intents', {
+    const body: Record<string, string> = {
       amount: params.amount.toString(),
       currency: params.currency.toLowerCase(),
-      'metadata[trip_id]': params.tripId.toString(),
-      'metadata[user_id]': params.userId.toString(),
+      // camelCase keys to match webhook handler expectations
+      'metadata[tripId]': params.tripId.toString(),
+      'metadata[userId]': params.userId.toString(),
       'metadata[platform]': 'klubz',
       description: params.description || `Klubz trip #${params.tripId}`,
       'automatic_payment_methods[enabled]': 'true',
-    });
+    };
+    if (params.bookingId !== undefined) {
+      body['metadata[bookingId]'] = params.bookingId.toString();
+    }
+    return this.request<StripePaymentIntent>('POST', '/payment_intents', body);
   }
 
   /**

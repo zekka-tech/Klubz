@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import Stripe from 'stripe';
 import type { Context } from 'hono';
+import { StripeService } from '../integrations/stripe';
 import { authMiddleware } from '../middleware/auth';
 import type { AppEnv, AuthUser, D1Database } from '../types';
 import { getDB } from '../lib/db';
@@ -290,15 +290,11 @@ async function writePaymentAudit(
 }
 
 /**
- * Get Stripe instance if configured
+ * Get Workers-compatible StripeService if configured.
  */
-function getStripe(c: Context<AppEnv>) {
-  if (!c.env?.STRIPE_SECRET_KEY) {
-    return null;
-  }
-  return new Stripe(c.env.STRIPE_SECRET_KEY, {
-    apiVersion: '2023-10-16',
-  });
+function getStripe(c: Context<AppEnv>): StripeService | null {
+  if (!c.env?.STRIPE_SECRET_KEY) return null;
+  return new StripeService(c.env.STRIPE_SECRET_KEY);
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +357,7 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
 
   if (booking.payment_intent_id && booking.payment_status === 'pending') {
     try {
-      const existingIntent = await stripe.paymentIntents.retrieve(booking.payment_intent_id);
+      const existingIntent = await stripe.getPaymentIntent(booking.payment_intent_id);
       if (existingIntent?.id) {
         const existingResponse: PaymentIntentResponse = {
           clientSecret: existingIntent.client_secret,
@@ -385,19 +381,14 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
   }
 
   try {
-    // Create Stripe payment intent
-    const paymentIntent = await stripe.paymentIntents.create({
+    // Create Stripe payment intent (Workers-compatible via StripeService)
+    const paymentIntent = await stripe.createPaymentIntent({
       amount: expectedAmountCents,
       currency: 'zar',
-      metadata: {
-        tripId: tripId.toString(),
-        userId: user.id.toString(),
-        bookingId: booking.id.toString(),
-      },
+      tripId: Number(tripId),
+      userId: user.id,
+      bookingId: booking.id,
       description: `Payment for trip: ${booking.title}`,
-      automatic_payment_methods: {
-        enabled: true,
-      },
     });
 
     // Store payment intent ID in booking
@@ -411,7 +402,7 @@ paymentRoutes.post('/intent', authMiddleware(), async (c) => {
     if (updatedRows === 0) {
       const existing = await db.prepare('SELECT payment_intent_id FROM trip_participants WHERE id = ?').bind(booking.id).first<{ payment_intent_id: string | null }>();
       if (existing?.payment_intent_id) {
-        const existingIntent = await stripe.paymentIntents.retrieve(existing.payment_intent_id);
+        const existingIntent = await stripe.getPaymentIntent(existing.payment_intent_id);
         const existingResponse: PaymentIntentResponse = {
           clientSecret: existingIntent.client_secret,
           paymentIntentId: existingIntent.id,
@@ -490,10 +481,10 @@ paymentRoutes.post('/webhook', async (c) => {
   let event: StripeWebhookEvent;
   try {
     if (webhookSecret) {
-      event = stripe.webhooks.constructEvent(body, signature, webhookSecret) as unknown as StripeWebhookEvent;
-    } else {
-      event = JSON.parse(body) as StripeWebhookEvent;
+      const isValid = await stripe.verifyWebhookSignature(body, signature, webhookSecret);
+      if (!isValid) throw new Error('Signature mismatch');
     }
+    event = JSON.parse(body) as StripeWebhookEvent;
   } catch (err: unknown) {
     logger.error('Webhook signature verification failed', {
       ...withRequestContext(c),

@@ -180,6 +180,7 @@ export interface TripParticipantRow {
   accepted_at: string | null;
   completed_at: string | null;
   cancelled_at: string | null;
+  passenger_count: number | null;
   rating: number | null;
   review_encrypted: string | null;
 }

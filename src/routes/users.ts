@@ -12,7 +12,7 @@ import { logger } from '../lib/logger';
 import { eventBus } from '../lib/eventBus';
 import { getDB } from '../lib/db';
 import { getIP, getUserAgent } from '../lib/http';
-import { decrypt, hashForLookup } from '../lib/encryption';
+import { encryptPII, safeDecryptPII, hashForLookup } from '../lib/encryption';
 import { AppError, ValidationError } from '../lib/errors';
 import { getCacheService } from '../lib/cache';
 import { DEFAULT_USER_PREFERENCES, getUserPreferences, upsertUserPreferences } from '../lib/userPreferences';
@@ -157,12 +157,17 @@ userRoutes.get('/profile', async (c) => {
       return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
     }
 
+    const encKey = c.env?.ENCRYPTION_KEY;
+    const decryptedFirst = await safeDecryptPII(row.first_name_encrypted, encKey, user.id);
+    const decryptedLast = await safeDecryptPII(row.last_name_encrypted, encKey, user.id);
+    const decryptedPhone = await safeDecryptPII(row.phone_encrypted, encKey, user.id);
+
     const profile = {
       id: row.id,
       email: row.email,
-      name: [row.first_name_encrypted, row.last_name_encrypted].filter(Boolean).join(' ') || user.name,
+      name: [decryptedFirst, decryptedLast].filter(Boolean).join(' ') || user.name,
       role: row.role,
-      phone: row.phone_encrypted || null,
+      phone: decryptedPhone || null,
       avatar: row.avatar_url || null,
       emailVerified: !!row.email_verified,
       mfaEnabled: !!row.mfa_enabled,
@@ -210,16 +215,29 @@ userRoutes.put('/profile', async (c) => {
   }
 
   const db = getDB(c);
+  const encKey = c.env?.ENCRYPTION_KEY;
   try {
     const parts: string[] = [];
     const values: unknown[] = [];
 
     if (payload.name) {
       const [first, ...rest] = payload.name.split(' ');
+      const lastName = rest.join(' ') || null;
       parts.push('first_name_encrypted = ?', 'last_name_encrypted = ?');
-      values.push(first, rest.join(' ') || null);
+      if (encKey) {
+        values.push(
+          await encryptPII(first, encKey, user.id),
+          lastName ? await encryptPII(lastName, encKey, user.id) : null,
+        );
+      } else {
+        values.push(first, lastName);
+      }
     }
-    if (payload.phone !== undefined) { parts.push('phone_encrypted = ?'); values.push(payload.phone || null); }
+    if (payload.phone !== undefined) {
+      parts.push('phone_encrypted = ?');
+      const phoneVal = payload.phone || null;
+      values.push(encKey && phoneVal ? await encryptPII(phoneVal, encKey, user.id) : phoneVal);
+    }
     if (payload.avatar !== undefined) { parts.push('avatar_url = ?'); values.push(payload.avatar || null); }
 
     parts.push('updated_at = CURRENT_TIMESTAMP');
@@ -294,28 +312,33 @@ userRoutes.get('/trips', async (c) => {
     const dataParams = [...params, limit, (page - 1) * limit];
     const { results } = await db.prepare(dataSql).bind(...dataParams).all<UserTripRow>();
 
-    const trips = (results || []).map((r) => ({
-      id: r.id,
-      title: r.title,
-      description: r.description,
-      pickupLocation: r.pickup_location_encrypted ? { address: r.pickup_location_encrypted } : { address: r.origin },
-      dropoffLocation: r.dropoff_location_encrypted ? { address: r.dropoff_location_encrypted } : { address: r.destination },
-      scheduledTime: r.departure_time,
-      status: r.status,
-      participantRole: r.participant_role,
-      participantStatus: r.participant_status,
-      price: r.price_per_seat,
-      currency: r.currency || 'ZAR',
-      availableSeats: r.available_seats,
-      totalSeats: r.total_seats,
-      vehicleType: r.vehicle_type,
-      rating: r.rating,
-      carbonSaved: 2.1, // estimate per trip
-      driver: {
-        name: [r.driver_first_name, r.driver_last_name].filter(Boolean).join(' ') || 'Driver',
-        avatar: r.driver_avatar || null,
-      },
-      createdAt: r.created_at,
+    const tripsEncKey = c.env?.ENCRYPTION_KEY;
+    const trips = await Promise.all((results || []).map(async (r) => {
+      const driverFirst = await safeDecryptPII(r.driver_first_name, tripsEncKey, r.id);
+      const driverLast = await safeDecryptPII(r.driver_last_name, tripsEncKey, r.id);
+      return {
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        pickupLocation: r.pickup_location_encrypted ? { address: r.pickup_location_encrypted } : { address: r.origin },
+        dropoffLocation: r.dropoff_location_encrypted ? { address: r.dropoff_location_encrypted } : { address: r.destination },
+        scheduledTime: r.departure_time,
+        status: r.status,
+        participantRole: r.participant_role,
+        participantStatus: r.participant_status,
+        price: r.price_per_seat,
+        currency: r.currency || 'ZAR',
+        availableSeats: r.available_seats,
+        totalSeats: r.total_seats,
+        vehicleType: r.vehicle_type,
+        rating: r.rating,
+        carbonSaved: 2.1, // estimate per trip
+        driver: {
+          name: [driverFirst, driverLast].filter(Boolean).join(' ') || 'Driver',
+          avatar: r.driver_avatar || null,
+        },
+        createdAt: r.created_at,
+      };
     }));
 
     return c.json({
@@ -500,12 +523,9 @@ userRoutes.get('/export', async (c) => {
       profile: {
         id: userRecord.id,
         email: userRecord.email,
-        firstName: userRecord.first_name_encrypted ?
-          await decrypt(JSON.parse(userRecord.first_name_encrypted), encryptionKey, user.id.toString()).catch(() => null) : null,
-        lastName: userRecord.last_name_encrypted ?
-          await decrypt(JSON.parse(userRecord.last_name_encrypted), encryptionKey, user.id.toString()).catch(() => null) : null,
-        phone: userRecord.phone_encrypted ?
-          await decrypt(JSON.parse(userRecord.phone_encrypted), encryptionKey, user.id.toString()).catch(() => null) : null,
+        firstName: await safeDecryptPII(userRecord.first_name_encrypted, encryptionKey, user.id),
+        lastName: await safeDecryptPII(userRecord.last_name_encrypted, encryptionKey, user.id),
+        phone: await safeDecryptPII(userRecord.phone_encrypted, encryptionKey, user.id),
         role: userRecord.role,
         emailVerified: userRecord.email_verified,
         phoneVerified: userRecord.phone_verified,
