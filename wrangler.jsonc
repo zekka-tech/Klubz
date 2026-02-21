@@ -16,6 +16,16 @@
 			// Klubz production cache namespace
 			"binding": "CACHE",
 			"id": "8f8dcf30a8d8933773a5055b35cd7052"
+		},
+		{
+			"binding": "RATE_LIMIT_KV",
+			"id": "249d6424e1614d90aac805bb09de6295",
+			"remote": true
+		},
+		{
+			"binding": "SESSIONS",
+			"id": "921988bcd6504ee3bd0e96fb0da840f1",
+			"remote": true
 		}
 		// ── To provision (run: wrangler kv namespace create <NAME>) ───────────
 		// { "binding": "RATE_LIMIT_KV", "id": "<KV namespace ID>" }
