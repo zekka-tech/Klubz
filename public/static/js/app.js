@@ -581,39 +581,33 @@
 
         <div class="carbon-widget" style="margin-bottom:var(--space-lg)">
           <div style="font-size:3rem;margin-bottom:var(--space-sm)">&#127807;</div>
-          <div class="carbon-widget__value">25.1 <span class="carbon-widget__unit">kg CO2</span></div>
+          <div class="carbon-widget__value"><span id="carbon-saved-value">—</span> <span class="carbon-widget__unit">kg CO₂</span></div>
           <div class="carbon-widget__label">total carbon emissions saved</div>
         </div>
 
         <div class="stats-grid" style="margin-bottom:var(--space-lg)">
           <div class="stat-card">
-            <div class="stat-card__value" style="color:var(--accent)">12</div>
+            <div class="stat-card__value" style="color:var(--accent)" id="carbon-trees">—</div>
             <div class="stat-card__label">Trees Equivalent</div>
           </div>
           <div class="stat-card">
-            <div class="stat-card__value" style="color:var(--primary)">1,250</div>
+            <div class="stat-card__value" style="color:var(--primary)" id="carbon-km">—</div>
             <div class="stat-card__label">km Shared</div>
           </div>
           <div class="stat-card">
-            <div class="stat-card__value" style="color:var(--warning)">42</div>
+            <div class="stat-card__value" style="color:var(--warning)" id="carbon-trips">—</div>
             <div class="stat-card__label">Trips Pooled</div>
           </div>
           <div class="stat-card">
-            <div class="stat-card__value" style="color:#8B5CF6">0.6</div>
+            <div class="stat-card__value" style="color:#8B5CF6" id="carbon-cars">—</div>
             <div class="stat-card__label">Cars Off Road</div>
           </div>
         </div>
 
         <div class="card">
-          <h4 style="font-size:0.875rem;font-weight:600;margin-bottom:var(--space-md)">Monthly Breakdown</h4>
-          <div id="carbon-chart" style="height:200px;display:flex;align-items:flex-end;gap:8px;padding-top:var(--space-md)">
-            ${['Jan','Feb','Mar','Apr','May','Jun'].map((m, i) => {
-              const h = [40, 55, 65, 50, 70, 85][i];
-              return `<div style="flex:1;text-align:center">
-                <div style="height:${h}%;background:linear-gradient(to top,var(--accent),var(--primary));border-radius:6px 6px 0 0;min-height:20px;transition:height 0.5s"></div>
-                <div style="font-size:0.625rem;color:var(--text-muted);margin-top:4px">${m}</div>
-              </div>`;
-            }).join('')}
+          <h4 style="font-size:0.875rem;font-weight:600;margin-bottom:var(--space-md)">Your Impact</h4>
+          <div id="carbon-impact-detail" style="color:var(--text-muted);font-size:0.875rem;text-align:center;padding:var(--space-md) 0">
+            Loading your carbon data…
           </div>
         </div>
       </div>
@@ -624,13 +618,19 @@
     const { user } = Store.state;
     return `
       <div class="screen fade-in">
-        <div style="text-align:center;margin-bottom:var(--space-xl)">
+        <div style="text-align:center;margin-bottom:var(--space-lg)">
           <div class="avatar-sm" style="width:72px;height:72px;font-size:1.5rem;margin:0 auto var(--space-md)">${getInitials(user?.name || user?.email)}</div>
           <h2 style="font-size:1.25rem;font-weight:700">${escapeHtml(user?.name || 'User')}</h2>
           <p style="color:var(--text-muted);font-size:0.875rem">${escapeHtml(user?.email || '')}</p>
           <div style="display:flex;justify-content:center;gap:var(--space-sm);margin-top:var(--space-sm)">
             <span class="chip chip--active">${escapeHtml(user?.role || 'passenger')}</span>
           </div>
+        </div>
+
+        <div id="profile-stats" class="stats-grid" style="margin-bottom:var(--space-lg)">
+          <div class="stat-card"><div class="skeleton" style="height:40px"></div></div>
+          <div class="stat-card"><div class="skeleton" style="height:40px"></div></div>
+          <div class="stat-card"><div class="skeleton" style="height:40px"></div></div>
         </div>
 
         <div class="card" style="padding:0;overflow:hidden">
@@ -646,7 +646,7 @@
             <div class="list-item__icon" style="background:rgba(16,185,129,0.12);color:var(--accent)">${Icons.leaf}</div>
             <div class="list-item__content">
               <div class="list-item__title">Carbon Impact</div>
-              <div class="list-item__subtitle">25.1 kg CO2 saved</div>
+              <div class="list-item__subtitle" id="profile-carbon-subtitle">Loading…</div>
             </div>
             <div class="list-item__action">&rsaquo;</div>
           </div>
@@ -985,7 +985,10 @@
           loadUpcomingTrips();
           loadHomeStats();
           break;
+        case 'find-ride': loadFindRide(); break;
         case 'my-trips': loadTrips('upcoming'); break;
+        case 'carbon': loadCarbonStats(); break;
+        case 'profile': loadProfileStats(); break;
       }
     }
   };
@@ -1313,6 +1316,84 @@
       `;
     } catch {
       grid.innerHTML = '';
+    }
+  }
+
+  function loadFindRide() {
+    const dateEl = document.getElementById('fr-date');
+    const timeEl = document.getElementById('fr-time');
+    if (!dateEl || !timeEl) return;
+    const now = new Date();
+    dateEl.value = now.toISOString().slice(0, 10);
+    // Round up to the next 15-minute boundary, at least 30 min from now
+    now.setMinutes(Math.ceil((now.getMinutes() + 30) / 15) * 15, 0, 0);
+    timeEl.value = now.toTimeString().slice(0, 5);
+  }
+
+  async function loadCarbonStats() {
+    const user = Store.state.user;
+    if (!user?.id) return;
+    try {
+      const data = await API.get(`/users/${user.id}`);
+      const stats = data.stats || {};
+      const carbonSaved = stats.carbonSaved ?? 0;
+      const completed = stats.completedTrips ?? stats.totalTrips ?? 0;
+      const trees = Math.floor(carbonSaved / 22);
+      const cars = (carbonSaved / 4600).toFixed(1);
+      const km = (completed * 30).toLocaleString();
+
+      const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+      set('carbon-saved-value', carbonSaved.toFixed(1));
+      set('carbon-trees', trees);
+      set('carbon-km', km);
+      set('carbon-trips', completed);
+      set('carbon-cars', cars);
+
+      const detail = document.getElementById('carbon-impact-detail');
+      if (detail) {
+        detail.innerHTML = completed > 0
+          ? `You've completed <strong>${completed}</strong> shared trip${completed !== 1 ? 's' : ''}, saving the equivalent of <strong>${trees}</strong> tree${trees !== 1 ? 's' : ''} worth of CO₂ and removing <strong>${cars}</strong> car${cars !== '1.0' ? 's' : ''} from the road.`
+          : `Complete your first shared trip to start tracking your environmental impact.`;
+      }
+    } catch {
+      const el = document.getElementById('carbon-impact-detail');
+      if (el) el.textContent = 'Unable to load carbon data.';
+    }
+  }
+
+  async function loadProfileStats() {
+    const user = Store.state.user;
+    if (!user?.id) return;
+    try {
+      const data = await API.get(`/users/${user.id}`);
+      const stats = data.stats || {};
+      const totalTrips = stats.totalTrips ?? 0;
+      const rating = stats.rating ? Number(stats.rating).toFixed(1) : '—';
+      const carbonSaved = stats.carbonSaved ? Number(stats.carbonSaved).toFixed(1) : '0.0';
+
+      const statsEl = document.getElementById('profile-stats');
+      if (statsEl) {
+        statsEl.innerHTML = `
+          <div class="stat-card">
+            <div class="stat-card__value">${totalTrips}</div>
+            <div class="stat-card__label">Trips</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__value">${rating}</div>
+            <div class="stat-card__label">Rating</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__value" style="font-size:1rem">${carbonSaved}</div>
+            <div class="stat-card__label">kg CO₂ Saved</div>
+          </div>
+        `;
+      }
+
+      const subtitleEl = document.getElementById('profile-carbon-subtitle');
+      if (subtitleEl) subtitleEl.textContent = `${carbonSaved} kg CO₂ saved`;
+    } catch {
+      const statsEl = document.getElementById('profile-stats');
+      if (statsEl) statsEl.innerHTML = '';
     }
   }
 
