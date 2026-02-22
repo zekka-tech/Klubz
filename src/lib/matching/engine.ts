@@ -210,6 +210,15 @@ function checkRouteCompatibility(
     return result;
   }
 
+  // Absolute detour hard filter: never take driver > maxAbsoluteDetourKm off route
+  if (driver.routePolyline && driver.routePolyline.length >= 2) {
+    const detourKm = estimateDetourKm(rider.pickup, rider.dropoff, driver.routePolyline);
+    if (detourKm > config.thresholds.maxAbsoluteDetourKm) {
+      result.reason = 'detour_exceeds_max';
+      return result;
+    }
+  }
+
   result.passed = true;
   return result;
 }
@@ -254,6 +263,8 @@ function computeScore(
   }
 
   // --- Detour cost score ---
+  // Normalised against the absolute 10 km cap so the score is consistent
+  // across all route lengths: 0 km detour → 0.0, 10 km detour → 1.0.
   let detourKm = 0;
   let detourScore = 0;
   if (driver.routePolyline && driver.routePolyline.length >= 2) {
@@ -262,8 +273,7 @@ function computeScore(
       rider.dropoff,
       driver.routePolyline,
     );
-    const routeLen = driver.routeDistanceKm ?? 20; // fallback 20 km
-    detourScore = Math.min(detourKm / (routeLen * t.maxDetourFraction), 1);
+    detourScore = Math.min(detourKm / t.maxAbsoluteDetourKm, 1);
   }
 
   // --- Driver rating score (lower = better driver = lower score) ---

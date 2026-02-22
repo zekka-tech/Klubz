@@ -22,6 +22,7 @@ import { safeDecryptPII } from '../lib/encryption';
 import { getCacheService } from '../lib/cache';
 import { createNotification } from '../lib/notificationStore';
 import { getUserNotificationPreferences } from '../lib/userPreferences';
+import { calculateFareCents, estimateETAMinutes, haversineKm, estimatedRoadKm, TRIP_RATES } from '../lib/pricing';
 
 export const tripRoutes = new Hono<AppEnv>();
 
@@ -48,6 +49,8 @@ interface DriverTripRow {
   vehicle_type: string | null;
   price_per_seat: number | null;
   driver_id: number;
+  route_distance_km: number | null;
+  trip_type: string | null;
 }
 
 interface TripSeatRow {
@@ -138,9 +141,13 @@ interface IdempotencyInsertResult {
 const offerTripSchema = z.object({
   pickupLocation: z.object({
     address: z.string().trim().min(1).optional(),
+    lat: z.number().optional(),
+    lng: z.number().optional(),
   }).passthrough(),
   dropoffLocation: z.object({
     address: z.string().trim().min(1).optional(),
+    lat: z.number().optional(),
+    lng: z.number().optional(),
   }).passthrough(),
   scheduledTime: z.string().min(1),
   availableSeats: z.number().int().min(1).max(6).optional().default(3),
@@ -151,6 +158,11 @@ const offerTripSchema = z.object({
     model: z.string().trim().min(1),
     licensePlate: z.string().trim().min(1),
   }).strict(),
+  trip_type: z.enum(['daily', 'monthly']).default('daily'),
+  pickup_lat: z.number().optional(),
+  pickup_lng: z.number().optional(),
+  dropoff_lat: z.number().optional(),
+  dropoff_lng: z.number().optional(),
 }).strict();
 
 const bookTripSchema = z.object({
@@ -313,6 +325,7 @@ tripRoutes.get('/available', async (c) => {
     const { results: driverTrips } = await db.prepare(`
       SELECT t.id, t.origin, t.destination, t.departure_time, t.available_seats,
              t.vehicle_type, t.price_per_seat, t.driver_id,
+             t.route_distance_km, t.trip_type,
              u.first_name_encrypted, u.last_name_encrypted
       FROM trips t
       JOIN users u ON t.driver_id = u.id
@@ -358,13 +371,14 @@ tripRoutes.get('/available', async (c) => {
         status: 'active',
         vehicle: { make: t.vehicle_type || 'sedan', model: '', year: 2020, licensePlate: '', capacity: t.available_seats },
         createdAt: new Date().toISOString(),
-        routeDistanceKm: Number(t.price_per_seat) || undefined,
+        routeDistanceKm: t.route_distance_km != null ? Number(t.route_distance_km) : undefined,
       };
     });
 
     // Use matching algorithm
     const { matches } = matchRiderToDrivers(riderRequest, drivers);
     const driverById = new Map(drivers.map((d) => [d.id, d]));
+    const dbTripById = new Map((driverTrips ?? []).map((t) => [String(t.id), t]));
 
     const trips = matches.map(match => ({
       id: match.driverTripId,
@@ -382,7 +396,23 @@ tripRoutes.get('/available', async (c) => {
       scheduledTime: new Date(driverById.get(match.driverTripId)?.departureTime ?? Date.now()).toISOString(),
       availableSeats: driverById.get(match.driverTripId)?.availableSeats ?? 0,
       vehicleType: driverById.get(match.driverTripId)?.vehicle?.make || 'sedan',
-      pricePerSeat: 35,
+      pricePerSeat: (() => {
+        const dbTrip = dbTripById.get(match.driverTripId);
+        return dbTrip?.price_per_seat != null ? Number(dbTrip.price_per_seat) : 35;
+      })(),
+      ...((() => {
+        const dbTrip = dbTripById.get(match.driverTripId);
+        const km = dbTrip?.route_distance_km;
+        if (km != null && km > 0) {
+          return {
+            fareDaily: calculateFareCents(km, 'daily') / 100,
+            fareMonthly: calculateFareCents(km, 'monthly') / 100,
+            etaMinutes: estimateETAMinutes(km),
+            routeDistanceKm: km,
+          };
+        }
+        return {};
+      })()),
       // Matching scores
       matchScore: match.score,
       explanation: match.explanation,
@@ -481,16 +511,29 @@ tripRoutes.post('/:tripId/book', async (c) => {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Not enough seats' } }, 400);
     }
 
+    // Check if rider has an active paid monthly subscription
+    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const activeSub = await db
+      .prepare(`SELECT id, payment_status FROM monthly_subscriptions WHERE user_id = ? AND subscription_month = ? AND status = 'active' LIMIT 1`)
+      .bind(user.id, currentMonth)
+      .first<{ id: number; payment_status: string }>();
+
+    const hasPaidSub = activeSub?.payment_status === 'paid';
+    const fareRatePerKm = hasPaidSub ? TRIP_RATES.MONTHLY_PER_KM : TRIP_RATES.DAILY_PER_KM;
+    const subId = hasPaidSub ? activeSub!.id : null;
+
     await db
       .prepare(
-        `INSERT INTO trip_participants (trip_id, user_id, role, status, pickup_location_encrypted, dropoff_location_encrypted, passenger_count)
-         VALUES (?, ?, 'rider', 'requested', ?, ?, ?)`
+        `INSERT INTO trip_participants (trip_id, user_id, role, status, pickup_location_encrypted, dropoff_location_encrypted, passenger_count, subscription_id, fare_rate_per_km)
+         VALUES (?, ?, 'rider', 'requested', ?, ?, ?, ?, ?)`
       )
       .bind(
         tripId, user.id,
         pickupLocation.address || JSON.stringify(pickupLocation),
         dropoffLocation.address || JSON.stringify(dropoffLocation),
         passengers,
+        subId,
+        fareRatePerKm,
       )
       .run();
 
@@ -596,7 +639,7 @@ tripRoutes.post('/offer', async (c) => {
   if (!parsed.success) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.issues.map((i) => i.message).join(', ') } }, 400);
   }
-  const { pickupLocation, dropoffLocation, scheduledTime, availableSeats, price, vehicleInfo, notes } = parsed.data;
+  const { pickupLocation, dropoffLocation, scheduledTime, availableSeats, price, vehicleInfo, notes, trip_type, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng } = parsed.data;
   const idempotencyKey = getIdempotencyKey(c, user.id, 'trip-offer');
   if (idempotencyKey) {
     const { replay, viaDb } = await isIdempotentReplay(c, idempotencyKey);
@@ -618,6 +661,27 @@ tripRoutes.post('/offer', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Scheduled time must be in the future' } }, 400);
   }
 
+  // Compute fare from coordinates if provided
+  let distanceKm: number | null = null;
+  let ratePerKm: number | null = null;
+  let computedPricePerSeat: number | null = null;
+
+  const pickupLatVal = pickup_lat ?? (pickupLocation as { lat?: number }).lat;
+  const pickupLngVal = pickup_lng ?? (pickupLocation as { lng?: number }).lng;
+  const dropoffLatVal = dropoff_lat ?? (dropoffLocation as { lat?: number }).lat;
+  const dropoffLngVal = dropoff_lng ?? (dropoffLocation as { lng?: number }).lng;
+
+  if (pickupLatVal != null && dropoffLatVal != null &&
+      pickupLngVal != null && dropoffLngVal != null) {
+    const straightLine = haversineKm(
+      { lat: pickupLatVal, lng: pickupLngVal },
+      { lat: dropoffLatVal, lng: dropoffLngVal }
+    );
+    distanceKm = estimatedRoadKm(straightLine);
+    ratePerKm = trip_type === 'monthly' ? TRIP_RATES.MONTHLY_PER_KM : TRIP_RATES.DAILY_PER_KM;
+    computedPricePerSeat = calculateFareCents(distanceKm, trip_type) / 100;
+  }
+
   const db = getDBOptional(c);
   if (!db) {
     logger.error('Trip offer denied because DB is unavailable', undefined, {
@@ -628,8 +692,8 @@ tripRoutes.post('/offer', async (c) => {
   try {
       const result = await db
         .prepare(
-          `INSERT INTO trips (title, description, origin, destination, origin_hash, destination_hash, departure_time, available_seats, total_seats, price_per_seat, currency, status, vehicle_type, vehicle_model_encrypted, vehicle_plate_encrypted, driver_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ZAR', 'scheduled', ?, ?, ?, ?)`
+          `INSERT INTO trips (title, description, origin, destination, origin_hash, destination_hash, departure_time, available_seats, total_seats, price_per_seat, currency, status, vehicle_type, vehicle_model_encrypted, vehicle_plate_encrypted, driver_id, trip_type, route_distance_km, rate_per_km)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ZAR', 'scheduled', ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           `Trip to ${dropoffLocation.address || 'destination'}`,
@@ -641,10 +705,13 @@ tripRoutes.post('/offer', async (c) => {
           scheduledTime,
           availableSeats,
           availableSeats,
-          price || 35.00,
+          computedPricePerSeat ?? price ?? 35.00,
           vehicleInfo.make + ' ' + vehicleInfo.model,
           vehicleInfo.licensePlate,
           user.id,
+          trip_type,
+          distanceKm,
+          ratePerKm,
         )
         .run();
 

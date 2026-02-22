@@ -294,10 +294,16 @@ export interface MatchThresholds {
   maxDropoffDistanceKm: number;
   /** Max time difference (minutes). */
   maxTimeDiffMinutes: number;
-  /** Max acceptable detour as a fraction of original route (0-1). */
+  /** Max acceptable detour as a fraction of original route (0-1). Kept for backward compat. */
   maxDetourFraction: number;
   /** Bounding-box padding in degrees for SQL pre-filter. */
   boundingBoxPaddingDeg: number;
+  /**
+   * Absolute maximum detour a single rider may add to the driver's route (km).
+   * Hard filter applied in Phase 2 regardless of route length.
+   * Default: 10 km.
+   */
+  maxAbsoluteDetourKm: number;
 }
 
 /** Full matching configuration. */
@@ -310,32 +316,41 @@ export interface MatchConfig {
   enableMultiRider: boolean;
   /** Max riders to consider in multi-rider optimization. */
   maxRidersPerPool: number;
-  /** Max detour budget per driver (minutes). */
+  /** Max cumulative pool detour (minutes). Kept for display / backward compat. */
   maxPoolDetourMinutes: number;
+  /**
+   * Absolute maximum cumulative detour for the entire pool (km).
+   * The optimizer rejects any rider whose marginal detour would push the
+   * running total above this limit. Default: 10 km.
+   */
+  maxPoolDetourKm: number;
 }
 
 /** Default production configuration. */
 export const DEFAULT_MATCH_CONFIG: MatchConfig = {
   weights: {
-    pickupDistance: 0.30,
-    dropoffDistance: 0.30,
-    timeMatch: 0.18,
-    seatAvailability: 0.07,
-    shiftAlignment: 0.05,
-    detourCost: 0.05,
-    driverRating: 0.05,
+    pickupDistance:   0.30,  // "closest rider" — unchanged
+    dropoffDistance:  0.30,  // unchanged
+    timeMatch:        0.15,  // ↓ from 0.18
+    seatAvailability: 0.05,  // ↓ from 0.07
+    shiftAlignment:   0.02,  // ↓ from 0.05 (minor factor)
+    detourCost:       0.13,  // ↑ from 0.05 — route efficiency priority
+    driverRating:     0.05,  // unchanged
+    // total: 1.00
   },
   thresholds: {
-    maxPickupDistanceKm: 2.0,
-    maxDropoffDistanceKm: 2.0,
-    maxTimeDiffMinutes: 20,
-    maxDetourFraction: 0.30,
-    boundingBoxPaddingDeg: 0.03, // ~3.3 km at equator
+    maxPickupDistanceKm:   2.0,
+    maxDropoffDistanceKm:  2.0,
+    maxTimeDiffMinutes:    20,
+    maxDetourFraction:     0.30,  // kept for backward compat; not used for scoring
+    boundingBoxPaddingDeg: 0.03,  // ~3.3 km at equator
+    maxAbsoluteDetourKm:   10,    // hard cap: no rider adds > 10 km to driver route
   },
   maxResults: 20,
   enableMultiRider: true,
   maxRidersPerPool: 4,
-  maxPoolDetourMinutes: 20,
+  maxPoolDetourMinutes: 20,   // kept for display / backward compat
+  maxPoolDetourKm: 10,         // cumulative pool budget: sum of marginal detours ≤ 10 km
 };
 
 // ---------------------------------------------------------------------------

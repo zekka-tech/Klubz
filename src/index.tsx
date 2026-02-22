@@ -7,6 +7,7 @@ import { adminRoutes } from './routes/admin'
 import { monitoringRoutes } from './routes/monitoring'
 import { paymentRoutes } from './routes/payments'
 import { notificationRoutes } from './routes/notifications'
+import { subscriptionRoutes } from './routes/subscriptions'
 import { eventBus, isEventVisibleToUser } from './lib/eventBus'
 import { logger } from './lib/logger'
 import { getAnonymizedIP } from './lib/http'
@@ -378,6 +379,8 @@ app.route('/api/notifications', notificationRoutes)
 // Smart Trip Pooling - Matching Engine API
 const matchingRoutes = createMatchingRoutes()
 app.route('/api/matching', matchingRoutes)
+
+app.route('/api/subscriptions', subscriptionRoutes)
 
 // ═══ Real-Time Events (SSE) ═══
 app.get('/api/events', authMiddleware(), async (c) => {

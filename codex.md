@@ -1,7 +1,7 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-20 19:00:00 UTC  
-Current branch: `main`  
+Last updated: 2026-02-22 18:55:00 UTC
+Current branch: `main`
 Tracking branch: `origin/main`
 
 ## Purpose
@@ -22,9 +22,9 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (250/250)
-- `npm run build`: PASS
-- `npm run db:check-migrations`: PASS (12 files, next `0013`)
+- `npm test`: PASS (262/262)
+- `npm run build`: PASS (287.71 kB worker)
+- `npm run db:check-migrations`: PASS (13 files, next `0014`)
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
@@ -35,7 +35,8 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `(pending)` - Implemented Google OAuth Sign-in (Authorization Code flow with CSRF state, short-lived code exchange, PII encryption for new users, account linking for existing accounts); added migration 0012 for oauth_provider/oauth_id columns; fixed CSP connect-src to include Nominatim geocoding; documented GOOGLE_CLIENT_ID/SECRET setup in ENVIRONMENT.md.
+1. `(pending)` - Implemented daily & monthly trip types with distance-based pricing: migration 0013 (monthly_subscriptions, monthly_scheduled_days tables + trip_type/route_distance_km/rate_per_km columns); src/lib/pricing.ts (R2.85/km daily, R2.15/km monthly, haversine, ETA); src/routes/subscriptions.ts (full CRUD + calendar + Stripe upfront payment intent); trips.ts updated to compute system fare from coordinates; payments.ts webhook handles subscription payment state; subscription + monthly-calendar screens in app.js; trip cards show fareDaily/fareMonthly/etaMinutes; find-ride has daily/monthly toggle; my-trips shows subscription section.
+2. `(pending)` - Implemented Google OAuth Sign-in (Authorization Code flow with CSRF state, short-lived code exchange, PII encryption for new users, account linking for existing accounts); added migration 0012 for oauth_provider/oauth_id columns; fixed CSP connect-src to include Nominatim geocoding; documented GOOGLE_CLIENT_ID/SECRET setup in ENVIRONMENT.md.
 2. `(pending)` - Fixed Cloudflare Workers compatibility: replaced Node.js Stripe SDK with Workers-native StripeService; fixed broken PII decrypt pattern in trips.ts notifications; added safeDecryptPII for safe migration-path decryption; fixed PII encryption on registration and profile update; added passenger_count to TripParticipantRow; fixed wrangler.toml missing staging/dev KV namespace bindings.
 2. `213a812` - Decoupled in-app trip notifications from email/SMS transport availability across booking request/accept/reject and trip cancel flows, ensuring persisted notifications remain preference-driven even when providers are unavailable; added integration enforcement contracts.
 2. `be39508` - Fixed trip-cancel notification regression by loading accepted rider recipients before participant status transition to `cancelled`, preserving cancellation notifications while retaining participant cancellation integrity updates; added integration regression contract for execution ordering.
@@ -137,6 +138,8 @@ Use this format for every significant action:
 - `2026-02-19 11:50 UTC` | codex | action | admin-stats-cache-hardening | added KV-backed caching to `/admin/stats`, retained `ADMIN_STATS_VIEWED` audit write, and snapshot the SLA/carbon metrics before caching
 - `2026-02-19 11:47 UTC` | codex | action | quality-gates | ran `npm run lint`, `npm run type-check`, and `npm test` (193 tests) after stats cache change
 - `2026-02-19 14:36 UTC` | codex | action | quality-gates | ran `npm run verify` (type-check, lint, test 193, build) to validate the cached admin stats change end-to-end
+- `2026-02-22 18:55 UTC` | codex | action | daily-monthly-pricing-implementation | added migration 0013 (monthly_subscriptions + monthly_scheduled_days + trip_type/route_distance_km/rate_per_km columns); src/lib/pricing.ts with TRIP_RATES, calculateFareCents, estimateETAMinutes, haversineKm, generateScheduledDates, estimateMonthlyTotal; src/routes/subscriptions.ts with full CRUD + calendar + Stripe upfront payment; updated trips.ts with system-computed fare and subscription-aware booking; updated payments.ts webhook for subscription payment state; added subscription + calendar screens and handlers in app.js; updated renderTripCard, renderMatchResult, renderFindRideScreen, renderMyTripsScreen, handleOfferRide
+- `2026-02-22 18:55 UTC` | codex | action | quality-gates | type-check PASS, lint PASS, test 262/262, build PASS (287.71 kB), db:check-migrations PASS (13 files, next 0014)
 - `2026-02-22 13:45 UTC` | codex | deploy | production | `npm run deploy:prod` success → https://3919e026.klubz-production.pages.dev; health check OK; migration 0012 already applied (shared D1)
 - `2026-02-22 13:30 UTC` | codex | push | `main -> origin/main` | success (`4e30d57`)
 - `2026-02-22 13:30 UTC` | codex | deploy | staging | `npm run deploy:staging` success → https://70959099.klubz-staging.pages.dev; migration 0012 applied; health check OK
@@ -453,12 +456,13 @@ Use this format for every significant action:
 ---
 
 ## Next Active Tasks
-1. High: provision GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Google Cloud Console and set as Cloudflare Pages secrets (`wrangler pages secret put GOOGLE_CLIENT_ID --project-name=klubz-production` etc.).
-2. High: apply migration 0012 to production/staging D1 (`scripts/apply-migrations-remote.cjs`).
-3. High: replace placeholder wrangler.toml KV/D1 IDs with real resource IDs once Cloudflare resources are provisioned for staging/dev environments.
-4. High: complete route-by-route security review and close any remaining authz/data-exposure gaps not yet covered by contracts.
-5. Medium: add correlation ID propagation consistency checks across modules and related observability assertions.
-6. Medium: expand caching invalidation contracts/tests for user/admin/matching read models.
+1. High: apply migration 0013 to production/staging D1 (`scripts/apply-migrations-remote.cjs` — run after 0012 if not yet applied).
+2. High: provision GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Google Cloud Console and set as Cloudflare Pages secrets.
+3. High: set STRIPE_SECRET_KEY on production/staging if not already set (needed for subscription payment intents).
+4. High: apply migration 0012 to production/staging D1 if not already done.
+5. Medium: wire Stripe webhook `payment_intent.succeeded` / `payment_intent.payment_failed` metadata to include `subscriptionId` in production Stripe dashboard event metadata.
+6. Medium: add correlation ID propagation consistency checks across modules and related observability assertions.
+7. Medium: expand caching invalidation contracts/tests for user/admin/matching read models.
 
 Owner guidance:
 - Keep this file authoritative.

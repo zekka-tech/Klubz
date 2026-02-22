@@ -293,6 +293,20 @@
     }
   }
 
+  // ═══ Client-side Haversine ═══
+
+  function clientHaversineKm(lat1, lng1, lat2, lng2) {
+    var R = 6371; // Earth radius in km
+    var dLat = (lat2 - lat1) * Math.PI / 180;
+    var dLng = (lng2 - lng1) * Math.PI / 180;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    a = Math.min(a, 1); // clamp to avoid NaN from floating-point errors
+    var c = 2 * Math.asin(Math.sqrt(a));
+    return R * c;
+  }
+
   // ═══ Screen Renderers ═══
 
   function renderLoginScreen() {
@@ -462,6 +476,15 @@
         <h2 class="section-title" style="font-size:1.25rem">Find a Ride</h2>
         <p class="section-subtitle">Smart matching finds the best carpool for your route</p>
 
+        <div class="trip-type-selector" style="display:flex;gap:var(--space-sm);margin-bottom:var(--space-md)">
+          <button type="button" class="trip-type-btn active" data-type="daily" id="find-daily-btn" style="flex:1;padding:var(--space-sm);border-radius:var(--radius);border:2px solid var(--primary);background:var(--primary-bg);cursor:pointer;font-size:0.875rem;font-weight:600">
+            Daily <span class="rate-badge" style="font-size:0.75rem;font-weight:400;opacity:0.8">R2.85/km</span>
+          </button>
+          <button type="button" class="trip-type-btn" data-type="monthly" id="find-monthly-btn" style="flex:1;padding:var(--space-sm);border-radius:var(--radius);border:2px solid var(--border);background:transparent;cursor:pointer;font-size:0.875rem;font-weight:600;color:var(--text-primary)">
+            Monthly <span class="rate-badge" style="font-size:0.75rem;font-weight:400;opacity:0.8">R2.15/km</span>
+          </button>
+        </div>
+
         <form id="find-ride-form" novalidate>
           <div class="location-input-group" style="margin-bottom:var(--space-md)">
             <div class="location-input">
@@ -585,6 +608,11 @@
           <!-- Populated dynamically -->
           <div class="skeleton" style="height:140px;margin-bottom:var(--space-md)"></div>
           <div class="skeleton" style="height:140px;margin-bottom:var(--space-md)"></div>
+        </div>
+
+        <div id="my-trips-sub-section" style="margin-top:var(--space-xl)">
+          <h3 class="section-title" style="font-size:1rem;margin-bottom:var(--space-md)">Monthly Subscription</h3>
+          <p class="loading-text" style="color:var(--text-muted);text-align:center">Loading...</p>
         </div>
       </div>
     `;
@@ -773,8 +801,203 @@
     `;
   }
 
+  function renderSubscriptionScreen() {
+    var now = new Date();
+    var thisYear = now.getFullYear();
+    var thisMonth = now.getMonth(); // 0-indexed
+    // Build month options: current month and next month
+    var months = [];
+    for (var mi = 0; mi < 2; mi++) {
+      var d = new Date(thisYear, thisMonth + mi, 1);
+      var y = d.getFullYear();
+      var m = String(d.getMonth() + 1).padStart(2, '0');
+      var label = d.toLocaleString('default', { month: 'long', year: 'numeric' });
+      months.push({ value: y + '-' + m, label: label });
+    }
+    var monthRadios = months.map(function(mo, idx) {
+      return '<label class="radio-option" style="display:flex;align-items:center;gap:var(--space-sm);padding:var(--space-sm);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;margin-bottom:var(--space-xs)">' +
+        '<input type="radio" name="sub-month" value="' + mo.value + '"' + (idx === 1 ? ' checked' : '') + '>' +
+        '<span style="font-size:0.9rem">' + mo.label + '</span>' +
+        '</label>';
+    }).join('');
+    var weekdays = [
+      { label: 'Mon', day: 1 },
+      { label: 'Tue', day: 2 },
+      { label: 'Wed', day: 3 },
+      { label: 'Thu', day: 4 },
+      { label: 'Fri', day: 5 },
+    ];
+    var weekdayChips = weekdays.map(function(wd) {
+      return '<button type="button" class="weekday-chip selected" data-day="' + wd.day + '" ' +
+        'style="padding:6px 12px;border-radius:20px;border:1px solid var(--primary);background:var(--primary);color:#fff;font-size:0.8125rem;cursor:pointer;font-weight:600">' +
+        wd.label + '</button>';
+    }).join('');
+    return '<div class="screen fade-in">' +
+      '<h2 class="section-title" style="font-size:1.25rem">Monthly Subscription</h2>' +
+      '<p class="section-subtitle">Lock in your commute for the month at a discounted rate</p>' +
+
+      '<!-- Pricing comparison -->' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-sm);margin-bottom:var(--space-lg)">' +
+        '<div style="padding:var(--space-md);border:1px solid var(--border);border-radius:var(--radius);text-align:center">' +
+          '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Daily rate</div>' +
+          '<div style="font-size:1.5rem;font-weight:800;color:var(--text-primary)">R2.85<span style="font-size:0.875rem;font-weight:400">/km</span></div>' +
+        '</div>' +
+        '<div style="padding:var(--space-md);border:2px solid var(--accent);border-radius:var(--radius);text-align:center;position:relative;background:var(--surface-2, var(--surface))">' +
+          '<span style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--primary);color:#fff;font-size:0.6875rem;font-weight:700;padding:2px 10px;border-radius:10px;white-space:nowrap">MOST POPULAR</span>' +
+          '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Monthly rate</div>' +
+          '<div style="font-size:1.5rem;font-weight:800;color:var(--accent)">R2.15<span style="font-size:0.875rem;font-weight:400">/km</span></div>' +
+          '<span style="background:#22c55e;color:#fff;font-size:0.6875rem;font-weight:700;padding:2px 8px;border-radius:10px">SAVE 25%</span>' +
+        '</div>' +
+      '</div>' +
+
+      '<form id="sub-form" novalidate>' +
+
+      '<!-- Month selector -->' +
+      '<div class="form-group">' +
+        '<label class="form-label">Select Month</label>' +
+        monthRadios +
+      '</div>' +
+
+      '<!-- Weekday selector -->' +
+      '<div class="form-group">' +
+        '<label class="form-label">Commute Days</label>' +
+        '<div style="display:flex;gap:var(--space-xs);flex-wrap:wrap">' +
+          weekdayChips +
+        '</div>' +
+      '</div>' +
+
+      '<!-- Morning time -->' +
+      '<div class="form-group">' +
+        '<label class="form-label" for="sub-morning-time">Morning Pickup Time</label>' +
+        '<input class="form-input" type="time" id="sub-morning-time" value="07:30">' +
+      '</div>' +
+
+      '<!-- Evening toggle + time -->' +
+      '<div class="form-group">' +
+        '<label style="display:flex;align-items:center;gap:var(--space-sm);cursor:pointer;font-size:0.9rem;color:var(--text-secondary)">' +
+          '<input type="checkbox" id="sub-evening-toggle" style="width:16px;height:16px"> Add return trip' +
+        '</label>' +
+        '<input class="form-input" type="time" id="sub-evening-time" value="17:30" style="display:none;margin-top:var(--space-xs)">' +
+      '</div>' +
+
+      '<!-- Addresses -->' +
+      '<div class="form-group">' +
+        '<label class="form-label" for="sub-pickup">Pickup Address</label>' +
+        '<input class="form-input" type="text" id="sub-pickup" placeholder="Pickup address" required autocomplete="off">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label" for="sub-dropoff">Dropoff Address</label>' +
+        '<input class="form-input" type="text" id="sub-dropoff" placeholder="Dropoff address" required autocomplete="off">' +
+      '</div>' +
+
+      '<!-- Live estimate -->' +
+      '<div id="sub-estimate" style="display:none;background:var(--surface-2, var(--surface));border:1px solid var(--accent);border-radius:var(--radius);padding:var(--space-md);margin-bottom:var(--space-md);text-align:center;font-size:0.9rem;color:var(--accent);font-weight:600"></div>' +
+
+      '<button type="submit" class="btn btn--primary btn--full btn--lg" id="sub-submit-btn">Subscribe &amp; Pay Upfront</button>' +
+
+      '</form>' +
+
+      '<p style="text-align:center;font-size:0.75rem;color:var(--text-muted);margin-top:var(--space-md)">Billed upfront for next month. Cancel anytime before month starts.</p>' +
+    '</div>';
+  }
+
+  function renderMonthlyCalendarScreen(subscriptionId) {
+    var now = new Date();
+    var year = now.getFullYear();
+    var month = now.getMonth(); // 0-indexed
+
+    // Determine first day of month and total days
+    var firstDay = new Date(year, month, 1).getDay(); // 0=Sun
+    // Convert to Mon-first: Mon=0 ... Sun=6
+    var firstDayMon = (firstDay + 6) % 7;
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    var monthLabel = now.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+    var headerCells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(function(d) {
+      return '<div style="text-align:center;font-size:0.6875rem;font-weight:700;color:var(--text-muted);padding:4px 0">' + d + '</div>';
+    }).join('');
+
+    // Build blank cells before first day
+    var cells = '';
+    for (var b = 0; b < firstDayMon; b++) {
+      cells += '<div></div>';
+    }
+    for (var day = 1; day <= daysInMonth; day++) {
+      var mm = String(month + 1).padStart(2, '0');
+      var dd = String(day).padStart(2, '0');
+      var dateStr = year + '-' + mm + '-' + dd;
+      cells += '<div class="cal-day-cell" data-date="' + dateStr + '" ' +
+        'style="border:1px solid var(--border);border-radius:var(--radius);padding:4px;min-height:44px;cursor:pointer;position:relative;font-size:0.8125rem;font-weight:600">' +
+        '<div>' + day + '</div>' +
+        '<div style="display:flex;gap:2px;margin-top:2px">' +
+          // M and E indicator badges will be injected by loadMonthlyCalendar
+        '</div>' +
+      '</div>';
+    }
+
+    return '<div class="screen fade-in">' +
+      '<div style="display:flex;align-items:center;gap:var(--space-md);margin-bottom:var(--space-lg)">' +
+        '<button class="btn btn--secondary btn--sm" id="cal-back-btn" style="flex-shrink:0">&#8592; Back</button>' +
+        '<div>' +
+          '<h2 style="font-size:1.1rem;font-weight:800;margin:0">Subscription Calendar</h2>' +
+          '<div style="font-size:0.75rem;color:var(--accent);font-weight:600">R2.15/km</div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="font-size:0.9rem;font-weight:700;margin-bottom:var(--space-sm)">' + monthLabel + '</div>' +
+
+      '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:var(--space-lg)">' +
+        headerCells +
+        cells +
+      '</div>' +
+
+      '<!-- Day detail panel -->' +
+      '<div id="day-detail-panel" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-md);margin-bottom:var(--space-md)">' +
+        '<h3 id="day-detail-date" style="font-size:1rem;font-weight:700;margin-bottom:var(--space-md)"></h3>' +
+
+        '<!-- Morning section -->' +
+        '<div style="margin-bottom:var(--space-md)">' +
+          '<div style="font-size:0.8125rem;font-weight:600;color:var(--text-secondary);margin-bottom:var(--space-xs)">Morning Trip</div>' +
+          '<div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">' +
+            '<input class="form-input" type="time" id="day-morning-time" style="flex:1;min-width:100px">' +
+            '<span id="day-morning-status" class="chip" style="font-size:0.6875rem"></span>' +
+            '<button type="button" id="day-cancel-morning" class="link-btn" style="font-size:0.8125rem;color:var(--error, #ef4444);background:none;border:none;cursor:pointer;text-decoration:underline;padding:0">Cancel day</button>' +
+          '</div>' +
+        '</div>' +
+
+        '<!-- Evening section -->' +
+        '<div id="day-evening-section" style="margin-bottom:var(--space-md)">' +
+          '<div style="font-size:0.8125rem;font-weight:600;color:var(--text-secondary);margin-bottom:var(--space-xs)">Evening Trip</div>' +
+          '<div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">' +
+            '<input class="form-input" type="time" id="day-evening-time" style="flex:1;min-width:100px">' +
+            '<button type="button" id="day-cancel-evening" class="link-btn" style="font-size:0.8125rem;color:var(--error, #ef4444);background:none;border:none;cursor:pointer;text-decoration:underline;padding:0">Cancel evening</button>' +
+          '</div>' +
+        '</div>' +
+
+        '<!-- Destination change -->' +
+        '<div style="margin-bottom:var(--space-md)">' +
+          '<label style="display:flex;align-items:center;gap:var(--space-sm);cursor:pointer;font-size:0.875rem;color:var(--text-secondary)">' +
+            '<input type="checkbox" id="day-dest-change-toggle" style="width:16px;height:16px"> Change dropoff for this day' +
+          '</label>' +
+          '<input class="form-input" type="text" id="day-dropoff-address" placeholder="New dropoff address" style="display:none;margin-top:var(--space-xs)">' +
+        '</div>' +
+
+        '<button type="button" class="btn btn--primary btn--full" id="day-detail-save">Save Changes</button>' +
+      '</div>' +
+
+      '<!-- Summary footer -->' +
+      '<div id="cal-summary" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-md);text-align:center;font-size:0.875rem;color:var(--text-secondary)">' +
+        'Loading summary...' +
+      '</div>' +
+    '</div>';
+  }
+
   function renderTripCard(trip) {
     const statusColors = { scheduled: 'active', active: 'live', completed: 'completed', pending: 'pending', cancelled: 'cancelled' };
+    const priceHtml = trip.fareDaily != null
+      ? `R${trip.fareDaily.toFixed(2)}/trip${trip.fareMonthly != null ? ` <span class="price-monthly-hint">· R${trip.fareMonthly.toFixed(2)} monthly</span>` : ''}`
+      : `R${(trip.price_per_seat || trip.price || 35).toFixed(2)}/trip`;
     return `
       <div class="trip-card card--interactive" data-trip-id="${trip.id}">
         <div class="trip-card__header">
@@ -788,8 +1011,8 @@
             </div>
           </div>
           <div class="trip-card__price">
-            <div class="trip-card__price-amount">${formatCurrency(trip.price || 0)}</div>
-            <div class="trip-card__price-label">per seat</div>
+            <div class="trip-price">${priceHtml}</div>
+            ${trip.etaMinutes ? `<div class="trip-eta">≈ ${trip.etaMinutes} min</div>` : ''}
           </div>
         </div>
 
@@ -825,6 +1048,19 @@
     const scoreClass = match.score <= 0.3 ? 'excellent' : match.score <= 0.6 ? 'good' : 'fair';
     const scoreLabel = match.score <= 0.3 ? 'Excellent' : match.score <= 0.6 ? 'Good' : 'Fair';
     const scorePercent = Math.round((1 - match.score) * 100);
+    const fareDaily = match.fareDaily != null ? match.fareDaily : null;
+    const fareMonthly = match.fareMonthly != null ? match.fareMonthly : null;
+    const fareHtml = (fareDaily != null || fareMonthly != null)
+      ? `<div class="match-fare" style="margin:var(--space-xs) 0;font-size:0.8125rem;color:var(--text-primary)">
+           ${fareDaily != null ? `Daily: <strong>R${fareDaily.toFixed(2)}/trip</strong>` : ''}
+           ${fareDaily != null && fareMonthly != null ? ' | ' : ''}
+           ${fareMonthly != null ? `Monthly: <strong>R${fareMonthly.toFixed(2)}/trip</strong>` : ''}
+         </div>`
+      : '';
+    const { isAuthenticated } = Store.state;
+    const subscribeHtml = isAuthenticated
+      ? `<button class="btn btn--secondary btn--sm" id="match-subscribe-link" style="margin-top:var(--space-xs);font-size:0.75rem">Subscribe for R2.15/km &#8594;</button>`
+      : '';
 
     return `
       <div class="trip-card" style="border-left:3px solid var(--${scoreClass === 'excellent' ? 'accent' : scoreClass === 'good' ? 'primary' : 'warning'})">
@@ -832,6 +1068,9 @@
           <span class="match-badge match-badge--${scoreClass}">${scoreLabel} Match (${scorePercent}%)</span>
           <span style="font-size:0.75rem;color:var(--text-muted)">${(match.breakdown?.detourDistanceKm || 0).toFixed(1)} km detour</span>
         </div>
+
+        ${fareHtml}
+        ${subscribeHtml}
 
         <div class="trip-card__route">
           <div class="trip-card__route-line">
@@ -913,6 +1152,8 @@
         case 'settings': content.innerHTML = renderSettingsScreen(); break;
         case 'forgot-password': content.innerHTML = renderForgotPasswordScreen(); break;
         case 'reset-password': content.innerHTML = renderResetPasswordScreen(); break;
+        case 'subscription': content.innerHTML = renderSubscriptionScreen(); break;
+        case 'monthly-calendar': content.innerHTML = renderMonthlyCalendarScreen(currentSubscriptionId); break;
         default: content.innerHTML = renderHomeScreen(); break;
       }
 
@@ -957,6 +1198,23 @@
           const timeInput = document.getElementById('fr-time');
           if (dateInput && !dateInput.value) dateInput.value = new Date().toISOString().split('T')[0];
           if (timeInput && !timeInput.value) timeInput.value = new Date().toTimeString().slice(0, 5);
+          // Trip type selector buttons
+          on('find-daily-btn', 'click', () => {
+            document.querySelectorAll('.trip-type-btn').forEach(b => {
+              b.classList.remove('active');
+              b.style.borderColor = 'var(--border)';
+              b.style.background = 'transparent';
+            });
+            const dailyBtn = document.getElementById('find-daily-btn');
+            if (dailyBtn) {
+              dailyBtn.classList.add('active');
+              dailyBtn.style.borderColor = 'var(--primary)';
+              dailyBtn.style.background = 'var(--primary-bg)';
+            }
+          });
+          on('find-monthly-btn', 'click', () => {
+            Router.navigate('subscription');
+          });
           break;
         }
         case 'offer-ride': {
@@ -994,6 +1252,95 @@
           on('reset-form', 'submit', handleResetPassword);
           on('link-reset-to-login', 'click', (e) => { e.preventDefault(); Router.navigate('login'); });
           break;
+        case 'subscription': {
+          // Weekday chip toggles
+          document.querySelectorAll('.weekday-chip').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+              var day = parseInt(btn.dataset.day);
+              btn.classList.toggle('selected');
+              if (btn.classList.contains('selected')) {
+                if (!subSelectedWeekdays.includes(day)) subSelectedWeekdays.push(day);
+                btn.style.background = 'var(--primary)';
+                btn.style.color = '#fff';
+                btn.style.borderColor = 'var(--primary)';
+              } else {
+                subSelectedWeekdays = subSelectedWeekdays.filter(function(d) { return d !== day; });
+                btn.style.background = 'transparent';
+                btn.style.color = 'var(--text-primary)';
+                btn.style.borderColor = 'var(--border)';
+              }
+              updateLiveEstimate();
+            }, { signal: signal });
+          });
+          // Evening toggle
+          var eveningToggle = document.getElementById('sub-evening-toggle');
+          var eveningTime = document.getElementById('sub-evening-time');
+          if (eveningToggle && eveningTime) {
+            eveningToggle.addEventListener('change', function() {
+              eveningTime.style.display = eveningToggle.checked ? 'block' : 'none';
+              updateLiveEstimate();
+            }, { signal: signal });
+          }
+          // Pickup/dropoff geocoding on blur
+          var subPickupEl = document.getElementById('sub-pickup');
+          var subDropoffEl = document.getElementById('sub-dropoff');
+          if (subPickupEl) subPickupEl.addEventListener('blur', async function() {
+            if (subPickupEl.value) {
+              subPickupCoords = await geocodeAddress(subPickupEl.value);
+              updateLiveEstimate();
+            }
+          }, { signal: signal });
+          if (subDropoffEl) subDropoffEl.addEventListener('blur', async function() {
+            if (subDropoffEl.value) {
+              subDropoffCoords = await geocodeAddress(subDropoffEl.value);
+              updateLiveEstimate();
+            }
+          }, { signal: signal });
+          // Morning time change
+          var morningTimeEl = document.getElementById('sub-morning-time');
+          if (morningTimeEl) morningTimeEl.addEventListener('input', updateLiveEstimate, { signal: signal });
+          // Month radio selection — set default to the checked radio
+          document.querySelectorAll('input[name="sub-month"]').forEach(function(radio) {
+            if (radio.checked) subSelectedMonth = radio.value;
+            radio.addEventListener('change', function() {
+              subSelectedMonth = radio.value;
+              updateLiveEstimate();
+            }, { signal: signal });
+          });
+          // Form submit
+          var subFormEl = document.getElementById('sub-form');
+          if (subFormEl) subFormEl.addEventListener('submit', handleCreateSubscription, { signal: signal });
+          break;
+        }
+        case 'monthly-calendar': {
+          var calBackBtn = document.getElementById('cal-back-btn');
+          if (calBackBtn) calBackBtn.addEventListener('click', function() { Router.navigate('home'); }, { signal: signal });
+          // Day cell clicks
+          document.querySelectorAll('.cal-day-cell[data-date]').forEach(function(cell) {
+            cell.addEventListener('click', function() {
+              var date = cell.dataset.date;
+              var morning = cell.dataset.morning ? JSON.parse(cell.dataset.morning) : null;
+              var evening = cell.dataset.evening ? JSON.parse(cell.dataset.evening) : null;
+              showDayDetail(date, morning, evening);
+            }, { signal: signal });
+          });
+          // Day detail actions
+          var calSaveBtn = document.getElementById('day-detail-save');
+          if (calSaveBtn) calSaveBtn.addEventListener('click', handleSaveDayDetail, { signal: signal });
+          var cancelMorningBtn = document.getElementById('day-cancel-morning');
+          if (cancelMorningBtn) cancelMorningBtn.addEventListener('click', function() {
+            var panel = document.getElementById('day-detail-panel');
+            if (panel && panel.dataset.date) handleCancelDay(panel.dataset.date, 'morning');
+          }, { signal: signal });
+          var cancelEveningBtn = document.getElementById('day-cancel-evening');
+          if (cancelEveningBtn) cancelEveningBtn.addEventListener('click', function() {
+            var panel = document.getElementById('day-detail-panel');
+            if (panel && panel.dataset.date) handleCancelDay(panel.dataset.date, 'evening');
+          }, { signal: signal });
+          var destToggleEl = document.getElementById('day-dest-change-toggle');
+          if (destToggleEl) destToggleEl.addEventListener('change', toggleDestChange, { signal: signal });
+          break;
+        }
       }
     },
 
@@ -1004,14 +1351,289 @@
           loadHomeStats();
           break;
         case 'find-ride': loadFindRide(); break;
-        case 'my-trips': loadTrips('upcoming'); break;
+        case 'my-trips': loadTrips('upcoming'); loadMyTripsSub(); break;
         case 'carbon': loadCarbonStats(); break;
         case 'profile': loadProfileStats(); break;
+        case 'subscription':
+          loadCurrentSubscription();
+          break;
+        case 'monthly-calendar':
+          loadMonthlyCalendar();
+          break;
       }
     }
   };
 
   // ═══ Event Handlers ═══
+
+  // ═══ Subscription State ═══
+
+  var currentSubscriptionId = null;
+  var subPickupCoords = null;
+  var subDropoffCoords = null;
+  var subSelectedWeekdays = [1, 2, 3, 4, 5];
+  var subSelectedMonth = null; // set during bindEvents when month radio is read
+
+  // ═══ Subscription Helpers ═══
+
+  function countWeekdaysInMonth(yearMonthStr, weekdays) {
+    // yearMonthStr: "YYYY-MM"
+    if (!yearMonthStr || !weekdays || weekdays.length === 0) return 0;
+    var parts = yearMonthStr.split('-');
+    var year = parseInt(parts[0]);
+    var month = parseInt(parts[1]) - 1; // 0-indexed
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+    var count = 0;
+    for (var d = 1; d <= daysInMonth; d++) {
+      var jsDay = new Date(year, month, d).getDay(); // 0=Sun, 1=Mon, ...6=Sat
+      // Convert to ISO weekday: Mon=1 ... Sun=7
+      var isoDay = jsDay === 0 ? 7 : jsDay;
+      if (weekdays.indexOf(isoDay) !== -1) count++;
+    }
+    return count;
+  }
+
+  function updateLiveEstimate() {
+    var estimateEl = document.getElementById('sub-estimate');
+    if (!estimateEl) return;
+    if (!subPickupCoords || !subDropoffCoords) {
+      estimateEl.style.display = 'none';
+      return;
+    }
+    var avgKmPerTrip = clientHaversineKm(
+      subPickupCoords.lat, subPickupCoords.lng,
+      subDropoffCoords.lat, subDropoffCoords.lng
+    ) * 1.3; // road factor
+    var days = countWeekdaysInMonth(subSelectedMonth, subSelectedWeekdays);
+    var eveningToggle = document.getElementById('sub-evening-toggle');
+    var tripsPerDay = (eveningToggle && eveningToggle.checked) ? 2 : 1;
+    var totalTrips = days * tripsPerDay;
+    var totalKm = avgKmPerTrip * totalTrips;
+    var estimatedAmount = (totalKm * 2.15).toFixed(2);
+    estimateEl.style.display = 'block';
+    estimateEl.textContent = '≈ R' + estimatedAmount + '/month · ' + days + ' days · ' + Math.round(totalKm) + ' km';
+  }
+
+  async function handleCreateSubscription(e) {
+    e.preventDefault();
+    var pickupVal = document.getElementById('sub-pickup')?.value?.trim();
+    var dropoffVal = document.getElementById('sub-dropoff')?.value?.trim();
+    var morningTime = document.getElementById('sub-morning-time')?.value;
+    var eveningToggle = document.getElementById('sub-evening-toggle');
+    var eveningTime = document.getElementById('sub-evening-time')?.value;
+    var hasEvening = eveningToggle ? eveningToggle.checked : false;
+
+    if (!pickupVal || !dropoffVal) {
+      Toast.show('Please enter pickup and dropoff addresses', 'warning');
+      return;
+    }
+    if (!subSelectedMonth) {
+      Toast.show('Please select a subscription month', 'warning');
+      return;
+    }
+    if (subSelectedWeekdays.length === 0) {
+      Toast.show('Please select at least one commute day', 'warning');
+      return;
+    }
+
+    var btn = document.getElementById('sub-submit-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Processing...'; }
+
+    try {
+      // Geocode if not already done
+      if (!subPickupCoords) subPickupCoords = await geocodeAddress(pickupVal);
+      if (!subDropoffCoords) subDropoffCoords = await geocodeAddress(dropoffVal);
+      if (!subPickupCoords || !subDropoffCoords) {
+        Toast.show('Could not resolve one or both addresses. Try a more specific address.', 'error');
+        return;
+      }
+
+      var body = {
+        month: subSelectedMonth,
+        weekdays: subSelectedWeekdays,
+        morningTime: morningTime,
+        eveningEnabled: hasEvening,
+        eveningTime: hasEvening ? eveningTime : null,
+        pickupAddress: pickupVal,
+        dropoffAddress: dropoffVal,
+        pickupCoords: subPickupCoords,
+        dropoffCoords: subDropoffCoords,
+      };
+      var data = await API.post('/subscriptions', body);
+      currentSubscriptionId = data.subscriptionId || data.id;
+
+      // Initiate payment
+      var payData = await API.post('/subscriptions/' + currentSubscriptionId + '/payment', {});
+      if (payData.clientSecret) {
+        // Stripe payment flow — for now show a toast and navigate to calendar
+        Toast.show('Subscription created! Complete payment to activate.', 'success');
+      } else {
+        Toast.show('Subscription activated!', 'success');
+      }
+      Router.navigate('monthly-calendar');
+    } catch (err) {
+      Toast.show(err.message || 'Failed to create subscription', 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Subscribe & Pay Upfront'; }
+    }
+  }
+
+  async function loadCurrentSubscription() {
+    try {
+      var data = await API.get('/subscriptions/current');
+      if (data && data.subscription && (data.subscription.status === 'active' || data.subscription.status === 'pending_payment')) {
+        currentSubscriptionId = data.subscription.id;
+        // If already subscribed, go straight to calendar
+        Router.navigate('monthly-calendar');
+      }
+    } catch {
+      // No active subscription — stay on the subscription form
+    }
+  }
+
+  async function loadMonthlyCalendar() {
+    if (!currentSubscriptionId) return;
+    try {
+      var data = await API.get('/subscriptions/' + currentSubscriptionId + '/calendar');
+      var days = data.days || [];
+
+      // Update each day cell with status and indicator badges
+      days.forEach(function(day) {
+        var cell = document.querySelector('.cal-day-cell[data-date="' + day.date + '"]');
+        if (!cell) return;
+
+        // Store data for click handler
+        if (day.morning) cell.dataset.morning = JSON.stringify(day.morning);
+        if (day.evening) cell.dataset.evening = JSON.stringify(day.evening);
+
+        // Status colour
+        var statusClass = day.morning ? ('status-' + (day.morning.status || 'scheduled')) : '';
+        if (statusClass) cell.classList.add(statusClass);
+
+        // Indicator badges
+        var indicators = '';
+        if (day.morning) {
+          var mColor = day.morning.status === 'completed' ? '#22c55e' : day.morning.status === 'cancelled' ? '#9ca3af' : '#3b82f6';
+          indicators += '<span style="background:' + mColor + ';color:#fff;font-size:0.5625rem;font-weight:700;padding:1px 4px;border-radius:3px">M</span>';
+        }
+        if (day.evening) {
+          var eColor = day.evening.status === 'completed' ? '#22c55e' : day.evening.status === 'cancelled' ? '#9ca3af' : '#8b5cf6';
+          indicators += '<span style="background:' + eColor + ';color:#fff;font-size:0.5625rem;font-weight:700;padding:1px 4px;border-radius:3px">E</span>';
+        }
+        var indicatorDiv = cell.querySelector('div + div');
+        if (indicatorDiv) indicatorDiv.innerHTML = indicators;
+      });
+
+      // Update summary footer
+      var summary = document.getElementById('cal-summary');
+      if (summary && data.summary) {
+        var s = data.summary;
+        summary.textContent = (s.totalTrips || 0) + ' trips this month · ≈ ' + Math.round(s.totalKm || 0) + ' km · R' + ((s.amountPrepaid || 0).toFixed(2)) + ' prepaid';
+      } else if (summary) {
+        summary.textContent = 'No trips scheduled yet.';
+      }
+    } catch (err) {
+      var summary = document.getElementById('cal-summary');
+      if (summary) summary.textContent = 'Unable to load calendar.';
+    }
+  }
+
+  function showDayDetail(date, morningData, eveningData) {
+    var panel = document.getElementById('day-detail-panel');
+    if (!panel) return;
+    panel.dataset.date = date;
+    panel.style.display = 'block';
+
+    var dateHeading = document.getElementById('day-detail-date');
+    if (dateHeading) {
+      var d = new Date(date + 'T12:00:00'); // noon to avoid DST issues
+      dateHeading.textContent = d.toLocaleDateString('default', { weekday: 'long', day: 'numeric', month: 'long' });
+    }
+
+    var morningTimeEl = document.getElementById('day-morning-time');
+    var morningStatusEl = document.getElementById('day-morning-status');
+    if (morningTimeEl) morningTimeEl.value = (morningData && morningData.time) ? morningData.time : '07:30';
+    if (morningStatusEl) {
+      var mStatus = morningData ? (morningData.status || 'scheduled') : 'not-set';
+      morningStatusEl.textContent = mStatus.charAt(0).toUpperCase() + mStatus.slice(1);
+      morningStatusEl.className = 'chip chip--' + (mStatus === 'completed' ? 'completed' : mStatus === 'cancelled' ? 'cancelled' : 'active');
+    }
+
+    var eveningSection = document.getElementById('day-evening-section');
+    var eveningTimeEl = document.getElementById('day-evening-time');
+    if (eveningSection) eveningSection.style.display = eveningData ? 'block' : 'none';
+    if (eveningTimeEl) eveningTimeEl.value = (eveningData && eveningData.time) ? eveningData.time : '17:30';
+
+    // Reset destination change fields
+    var destToggle = document.getElementById('day-dest-change-toggle');
+    var dropoffAddr = document.getElementById('day-dropoff-address');
+    if (destToggle) destToggle.checked = false;
+    if (dropoffAddr) {
+      dropoffAddr.style.display = 'none';
+      dropoffAddr.value = '';
+    }
+
+    // Scroll to panel
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  async function handleSaveDayDetail() {
+    var panel = document.getElementById('day-detail-panel');
+    if (!panel || !panel.dataset.date || !currentSubscriptionId) return;
+    var date = panel.dataset.date;
+
+    var morningTimeEl = document.getElementById('day-morning-time');
+    var eveningTimeEl = document.getElementById('day-evening-time');
+    var eveningSection = document.getElementById('day-evening-section');
+    var destToggle = document.getElementById('day-dest-change-toggle');
+    var dropoffAddr = document.getElementById('day-dropoff-address');
+
+    var saveBtn = document.getElementById('day-detail-save');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+
+    try {
+      var morningBody = { time: morningTimeEl ? morningTimeEl.value : '07:30' };
+      if (destToggle && destToggle.checked && dropoffAddr && dropoffAddr.value.trim()) {
+        morningBody.dropoffAddress = dropoffAddr.value.trim();
+      }
+      await API.post('/subscriptions/' + currentSubscriptionId + '/days/' + date + '/morning', morningBody);
+
+      var eveningVisible = eveningSection && eveningSection.style.display !== 'none';
+      if (eveningVisible && eveningTimeEl) {
+        await API.post('/subscriptions/' + currentSubscriptionId + '/days/' + date + '/evening', {
+          time: eveningTimeEl.value,
+        });
+      }
+      Toast.show('Day updated successfully', 'success');
+      await loadMonthlyCalendar();
+      // Hide the panel
+      panel.style.display = 'none';
+    } catch (err) {
+      Toast.show(err.message || 'Failed to save day changes', 'error');
+    } finally {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Changes'; }
+    }
+  }
+
+  async function handleCancelDay(date, type) {
+    if (!currentSubscriptionId || !date || !type) return;
+    try {
+      await API.del('/subscriptions/' + currentSubscriptionId + '/days/' + date + '/' + type);
+      Toast.show(type.charAt(0).toUpperCase() + type.slice(1) + ' trip cancelled', 'success');
+      await loadMonthlyCalendar();
+      var panel = document.getElementById('day-detail-panel');
+      if (panel) panel.style.display = 'none';
+    } catch (err) {
+      Toast.show(err.message || 'Failed to cancel trip', 'error');
+    }
+  }
+
+  function toggleDestChange() {
+    var destToggle = document.getElementById('day-dest-change-toggle');
+    var dropoffAddr = document.getElementById('day-dropoff-address');
+    if (!destToggle || !dropoffAddr) return;
+    dropoffAddr.style.display = destToggle.checked ? 'block' : 'none';
+  }
 
   function handleGoogleSignIn() {
     // Redirect to the backend OAuth initiation endpoint.
@@ -1163,6 +1785,10 @@
           resultsContainer.querySelectorAll('.confirm-match-btn').forEach(btn => {
             btn.addEventListener('click', () => handleConfirmMatch(btn.dataset.matchId, btn.dataset.driverTripId, btn.dataset.riderRequestId));
           });
+          const matchSubLink = document.getElementById('match-subscribe-link');
+          if (matchSubLink) {
+            matchSubLink.addEventListener('click', () => Router.navigate('subscription'));
+          }
         } else {
           resultsContainer.innerHTML = `
             <div class="empty-state">
@@ -1199,7 +1825,7 @@
     const date = document.getElementById('or-date')?.value;
     const time = document.getElementById('or-time')?.value;
     const seats = parseInt(document.getElementById('or-seats')?.value || '3');
-    const price = parseFloat(document.getElementById('or-price')?.value || '35');
+    const priceInput = parseFloat(document.getElementById('or-price')?.value || '0');
     const make = document.getElementById('or-make')?.value?.trim();
     const model = document.getElementById('or-model')?.value?.trim();
     const plate = document.getElementById('or-plate')?.value?.trim();
@@ -1224,7 +1850,9 @@
         return;
       }
 
-      await API.post('/matching/driver-trips', {
+      // Build post body — include coordinates so backend can compute fare automatically;
+      // only include price_per_seat as a fallback if no coordinates resolved fare.
+      const tripBody = {
         departure: departureCoords,
         destination: destinationCoords,
         departureTime: new Date(`${date}T${time}`).getTime(),
@@ -1232,7 +1860,18 @@
         availableSeats: seats,
         routePolyline: [],
         shiftLocation: departure,
-      });
+        trip_type: 'daily',
+        pickup_lat: departureCoords.lat,
+        pickup_lng: departureCoords.lng,
+        dropoff_lat: destinationCoords.lat,
+        dropoff_lng: destinationCoords.lng,
+      };
+      // Only include price_per_seat as fallback when no coordinates-based fare can be computed
+      if (priceInput > 0) {
+        tripBody.price_per_seat = priceInput;
+      }
+
+      await API.post('/matching/driver-trips', tripBody);
       Toast.show('Trip published successfully!', 'success');
       Router.navigate('my-trips');
     } catch (err) {
@@ -1443,6 +2082,47 @@
       }
     } catch {
       container.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:var(--space-xl)">Unable to load trips</p>';
+    }
+  }
+
+  async function loadMyTripsSub() {
+    const section = document.getElementById('my-trips-sub-section');
+    if (!section) return;
+    try {
+      const data = await API.get('/subscriptions/current');
+      const sub = data.subscription;
+      if (sub) {
+        const amount = (sub.estimated_amount_cents / 100).toFixed(2);
+        section.innerHTML = `
+          <h3 class="section-title" style="font-size:1rem;margin-bottom:var(--space-md)">Monthly Subscription</h3>
+          <div class="sub-card card" style="padding:var(--space-md)">
+            <div class="sub-month" style="font-weight:600;font-size:0.9375rem;margin-bottom:var(--space-xs)">${escapeHtml(sub.subscription_month)}</div>
+            <div class="sub-status chip chip--${sub.status === 'active' ? 'active' : sub.status === 'pending_payment' ? 'pending' : 'cancelled'}" style="margin-bottom:var(--space-xs)">${escapeHtml(sub.status.replace('_', ' '))}</div>
+            <div class="sub-amount" style="font-size:1rem;font-weight:700;color:var(--primary);margin-bottom:var(--space-xs)">R${amount}/month</div>
+            <div class="sub-days" style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:var(--space-md)">${sub.estimated_days || 0} days scheduled</div>
+            <button class="btn btn--secondary btn--full" id="view-cal-btn">View Calendar</button>
+          </div>
+        `;
+        const calBtn = document.getElementById('view-cal-btn');
+        if (calBtn) {
+          calBtn.addEventListener('click', () => {
+            currentSubscriptionId = sub.id;
+            Router.navigate('monthly-calendar');
+          });
+        }
+      } else {
+        section.innerHTML = `
+          <h3 class="section-title" style="font-size:1rem;margin-bottom:var(--space-md)">Monthly Subscription</h3>
+          <p style="color:var(--text-muted);font-size:0.875rem">No active subscription. <a href="#" id="sub-cta-link" style="color:var(--primary);text-decoration:none;font-weight:600">Subscribe to save 25% &#8594;</a></p>
+        `;
+        const ctaLink = document.getElementById('sub-cta-link');
+        if (ctaLink) ctaLink.addEventListener('click', (e) => { e.preventDefault(); Router.navigate('subscription'); });
+      }
+    } catch {
+      section.innerHTML = `
+        <h3 class="section-title" style="font-size:1rem;margin-bottom:var(--space-md)">Monthly Subscription</h3>
+        <p class="error-text" style="color:var(--danger);font-size:0.875rem">Could not load subscription.</p>
+      `;
     }
   }
 

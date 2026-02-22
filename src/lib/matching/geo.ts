@@ -310,6 +310,91 @@ export function estimateDetourMinutes(
   return (detourKm / avgSpeedKmh) * 60;
 }
 
+/**
+ * Estimate the marginal km increase of inserting a new rider (pickup + dropoff)
+ * into the driver's current pool stop sequence.
+ *
+ * Uses the **cheapest-insertion** heuristic:
+ *   For each candidate position i between waypoints[i-1] and waypoints[i]:
+ *     insertionCost = dist(prev, newStop) + dist(newStop, next) - dist(prev, next)
+ *
+ * Pickup is inserted at the globally cheapest position.
+ * Dropoff is inserted at the cheapest position AFTER the pickup insertion point
+ * (guaranteeing pickup-before-dropoff on the route).
+ *
+ * This gives a much more accurate cumulative detour than summing individual
+ * estimates with a flat overlap discount, because it accounts for shared
+ * route segments when multiple riders travel together.
+ *
+ * @param driverDeparture   Driver's route start (anchor waypoint)
+ * @param driverDestination Driver's route end (anchor waypoint)
+ * @param newPickup         New rider's pickup location
+ * @param newDropoff        New rider's dropoff location
+ * @param existingStops     Already-accepted pool stops in route order
+ * @returns Additional km the driver travels to serve this rider given the
+ *          current pool state (marginal cost, not total route length).
+ */
+export function computeMarginalDetourKm(
+  driverDeparture: GeoPoint,
+  driverDestination: GeoPoint,
+  newPickup: GeoPoint,
+  newDropoff: GeoPoint,
+  existingStops: Array<{ location: GeoPoint }>,
+): number {
+  // Build the current waypoint sequence: departure → stops → destination
+  const waypoints: GeoPoint[] = [
+    driverDeparture,
+    ...existingStops.map((s) => s.location),
+    driverDestination,
+  ];
+
+  // ── Find cheapest pickup insertion ──────────────────────────────────────
+  let minPickupCost = Infinity;
+  let bestPickupIdx = 1; // index in waypoints[] where pickup is inserted
+
+  for (let i = 1; i < waypoints.length; i++) {
+    const prev = waypoints[i - 1];
+    const next = waypoints[i];
+    const cost =
+      haversine(prev, newPickup) +
+      haversine(newPickup, next) -
+      haversine(prev, next);
+    if (cost < minPickupCost) {
+      minPickupCost = cost;
+      bestPickupIdx = i;
+    }
+  }
+
+  // ── Build sequence with pickup inserted ─────────────────────────────────
+  const withPickup: GeoPoint[] = [
+    ...waypoints.slice(0, bestPickupIdx),
+    newPickup,
+    ...waypoints.slice(bestPickupIdx),
+  ];
+
+  // ── Find cheapest dropoff insertion (must be AFTER pickup) ──────────────
+  let minDropoffCost = Infinity;
+
+  for (let i = bestPickupIdx + 1; i < withPickup.length; i++) {
+    const prev = withPickup[i - 1];
+    const next = withPickup[i];
+    const cost =
+      haversine(prev, newDropoff) +
+      haversine(newDropoff, next) -
+      haversine(prev, next);
+    if (cost < minDropoffCost) {
+      minDropoffCost = cost;
+    }
+  }
+
+  // Guard: both costs must be finite (degenerate input guard)
+  if (!isFinite(minPickupCost) || !isFinite(minDropoffCost)) {
+    return haversine(newPickup, newDropoff); // conservative fallback
+  }
+
+  return Math.max(0, minPickupCost + minDropoffCost);
+}
+
 // ---------------------------------------------------------------------------
 // Carbon Savings
 // ---------------------------------------------------------------------------

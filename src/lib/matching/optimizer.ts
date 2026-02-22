@@ -28,6 +28,7 @@ import { DEFAULT_MATCH_CONFIG } from './types';
 import {
   haversine,
   minDistanceToRoute,
+  computeMarginalDetourKm,
 } from './geo';
 
 // ---------------------------------------------------------------------------
@@ -135,34 +136,23 @@ function enforcePickupBeforeDropoff(stops: PoolStop[]): PoolStop[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Estimate the cumulative detour of the current pool (sum of individual
- * detour estimates). This is an approximation; real detour would require
- * full re-routing with all stops.
- */
-function estimatePoolDetour(
-  driver: DriverTrip,
-  riders: MatchResult[],
-): number {
-  let total = 0;
-  for (const rider of riders) {
-    total += rider.estimatedDetourMinutes ?? 0;
-  }
-  // Shared rides tend to have overlapping detours, so apply a discount
-  const overlapDiscount = riders.length > 1 ? 0.7 : 1.0;
-  return total * overlapDiscount;
-}
-
-/**
  * Optimise a pool of riders for a single driver trip.
  *
- * Algorithm:
- *   1. Sort candidate matches by score (best first)
- *   2. Greedily add riders one by one
- *   3. After each addition, check:
- *      a. Seat constraint is still satisfied
- *      b. Cumulative detour is within budget
- *   4. If adding a rider violates constraints, skip it
- *   5. Return the best valid combination found
+ * Algorithm (cheapest-insertion greedy):
+ *   1. Sort candidate matches by score (best first — lowest score wins)
+ *   2. For each candidate, compute the **marginal km** of inserting their
+ *      pickup + dropoff into the current stop sequence (cheapest-insertion).
+ *   3. Accept the candidate only if:
+ *      a. Seats remain available
+ *      b. `cumulativeDetourKm + marginalKm ≤ maxPoolDetourKm`
+ *         (absolute budget — never exceed 10 km total regardless of pool size)
+ *   4. After each acceptance, rebuild the ordered stop sequence so the next
+ *      rider's marginal cost is computed relative to the updated route.
+ *   5. Return the resulting PoolAssignment (or null if no rider fits).
+ *
+ * This replaces the previous approach (sum of individual minute estimates ×
+ * 0.7 overlap discount) with a geometrically accurate cumulative km budget
+ * that correctly accounts for shared route segments.
  *
  * @param driver       The driver trip to fill
  * @param candidates   Candidate matches (pre-sorted by score, best first)
@@ -180,51 +170,66 @@ export function optimizePool(
   }
 
   const maxRiders = config.maxRidersPerPool;
-  const maxDetour = config.maxPoolDetourMinutes;
+  // Use the absolute km budget (primary); fall back to converting minutes if absent
+  const maxDetourKm =
+    config.maxPoolDetourKm ??
+    config.thresholds.maxAbsoluteDetourKm ??
+    10;
   const maxSeats = driver.availableSeats;
 
-  // Candidates are already sorted by score (ascending = better)
   const selected: MatchResult[] = [];
   let seatsUsed = 0;
+  let cumulativeDetourKm = 0;
+  // Ordered stops rebuilt after each acceptance so the next rider's marginal
+  // cost is computed against the most accurate current stop sequence.
+  let currentStops: PoolStop[] = [];
 
   for (const candidate of candidates) {
-    // Determine seats needed (stored in breakdown or default 1)
-    const seatsNeeded = 1; // Each match represents 1 rider request
-
     // Seat check
-    if (seatsUsed + seatsNeeded > maxSeats) continue;
+    if (seatsUsed + 1 > maxSeats) continue;
 
     // Max riders check
     if (selected.length >= maxRiders) break;
 
-    // Tentatively add and check detour
-    const tentative = [...selected, candidate];
-    const poolDetour = estimatePoolDetour(driver, tentative);
-    if (poolDetour > maxDetour) continue;
+    // Skip if location data missing (shouldn't happen in normal flow)
+    const riderData = riderMap.get(candidate.riderId);
+    if (!riderData) continue;
 
-    // All checks passed — add to pool
+    // Compute the additional km required to serve this rider given the
+    // current pool's ordered stop sequence (cheapest-insertion heuristic).
+    const marginalKm = computeMarginalDetourKm(
+      driver.departure,
+      driver.destination,
+      riderData.pickup,
+      riderData.dropoff,
+      currentStops,
+    );
+
+    // Absolute detour budget check
+    if (cumulativeDetourKm + marginalKm > maxDetourKm) continue;
+
+    // Accept this rider
     selected.push(candidate);
-    seatsUsed += seatsNeeded;
+    seatsUsed += 1;
+    cumulativeDetourKm += marginalKm;
+
+    // Rebuild ordered stops for the next marginal cost computation
+    const pickups = new Map<string, GeoPoint>(
+      selected.map((m) => [m.riderId, riderMap.get(m.riderId)!.pickup]),
+    );
+    const dropoffs = new Map<string, GeoPoint>(
+      selected.map((m) => [m.riderId, riderMap.get(m.riderId)!.dropoff]),
+    );
+    currentStops = orderStops(driver, selected, pickups, dropoffs);
   }
 
   if (selected.length === 0) return null;
 
-  // Build ordered stop list
-  const pickups = new Map<string, GeoPoint>();
-  const dropoffs = new Map<string, GeoPoint>();
-  for (const match of selected) {
-    const riderData = riderMap.get(match.riderId);
-    if (riderData) {
-      pickups.set(match.riderId, riderData.pickup);
-      dropoffs.set(match.riderId, riderData.dropoff);
-    }
-  }
-  const orderedStops = orderStops(driver, selected, pickups, dropoffs);
-
   // Aggregate metrics
   const totalScore = selected.reduce((sum, m) => sum + m.score, 0);
-  const totalDetour = estimatePoolDetour(driver, selected);
   const totalCarbon = selected.reduce((sum, m) => sum + (m.carbonSavedKg ?? 0), 0);
+  // Convert cumulative km to minutes for display (30 km/h urban average)
+  const totalDetourMinutes = Math.round((cumulativeDetourKm / 30) * 60 * 10) / 10;
 
   return {
     driverTripId: driver.id,
@@ -234,9 +239,9 @@ export function optimizePool(
     averageScore: totalScore / selected.length,
     seatsUsed,
     seatsRemaining: maxSeats - seatsUsed,
-    totalDetourMinutes: Math.round(totalDetour * 10) / 10,
+    totalDetourMinutes,
     totalCarbonSavedKg: Math.round(totalCarbon * 100) / 100,
-    orderedStops,
+    orderedStops: currentStops,
   };
 }
 

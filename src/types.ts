@@ -166,6 +166,9 @@ export interface TripRow {
   updated_at: string;
   cancelled_at: string | null;
   completed_at: string | null;
+  trip_type: string;
+  route_distance_km: number | null;
+  rate_per_km: number | null;
 }
 
 export interface TripParticipantRow {
@@ -185,6 +188,9 @@ export interface TripParticipantRow {
   passenger_count: number | null;
   rating: number | null;
   review_encrypted: string | null;
+  subscription_id: number | null;
+  scheduled_day_id: number | null;
+  fare_rate_per_km: number | null;
 }
 
 export interface AuditLogRow {
@@ -288,4 +294,56 @@ export interface RouteResult {
   durationMinutes: number;
   polyline: string;         // encoded polyline
   waypoints: Array<{ lat: number; lng: number }>;
+}
+
+// ---------------------------------------------------------------------------
+// Monthly Subscription Types
+// ---------------------------------------------------------------------------
+
+export type TripType = 'daily' | 'monthly';
+
+export interface MonthlySubscriptionRow {
+  id: number;
+  user_id: number;
+  subscription_month: string;
+  recurring_weekdays: string;         // JSON
+  default_morning_departure: string;
+  default_evening_departure: string | null;
+  default_pickup_lat: number | null;
+  default_pickup_lng: number | null;
+  default_dropoff_lat: number | null;
+  default_dropoff_lng: number | null;
+  default_pickup_encrypted: string | null;
+  default_dropoff_encrypted: string | null;
+  estimated_km_per_month: number;
+  estimated_amount_cents: number;
+  estimated_days: number;
+  stripe_payment_intent_id: string | null;
+  payment_status: 'unpaid' | 'pending' | 'paid' | 'failed' | 'refunded';
+  payment_completed_at: string | null;
+  status: 'pending_payment' | 'active' | 'cancelled' | 'expired';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduledDayRow {
+  id: number;
+  subscription_id: number;
+  user_id: number;
+  trip_date: string;
+  trip_type: 'morning' | 'evening';
+  departure_time: string;
+  pickup_lat: number | null;
+  pickup_lng: number | null;
+  dropoff_lat: number | null;
+  dropoff_lng: number | null;
+  pickup_encrypted: string | null;
+  dropoff_encrypted: string | null;
+  is_destination_change: number;
+  estimated_km: number | null;
+  status: 'scheduled' | 'requested' | 'matched' | 'completed' | 'cancelled' | 'skipped';
+  trip_id: number | null;
+  participant_id: number | null;
+  created_at: string;
+  updated_at: string;
 }

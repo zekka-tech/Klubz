@@ -44,6 +44,7 @@ interface StripeWebhookEvent {
         tripId?: string;
         userId?: string;
         bookingId?: string;
+        subscriptionId?: string;
       };
       last_payment_error?: { message?: string };
     };
@@ -636,6 +637,39 @@ paymentRoutes.post('/webhook', async (c) => {
         });
         throw new AppError('Failed to process webhook event', 'PAYMENT_WEBHOOK_ERROR', 500);
       }
+
+      // Handle monthly subscription payment
+      try {
+        const subscriptionId = paymentIntent.metadata?.subscriptionId;
+        if (subscriptionId) {
+          await db
+            .prepare(`UPDATE monthly_subscriptions SET payment_status = 'paid', status = 'active', payment_completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE stripe_payment_intent_id = ?`)
+            .bind(paymentIntent.id)
+            .run();
+          // Audit log
+          try {
+            await db.prepare(`
+              INSERT INTO audit_logs (user_id, action, entity_type, entity_id, created_at)
+              VALUES (?, ?, 'subscription', ?, CURRENT_TIMESTAMP)
+            `).bind(
+              paymentIntent.metadata?.userId ? parseInt(paymentIntent.metadata.userId, 10) : null,
+              'SUBSCRIPTION_PAYMENT_SUCCEEDED',
+              parseInt(subscriptionId, 10),
+            ).run();
+          } catch (auditErr: unknown) {
+            logger.warn('Subscription payment audit log failed (non-critical)', {
+              ...withRequestContext(c),
+              error: auditErr instanceof Error ? auditErr.message : String(auditErr),
+              subscriptionId,
+            });
+          }
+        }
+      } catch (err: unknown) {
+        logger.warn('Failed to update subscription payment status (non-critical)', {
+          ...withRequestContext(c),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       break;
     }
 
@@ -735,6 +769,22 @@ paymentRoutes.post('/webhook', async (c) => {
           eventId: event.id,
         });
         throw new AppError('Failed to process webhook event', 'PAYMENT_WEBHOOK_ERROR', 500);
+      }
+
+      // Handle monthly subscription payment failure
+      try {
+        const subscriptionId = paymentIntent.metadata?.subscriptionId;
+        if (subscriptionId) {
+          await db
+            .prepare(`UPDATE monthly_subscriptions SET payment_status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE stripe_payment_intent_id = ?`)
+            .bind(paymentIntent.id)
+            .run();
+        }
+      } catch (err: unknown) {
+        logger.warn('Failed to update subscription payment_failed status (non-critical)', {
+          ...withRequestContext(c),
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
       break;
     }
