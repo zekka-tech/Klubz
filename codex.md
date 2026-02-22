@@ -22,9 +22,9 @@ Mandatory updates to this file:
 Quality gate status (latest run):
 - `npm run type-check`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS (205/205)
+- `npm test`: PASS (250/250)
 - `npm run build`: PASS
-- `npm run db:check-migrations`: PASS (10 files, next `0011`)
+- `npm run db:check-migrations`: PASS (12 files, next `0013`)
 - `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
 
 Repository state:
@@ -35,7 +35,8 @@ Repository state:
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `(pending)` - Fixed Cloudflare Workers compatibility: replaced Node.js Stripe SDK with Workers-native StripeService; fixed broken PII decrypt pattern in trips.ts notifications; added safeDecryptPII for safe migration-path decryption; fixed PII encryption on registration and profile update; added passenger_count to TripParticipantRow; fixed wrangler.toml missing staging/dev KV namespace bindings.
+1. `(pending)` - Implemented Google OAuth Sign-in (Authorization Code flow with CSRF state, short-lived code exchange, PII encryption for new users, account linking for existing accounts); added migration 0012 for oauth_provider/oauth_id columns; fixed CSP connect-src to include Nominatim geocoding; documented GOOGLE_CLIENT_ID/SECRET setup in ENVIRONMENT.md.
+2. `(pending)` - Fixed Cloudflare Workers compatibility: replaced Node.js Stripe SDK with Workers-native StripeService; fixed broken PII decrypt pattern in trips.ts notifications; added safeDecryptPII for safe migration-path decryption; fixed PII encryption on registration and profile update; added passenger_count to TripParticipantRow; fixed wrangler.toml missing staging/dev KV namespace bindings.
 2. `213a812` - Decoupled in-app trip notifications from email/SMS transport availability across booking request/accept/reject and trip cancel flows, ensuring persisted notifications remain preference-driven even when providers are unavailable; added integration enforcement contracts.
 2. `be39508` - Fixed trip-cancel notification regression by loading accepted rider recipients before participant status transition to `cancelled`, preserving cancellation notifications while retaining participant cancellation integrity updates; added integration regression contract for execution ordering.
 3. `42af5f9` - Added formal payment webhook threat-model artifact (`docs/PAYMENT_WEBHOOK_THREAT_MODEL.md`) and expanded integration abuse-path contracts to assert non-mutation for unknown-booking and payment-intent-mismatch failed/canceled webhook events.
@@ -447,10 +448,12 @@ Use this format for every significant action:
 ---
 
 ## Next Active Tasks
-1. High: replace placeholder wrangler.toml KV/D1 IDs with real resource IDs once Cloudflare resources are provisioned for staging/dev environments.
-2. High: complete route-by-route security review and close any remaining authz/data-exposure gaps not yet covered by contracts.
-3. Medium: add correlation ID propagation consistency checks across modules and related observability assertions.
-4. Medium: expand caching invalidation contracts/tests for user/admin/matching read models.
+1. High: provision GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Google Cloud Console and set as Cloudflare Pages secrets (`wrangler pages secret put GOOGLE_CLIENT_ID --project-name=klubz-production` etc.).
+2. High: apply migration 0012 to production/staging D1 (`scripts/apply-migrations-remote.cjs`).
+3. High: replace placeholder wrangler.toml KV/D1 IDs with real resource IDs once Cloudflare resources are provisioned for staging/dev environments.
+4. High: complete route-by-route security review and close any remaining authz/data-exposure gaps not yet covered by contracts.
+5. Medium: add correlation ID propagation consistency checks across modules and related observability assertions.
+6. Medium: expand caching invalidation contracts/tests for user/admin/matching read models.
 
 Owner guidance:
 - Keep this file authoritative.

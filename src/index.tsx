@@ -65,7 +65,11 @@ function applyCorsHeaders(c: Context<AppEnv>, origin: string): void {
 }
 
 function buildConnectSources(c: Context<AppEnv>): string[] {
-  const sources = new Set<string>(["'self'", 'https://api.klubz.com']);
+  const sources = new Set<string>([
+    "'self'",
+    'https://api.klubz.com',
+    'https://nominatim.openstreetmap.org', // geocoding used by client-side geocodeAddress()
+  ]);
   const appOrigin = normalizeOrigin(c.env?.APP_URL);
   if (appOrigin) {
     sources.add(appOrigin);

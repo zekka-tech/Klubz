@@ -726,4 +726,342 @@ authRoutes.post('/logout', async (c) => {
   return c.json({ message: 'Logout successful' });
 });
 
+// ── Google OAuth — Initiate ────────────────────────────────────────────────
+//
+// Redirects the browser to Google's OAuth 2.0 consent screen.
+// A CSRF state token is generated and stored in SESSIONS KV (10-min TTL).
+// This endpoint is public (no JWT required).
+
+authRoutes.get('/google', async (c) => {
+  const clientId = c.env?.GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Google Sign-in is not configured' } }, 503);
+  }
+
+  const appUrl = c.env?.APP_URL || 'https://klubz.com';
+  const kv = c.env?.SESSIONS;
+
+  // Generate CSRF state and store in KV (fail closed if KV unavailable)
+  const state = crypto.randomUUID();
+  if (kv) {
+    await kv.put(`oauth:state:${state}`, '1', { expirationTtl: 600 });
+  } else {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Session service unavailable' } }, 503);
+  }
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: `${appUrl}/api/auth/google/callback`,
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    access_type: 'online',
+    prompt: 'select_account',
+  });
+
+  return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`, 302);
+});
+
+// ── Google OAuth — Callback ────────────────────────────────────────────────
+//
+// Handles the redirect back from Google after user consent.
+// Exchanges the authorization code for tokens, fetches user profile,
+// and creates/links the user account in D1.
+// Stores the Klubz token pair in SESSIONS KV under a short-lived code,
+// then redirects the browser to the PWA with that code in the URL.
+
+authRoutes.get('/google/callback', async (c) => {
+  const appUrl = c.env?.APP_URL || 'https://klubz.com';
+  const errorRedirect = (reason: string) =>
+    c.redirect(`${appUrl}/?oauth_error=${encodeURIComponent(reason)}#login`, 302);
+
+  const code = c.req.query('code');
+  const state = c.req.query('state');
+  const oauthError = c.req.query('error');
+
+  if (oauthError || !code) {
+    return errorRedirect('cancelled');
+  }
+
+  const clientId = c.env?.GOOGLE_CLIENT_ID;
+  const clientSecret = c.env?.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return errorRedirect('config');
+  }
+
+  // Validate CSRF state — fail closed if KV is unavailable
+  const sessions = c.env?.SESSIONS;
+  if (!sessions) {
+    return errorRedirect('service_unavailable');
+  }
+
+  if (state) {
+    const stateVal = await sessions.get(`oauth:state:${state}`);
+    if (!stateVal) {
+      return errorRedirect('state_invalid');
+    }
+    await sessions.delete(`oauth:state:${state}`);
+  } else {
+    // state is required; no state = possible CSRF
+    return errorRedirect('state_missing');
+  }
+
+  try {
+    // Exchange authorization code for Google access token
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: `${appUrl}/api/auth/google/callback`,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      logger.error('Google token exchange failed', undefined, {
+        ...withRequestContext(c),
+        status: tokenRes.status,
+      });
+      return errorRedirect('token_exchange');
+    }
+
+    const googleTokens = (await tokenRes.json()) as { access_token: string };
+
+    // Fetch Google user profile
+    const userRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${googleTokens.access_token}` },
+    });
+
+    if (!userRes.ok) {
+      return errorRedirect('userinfo');
+    }
+
+    const googleUser = (await userRes.json()) as {
+      sub: string;
+      email: string;
+      name?: string;
+      given_name?: string;
+      family_name?: string;
+      picture?: string;
+      email_verified?: boolean;
+    };
+
+    if (!googleUser.email) {
+      return errorRedirect('no_email');
+    }
+
+    const db = getDBOptional(c);
+    if (!db) {
+      return errorRedirect('db_unavailable');
+    }
+
+    const secret = getJWTSecret(c);
+    const emailHash = await hashForLookup(googleUser.email);
+    const encKey = c.env?.ENCRYPTION_KEY;
+
+    // Look up existing user by email hash
+    // (handles both previously registered email/password accounts and returning OAuth users)
+    const existingUser = await db
+      .prepare(
+        `SELECT id, email, role, first_name_encrypted, last_name_encrypted, is_active
+         FROM users WHERE email_hash = ? AND deleted_at IS NULL`,
+      )
+      .bind(emailHash)
+      .first<{
+        id: number;
+        email: string;
+        role: string;
+        first_name_encrypted: string | null;
+        last_name_encrypted: string | null;
+        is_active: number;
+      }>();
+
+    let userId: number;
+    let userRole: string;
+    let userName: string;
+
+    if (existingUser) {
+      if (!existingUser.is_active) {
+        return errorRedirect('account_disabled');
+      }
+
+      userId = existingUser.id;
+      userRole = existingUser.role;
+
+      // Idempotently link Google account to the existing user and update last login
+      await db
+        .prepare(
+          `UPDATE users
+           SET oauth_provider = ?, oauth_id = ?, email_verified = TRUE,
+               last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+        )
+        .bind('google', googleUser.sub, userId)
+        .run();
+
+      const decFirst = await safeDecryptPII(existingUser.first_name_encrypted, encKey, userId);
+      const decLast = await safeDecryptPII(existingUser.last_name_encrypted, encKey, userId);
+      userName =
+        [decFirst, decLast].filter(Boolean).join(' ') ||
+        googleUser.name ||
+        googleUser.email.split('@')[0];
+    } else {
+      // Create a new Klubz account from the Google profile
+      const firstName =
+        googleUser.given_name ||
+        googleUser.name?.split(' ')[0] ||
+        googleUser.email.split('@')[0];
+      const lastName =
+        googleUser.family_name ||
+        (googleUser.name?.includes(' ') ? googleUser.name.split(' ').slice(1).join(' ') : null) ||
+        null;
+      const ip = getAnonymizedIP(c);
+
+      const result = await db
+        .prepare(
+          `INSERT INTO users
+             (email, email_hash, password_hash, first_name_encrypted, last_name_encrypted,
+              oauth_provider, oauth_id, role, is_active, email_verified, created_ip)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE, TRUE, ?)`,
+        )
+        .bind(
+          googleUser.email,
+          emailHash,
+          'OAUTH_NO_PASSWORD', // placeholder — satisfies NOT NULL; password login is blocked
+          firstName,
+          lastName,
+          'google',
+          googleUser.sub,
+          'user',
+          ip,
+        )
+        .run();
+
+      userId = Number(result?.meta?.last_row_id ?? 0);
+      userRole = 'user';
+      userName = `${firstName}${lastName ? ' ' + lastName : ''}`;
+
+      // Encrypt PII now that we have the userId
+      if (encKey && userId > 0) {
+        try {
+          const encFirst = firstName ? await encryptPII(firstName, encKey, userId) : null;
+          const encLast = lastName ? await encryptPII(lastName, encKey, userId) : null;
+          await db
+            .prepare('UPDATE users SET first_name_encrypted = ?, last_name_encrypted = ? WHERE id = ?')
+            .bind(encFirst, encLast, userId)
+            .run();
+        } catch { /* best-effort */ }
+      }
+
+      // Audit: new user registration via Google OAuth
+      try {
+        await db
+          .prepare(
+            'INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+          )
+          .bind(userId, 'USER_REGISTER', 'user', userId, getAnonymizedIP(c), getUserAgent(c))
+          .run();
+      } catch { /* best-effort */ }
+    }
+
+    const { accessToken, refreshToken } = await issueTokenPair(
+      { id: userId, email: googleUser.email, name: userName, role: userRole, organizationId: undefined },
+      secret,
+    );
+
+    // Persist refresh token hash in sessions table for rotation tracking
+    try {
+      const tokenHash = await hashToken(refreshToken);
+      const sessionId = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .replace('T', ' ')
+        .substring(0, 19);
+      await db
+        .prepare(
+          `INSERT INTO sessions (id, user_id, token_hash, ip_address, user_agent, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(sessionId, userId, tokenHash, getAnonymizedIP(c), getUserAgent(c), expiresAt)
+        .run();
+    } catch { /* best-effort */ }
+
+    // Audit: login event
+    try {
+      await db
+        .prepare(
+          'INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+        )
+        .bind(userId, 'USER_LOGIN', 'user', userId, getAnonymizedIP(c), getUserAgent(c))
+        .run();
+    } catch { /* best-effort */ }
+
+    // Store the Klubz token pair in SESSIONS KV under a short-lived one-time code.
+    // The browser is redirected to the PWA with only this code in the URL — the
+    // actual tokens never appear in the URL, browser history, or server logs.
+    const oauthCode = crypto.randomUUID();
+    await sessions.put(
+      `oauth:sess:${oauthCode}`,
+      JSON.stringify({
+        accessToken,
+        refreshToken,
+        user: {
+          id: userId,
+          email: googleUser.email,
+          name: userName,
+          role: userRole,
+          mfaEnabled: false,
+        },
+      }),
+      { expirationTtl: 120 }, // 2-minute window for the client to exchange
+    );
+
+    // Redirect to PWA login screen; client JS picks up oauth_code and exchanges it
+    return c.redirect(`${appUrl}/?oauth_code=${encodeURIComponent(oauthCode)}#login`, 302);
+  } catch (err) {
+    logger.error('Google OAuth callback error', err instanceof Error ? err : undefined, withRequestContext(c));
+    return errorRedirect('server_error');
+  }
+});
+
+// ── OAuth Session Exchange ─────────────────────────────────────────────────
+//
+// Exchanges the short-lived oauth_code (UUID) for the actual Klubz token pair.
+// The code is deleted on first use — it is strictly single-use.
+// This endpoint is intentionally unauthenticated (caller has no tokens yet).
+
+authRoutes.get('/oauth-session', async (c) => {
+  const code = c.req.query('code');
+  if (!code) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Session code required' } }, 400);
+  }
+
+  const sessions = c.env?.SESSIONS;
+  if (!sessions) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Session service unavailable' } }, 500);
+  }
+
+  const raw = await sessions.get(`oauth:sess:${code}`);
+  if (!raw) {
+    return c.json(
+      { error: { code: 'AUTHENTICATION_ERROR', message: 'Session code is invalid or has expired' } },
+      400,
+    );
+  }
+
+  // Single-use: delete immediately before returning tokens
+  await sessions.delete(`oauth:sess:${code}`);
+
+  const session = JSON.parse(raw) as {
+    accessToken: string;
+    refreshToken: string;
+    user: { id: number; email: string; name: string; role: string; mfaEnabled: boolean };
+  };
+  return c.json(session);
+});
+
 export default authRoutes;
+

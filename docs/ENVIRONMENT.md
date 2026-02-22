@@ -38,6 +38,23 @@ This document describes all environment variables required and optional for the 
 - **Required for**: SMS notifications
 - **Setup**: https://console.twilio.com/
 
+### Google OAuth (Sign in with Google)
+- `GOOGLE_CLIENT_ID` - OAuth 2.0 Client ID (ends in `.apps.googleusercontent.com`)
+- `GOOGLE_CLIENT_SECRET` - OAuth 2.0 Client Secret
+- **Required for**: "Continue with Google" sign-in on the login screen
+- **Setup**:
+  1. Go to https://console.cloud.google.com/apis/credentials
+  2. Create an **OAuth 2.0 Client ID** (application type: Web application)
+  3. Add **Authorised JavaScript origins**: `https://klubz-production.pages.dev`
+  4. Add **Authorised redirect URIs**: `https://klubz-production.pages.dev/api/auth/google/callback`
+  5. For staging: also add `https://klubz-staging.pages.dev/api/auth/google/callback`
+- **Secrets setup**:
+  ```bash
+  wrangler pages secret put GOOGLE_CLIENT_ID --project-name=klubz-production
+  wrangler pages secret put GOOGLE_CLIENT_SECRET --project-name=klubz-production
+  ```
+- **Note**: If not configured, the Google button returns a 503 and users fall back to email/password login.
+
 ## Environment-Specific Variables
 
 ### NODE_ENV

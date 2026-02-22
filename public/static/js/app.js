@@ -156,6 +156,23 @@
       Store.setState({ isAuthenticated: false, user: null });
       Router.navigate('login');
       Toast.show('Logged out', 'info');
+    },
+
+    // Exchanges the short-lived oauth_code (from the redirect URL query string)
+    // for the Klubz token pair and logs the user in.
+    async handleOAuthCallback(code) {
+      try {
+        const data = await API.get(`/auth/oauth-session?code=${encodeURIComponent(code)}`);
+        localStorage.setItem(CONFIG.TOKEN_KEY, data.accessToken);
+        localStorage.setItem(CONFIG.REFRESH_KEY, data.refreshToken);
+        localStorage.setItem(CONFIG.USER_KEY, JSON.stringify(data.user));
+        Store.setState({ isAuthenticated: true, user: data.user, isLoading: false });
+        Toast.show('Signed in with Google!', 'success');
+        Router.navigate('home');
+      } catch {
+        Toast.show('Google sign-in failed. Please try again.', 'error');
+        Router.navigate('login');
+      }
     }
   };
 
@@ -311,9 +328,9 @@
 
         <div class="auth-divider">or continue with</div>
 
-        <button class="social-btn" style="margin-bottom:var(--space-sm)">
+        <button id="google-signin-btn" class="social-btn" style="margin-bottom:var(--space-sm)">
           <svg viewBox="0 0 24 24" width="20" height="20"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
-          Google
+          Continue with Google
         </button>
 
         <p style="text-align:center;margin-top:var(--space-lg);font-size:0.875rem;color:var(--text-secondary)">
@@ -918,6 +935,7 @@
       switch (screen) {
         case 'login':
           on('login-form', 'submit', handleLogin);
+          on('google-signin-btn', 'click', handleGoogleSignIn);
           on('link-to-register', 'click', (e) => { e.preventDefault(); Router.navigate('register'); });
           on('link-to-forgot', 'click', (e) => { e.preventDefault(); Router.navigate('forgot-password'); });
           break;
@@ -994,6 +1012,12 @@
   };
 
   // ═══ Event Handlers ═══
+
+  function handleGoogleSignIn() {
+    // Redirect to the backend OAuth initiation endpoint.
+    // The backend generates a CSRF state, stores it in KV, and redirects to Google.
+    window.location.href = '/api/auth/google';
+  }
 
   async function handleForgotPassword(e) {
     e.preventDefault();
@@ -1562,12 +1586,40 @@
     Renderer.render();
     registerSW();
 
-    // Show success toast after email verification redirect (?verified=1)
+    // Handle redirects with URL query parameters (email verification, OAuth callbacks)
     const params = new URLSearchParams(window.location.search);
+
     if (params.get('verified') === '1') {
+      // Email verification success (?verified=1 set by /api/auth/verify-email redirect)
       setTimeout(() => Toast.show('Email verified! You can now log in.', 'success'), 300);
-      // Clean the query string without a page reload
       window.history.replaceState({}, '', window.location.hash || '/');
+
+    } else if (params.get('oauth_code')) {
+      // Google OAuth success — exchange the short-lived code for tokens
+      const oauthCode = params.get('oauth_code');
+      // Clean the URL immediately so the code is not reused on reload
+      window.history.replaceState({}, '', window.location.hash || '/');
+      Auth.handleOAuthCallback(oauthCode);
+
+    } else if (params.get('oauth_error')) {
+      // Google OAuth failure — show a user-friendly error and land on login screen
+      const reason = params.get('oauth_error');
+      window.history.replaceState({}, '', window.location.hash || '/');
+      const errorMessages = {
+        cancelled: 'Google sign-in was cancelled.',
+        config: 'Google sign-in is not configured on this server.',
+        state_invalid: 'Sign-in session expired — please try again.',
+        state_missing: 'Sign-in request was invalid — please try again.',
+        token_exchange: 'Google sign-in failed — please try again.',
+        userinfo: 'Could not retrieve your Google profile — please try again.',
+        no_email: 'Your Google account does not have a public email address.',
+        db_unavailable: 'Service temporarily unavailable — please try again.',
+        account_disabled: 'Your account has been disabled.',
+        server_error: 'A server error occurred — please try again.',
+        service_unavailable: 'Service temporarily unavailable — please try again.',
+      };
+      const msg = errorMessages[reason] || 'Google sign-in failed. Please try again.';
+      setTimeout(() => Toast.show(msg, 'error'), 300);
     }
   }
 

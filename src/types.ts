@@ -66,6 +66,8 @@ export interface Bindings {
   TWILIO_PHONE_NUMBER: string;
   SENDGRID_API_KEY: string;
   MAPBOX_ACCESS_TOKEN: string;
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
 
   // Environment variables
   ENVIRONMENT: string;
