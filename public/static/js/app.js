@@ -429,29 +429,11 @@
           <div class="skeleton" style="height:120px"></div>
         </div>
 
-        <!-- Stats -->
+        <!-- Stats (populated by loadHomeStats) -->
         <h3 class="section-title" style="margin-top:var(--space-xl)">Your Stats</h3>
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-card__value">42</div>
-            <div class="stat-card__label">Total Trips</div>
-            <div class="stat-card__trend stat-card__trend--up">+12% this month</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__value">4.8</div>
-            <div class="stat-card__label">Rating</div>
-            <div class="stat-card__trend" style="color:var(--warning)">${Icons.star}${Icons.star}${Icons.star}${Icons.star}${Icons.star}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__value">1,250</div>
-            <div class="stat-card__label">km Shared</div>
-            <div class="stat-card__trend stat-card__trend--up">+8% this month</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__value">R2,150</div>
-            <div class="stat-card__label">Saved</div>
-            <div class="stat-card__trend stat-card__trend--up">+15% this month</div>
-          </div>
+        <div id="home-stats-grid" class="stats-grid">
+          <div class="stat-card"><div class="skeleton" style="height:60px"></div></div>
+          <div class="stat-card"><div class="skeleton" style="height:60px"></div></div>
         </div>
       </div>
     `;
@@ -876,6 +858,10 @@
   }
 
   // ═══ Renderer ═══
+  // AbortController for the current screen's event listeners.
+  // Aborted and replaced on every render so old listeners are cleaned up.
+  let screenController = new AbortController();
+
   const Renderer = {
     render() {
       const { currentScreen, isAuthenticated } = Store.state;
@@ -918,113 +904,87 @@
         item.classList.toggle('active', item.dataset.screen === currentScreen);
       });
 
-      // Bind events after render
-      this.bindEvents(currentScreen);
+      // Cancel all previous screen listeners then bind fresh ones
+      screenController.abort();
+      screenController = new AbortController();
+      this.bindEvents(currentScreen, screenController.signal);
       this.loadScreenData(currentScreen);
     },
 
-    bindEvents(screen) {
+    bindEvents(screen, signal) {
+      const on = (id, event, fn) => document.getElementById(id)?.addEventListener(event, fn, { signal });
+      const onAll = (sel, event, fn) => document.querySelectorAll(sel).forEach(el => el.addEventListener(event, fn, { signal }));
+
       switch (screen) {
         case 'login':
-          document.getElementById('login-form')?.addEventListener('submit', handleLogin);
-          document.getElementById('link-to-register')?.addEventListener('click', (e) => {
-            e.preventDefault();
-            Router.navigate('register');
-          });
-          document.getElementById('link-to-forgot')?.addEventListener('click', (e) => {
-            e.preventDefault();
-            Router.navigate('forgot-password');
-          });
+          on('login-form', 'submit', handleLogin);
+          on('link-to-register', 'click', (e) => { e.preventDefault(); Router.navigate('register'); });
+          on('link-to-forgot', 'click', (e) => { e.preventDefault(); Router.navigate('forgot-password'); });
           break;
         case 'register':
-          document.getElementById('register-form')?.addEventListener('submit', handleRegister);
-          document.getElementById('link-to-login')?.addEventListener('click', (e) => {
-            e.preventDefault();
-            Router.navigate('login');
-          });
-          document.querySelectorAll('#role-tabs .tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-              document.querySelectorAll('#role-tabs .tab').forEach(t => t.classList.remove('active'));
-              tab.classList.add('active');
-            });
+          on('register-form', 'submit', handleRegister);
+          on('link-to-login', 'click', (e) => { e.preventDefault(); Router.navigate('login'); });
+          onAll('#role-tabs .tab', 'click', (e) => {
+            document.querySelectorAll('#role-tabs .tab').forEach(t => t.classList.remove('active'));
+            e.currentTarget.classList.add('active');
           });
           break;
-        case 'find-ride':
-          document.getElementById('find-ride-form')?.addEventListener('submit', handleFindRide);
-          document.querySelectorAll('.seat-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-              document.querySelectorAll('.seat-btn').forEach(b => b.classList.remove('active'));
-              btn.classList.add('active');
-            });
+        case 'find-ride': {
+          on('find-ride-form', 'submit', handleFindRide);
+          onAll('.seat-btn', 'click', (e) => {
+            document.querySelectorAll('.seat-btn').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
           });
-          // Set default date/time
           const dateInput = document.getElementById('fr-date');
           const timeInput = document.getElementById('fr-time');
-          if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
-          if (timeInput) timeInput.value = new Date().toTimeString().slice(0, 5);
+          if (dateInput && !dateInput.value) dateInput.value = new Date().toISOString().split('T')[0];
+          if (timeInput && !timeInput.value) timeInput.value = new Date().toTimeString().slice(0, 5);
           break;
-        case 'offer-ride':
-          document.getElementById('offer-ride-form')?.addEventListener('submit', handleOfferRide);
+        }
+        case 'offer-ride': {
+          on('offer-ride-form', 'submit', handleOfferRide);
           const orDate = document.getElementById('or-date');
-          if (orDate) orDate.value = new Date().toISOString().split('T')[0];
+          if (orDate && !orDate.value) orDate.value = new Date().toISOString().split('T')[0];
           break;
+        }
         case 'my-trips':
-          document.querySelectorAll('#trips-tabs .tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-              document.querySelectorAll('#trips-tabs .tab').forEach(t => t.classList.remove('active'));
-              tab.classList.add('active');
-              loadTrips(tab.dataset.tab);
-            });
+          onAll('#trips-tabs .tab', 'click', (e) => {
+            document.querySelectorAll('#trips-tabs .tab').forEach(t => t.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            loadTrips(e.currentTarget.dataset.tab);
           });
           break;
         case 'home':
-          document.querySelectorAll('[data-action]').forEach(el => {
-            el.addEventListener('click', () => {
-              Router.navigate(el.dataset.action);
-            });
-          });
-          document.getElementById('view-all-trips')?.addEventListener('click', (e) => {
-            e.preventDefault();
-            Router.navigate('my-trips');
-          });
+          onAll('[data-action]', 'click', (e) => Router.navigate(e.currentTarget.dataset.action));
+          on('view-all-trips', 'click', (e) => { e.preventDefault(); Router.navigate('my-trips'); });
           break;
         case 'profile':
-          document.getElementById('theme-toggle-item')?.addEventListener('click', toggleTheme);
-          document.getElementById('profile-settings-item')?.addEventListener('click', () => {
-            Router.navigate('settings');
-          });
-          document.getElementById('profile-carbon-item')?.addEventListener('click', () => {
-            Router.navigate('carbon');
-          });
-          document.getElementById('logout-btn')?.addEventListener('click', () => {
-            Auth.logout();
-          });
+          on('theme-toggle-item', 'click', toggleTheme);
+          on('profile-settings-item', 'click', () => Router.navigate('settings'));
+          on('profile-carbon-item', 'click', () => Router.navigate('carbon'));
+          on('logout-btn', 'click', () => Auth.logout());
           break;
         case 'settings':
-          document.getElementById('settings-back-btn')?.addEventListener('click', () => Router.navigate('profile'));
-          document.getElementById('settings-theme-btn')?.addEventListener('click', toggleTheme);
+          on('settings-back-btn', 'click', () => Router.navigate('profile'));
+          on('settings-theme-btn', 'click', toggleTheme);
           break;
         case 'forgot-password':
-          document.getElementById('forgot-form')?.addEventListener('submit', handleForgotPassword);
-          document.getElementById('link-forgot-to-login')?.addEventListener('click', (e) => {
-            e.preventDefault();
-            Router.navigate('login');
-          });
+          on('forgot-form', 'submit', handleForgotPassword);
+          on('link-forgot-to-login', 'click', (e) => { e.preventDefault(); Router.navigate('login'); });
           break;
         case 'reset-password':
-          document.getElementById('reset-form')?.addEventListener('submit', handleResetPassword);
-          document.getElementById('link-reset-to-login')?.addEventListener('click', (e) => {
-            e.preventDefault();
-            Router.navigate('login');
-          });
+          on('reset-form', 'submit', handleResetPassword);
+          on('link-reset-to-login', 'click', (e) => { e.preventDefault(); Router.navigate('login'); });
           break;
       }
-
     },
 
     loadScreenData(screen) {
       switch (screen) {
-        case 'home': loadUpcomingTrips(); break;
+        case 'home':
+          loadUpcomingTrips();
+          loadHomeStats();
+          break;
         case 'my-trips': loadTrips('upcoming'); break;
       }
     }
@@ -1327,6 +1287,32 @@
           </div>
         </div>
       `;
+    }
+  }
+
+  async function loadHomeStats() {
+    const grid = document.getElementById('home-stats-grid');
+    if (!grid) return;
+    const user = Store.state.user;
+    if (!user?.id) return;
+    try {
+      const data = await API.get(`/users/${user.id}`);
+      const stats = data.stats || {};
+      const totalTrips = stats.totalTrips ?? 0;
+      const rating = stats.rating ? Number(stats.rating).toFixed(1) : '—';
+      grid.innerHTML = `
+        <div class="stat-card">
+          <div class="stat-card__value">${totalTrips}</div>
+          <div class="stat-card__label">Total Trips</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__value">${rating}</div>
+          <div class="stat-card__label">Rating</div>
+          <div class="stat-card__trend" style="color:var(--warning)">${rating !== '—' ? Icons.star : ''}</div>
+        </div>
+      `;
+    } catch {
+      grid.innerHTML = '';
     }
   }
 

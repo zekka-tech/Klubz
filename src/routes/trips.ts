@@ -17,6 +17,7 @@ import { matchRiderToDrivers } from '../lib/matching/engine';
 import type { RiderRequest, DriverTrip } from '../lib/matching/types';
 import { ValidationError } from '../lib/errors';
 import { NotificationService } from '../integrations/notifications';
+import { StripeService } from '../integrations/stripe';
 import { safeDecryptPII } from '../lib/encryption';
 import { getCacheService } from '../lib/cache';
 import { createNotification } from '../lib/notificationStore';
@@ -114,6 +115,14 @@ interface CancelParticipantRow {
   departure_time: string;
   origin: string;
   destination: string;
+  payment_intent_id: string | null;
+  payment_status: string | null;
+  booking_id: number;
+}
+
+interface BatchPrefsRow {
+  user_id: number;
+  notifications_json: string | null;
 }
 
 interface D1RunResult {
@@ -724,7 +733,7 @@ tripRoutes.post('/:tripId/bookings/:bookingId/accept', async (c) => {
         return c.json({ error: { code: 'CONFLICT', message: 'Booking is no longer pending' } }, 409);
       }
 
-      // Decrement seats only if availability exists.
+      // Decrement seats only if availability exists; WHERE clause prevents negative seats.
       const seatUpdate = await db
         .prepare(`
           UPDATE trips
@@ -1042,7 +1051,9 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
       let acceptedParticipants: CancelParticipantRow[] = [];
       try {
         const participants = await db.prepare(`
-          SELECT u.email, u.first_name_encrypted, tp.user_id, t.title, t.departure_time, t.origin, t.destination
+          SELECT u.email, u.first_name_encrypted, tp.user_id, tp.id AS booking_id,
+                 tp.payment_intent_id, tp.payment_status,
+                 t.title, t.departure_time, t.origin, t.destination
           FROM trip_participants tp
           JOIN users u ON tp.user_id = u.id
           JOIN trips t ON tp.trip_id = t.id
@@ -1075,16 +1086,65 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
         cancelledParticipants: participantCancelRows ?? undefined,
       }, user.id);
 
-      // Notify all accepted participants about cancellation
+      // Notify all accepted participants and issue refunds for paid bookings
       try {
         const reason = parsedBody.data.reason || 'The driver had to cancel this trip';
 
+        // ── Batch-load all notification preferences in one query (no N+1) ──
+        const prefsByUserId = new Map<number, boolean>(); // userId → tripUpdates
+        if (acceptedParticipants.length > 0) {
+          const placeholders = acceptedParticipants.map(() => '?').join(',');
+          const userIds = acceptedParticipants.map(p => p.user_id);
+          try {
+            const prefsRows = await db
+              .prepare(`SELECT user_id, notifications_json FROM user_preferences WHERE user_id IN (${placeholders})`)
+              .bind(...userIds)
+              .all<BatchPrefsRow>();
+            for (const row of prefsRows.results ?? []) {
+              try {
+                const parsed = JSON.parse(row.notifications_json ?? '{}') as Record<string, unknown>;
+                prefsByUserId.set(row.user_id, parsed.tripUpdates !== false);
+              } catch {
+                prefsByUserId.set(row.user_id, true); // default
+              }
+            }
+          } catch {
+            // Fallback: default all to true (notify)
+          }
+        }
+
+        // ── Stripe refunds for paid bookings ──
+        const stripe = c.env?.STRIPE_SECRET_KEY ? new StripeService(c.env.STRIPE_SECRET_KEY) : null;
+        for (const participant of acceptedParticipants) {
+          if (stripe && participant.payment_status === 'paid' && participant.payment_intent_id) {
+            try {
+              await stripe.createRefund(participant.payment_intent_id);
+              await db
+                .prepare(`UPDATE trip_participants SET payment_status = 'refunded', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+                .bind(participant.booking_id)
+                .run();
+              logger.info('Stripe refund issued for cancelled trip booking', {
+                bookingId: participant.booking_id,
+                paymentIntentId: participant.payment_intent_id,
+              });
+            } catch (err) {
+              logger.error('Failed to issue Stripe refund for booking', err instanceof Error ? err : undefined, {
+                bookingId: participant.booking_id,
+                paymentIntentId: participant.payment_intent_id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+        }
+
+        // ── Per-participant notification (preferences already loaded) ──
         for (const participant of acceptedParticipants) {
           try {
-            const participantNotificationPrefs = await getUserNotificationPreferences(db, participant.user_id);
+            // Default to notifying if prefs not found
+            const wantsUpdates = prefsByUserId.get(participant.user_id) ?? true;
 
-            try {
-              if (participantNotificationPrefs.tripUpdates) {
+            if (wantsUpdates) {
+              try {
                 await createNotification(db, {
                   userId: participant.user_id,
                   tripId: Number.parseInt(tripId, 10),
@@ -1095,12 +1155,12 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
                   message: `Your upcoming trip ${participant.title || ''} was cancelled by the driver.`,
                   metadata: { tripId, cancelledBy: user.id },
                 });
+              } catch (err) {
+                logger.warn('Failed to persist trip cancellation notification', { error: err instanceof Error ? err.message : String(err) });
               }
-            } catch (err) {
-              logger.warn('Failed to persist trip cancellation notification', { error: err instanceof Error ? err.message : String(err) });
             }
 
-            if (notifications.emailAvailable && participantNotificationPrefs.tripUpdates) {
+            if (notifications.emailAvailable && wantsUpdates) {
               const firstName = await safeDecryptPII(
                 participant.first_name_encrypted, c.env?.ENCRYPTION_KEY, participant.user_id,
               ) ?? 'Rider';
