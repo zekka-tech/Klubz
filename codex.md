@@ -137,6 +137,11 @@ Use this format for every significant action:
 - `2026-02-19 11:50 UTC` | codex | action | admin-stats-cache-hardening | added KV-backed caching to `/admin/stats`, retained `ADMIN_STATS_VIEWED` audit write, and snapshot the SLA/carbon metrics before caching
 - `2026-02-19 11:47 UTC` | codex | action | quality-gates | ran `npm run lint`, `npm run type-check`, and `npm test` (193 tests) after stats cache change
 - `2026-02-19 14:36 UTC` | codex | action | quality-gates | ran `npm run verify` (type-check, lint, test 193, build) to validate the cached admin stats change end-to-end
+- `2026-02-22 13:45 UTC` | codex | deploy | production | `npm run deploy:prod` success → https://3919e026.klubz-production.pages.dev; health check OK; migration 0012 already applied (shared D1)
+- `2026-02-22 13:30 UTC` | codex | push | `main -> origin/main` | success (`4e30d57`)
+- `2026-02-22 13:30 UTC` | codex | deploy | staging | `npm run deploy:staging` success → https://70959099.klubz-staging.pages.dev; migration 0012 applied; health check OK
+- `2026-02-22 13:30 UTC` | codex | action | google-oauth-implementation | full Google OAuth Sign-in: GET /api/auth/google, GET /api/auth/google/callback, GET /api/auth/oauth-session; migration 0012 (oauth_provider, oauth_id); frontend wiring; CSP Nominatim fix; docs update
+- `2026-02-22 13:30 UTC` | codex | action | quality-gates | type-check PASS, lint PASS, test 250/250, build PASS, db:check-migrations 12 files next 0013
 - Latest entries:
 - `2026-02-19 15:05 UTC` | codex | action | phase1-authz-idempotency-inventory | documented authorization/idempotency coverage and remaining gaps in `docs/PHASE1_AUTHZ_IDEMPOTENCY.md` to complete Phase 1 material risk review
 - `2026-02-19 15:03 UTC` | codex | action | quality-gates | reran `npm run lint`, `npm run type-check`, `npm test` (193) and `npm run build` after migration renumbering and doc updates
