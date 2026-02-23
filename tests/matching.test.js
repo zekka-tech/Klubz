@@ -231,14 +231,122 @@ async function runTests() {
     return encoded;
   }
 
+  // ---------------------------------------------------------------------------
+  // computeMarginalDetourKm — cheapest-insertion heuristic (inline for testing)
+  // ---------------------------------------------------------------------------
+
+  function computeMarginalDetourKm(driverDeparture, driverDestination, newPickup, newDropoff, existingStops) {
+    const waypoints = [driverDeparture, ...existingStops.map(s => s.location), driverDestination];
+
+    if (waypoints.length < 2) {
+      return Math.max(0, haversine(newPickup, newDropoff));
+    }
+
+    // Find cheapest pickup insertion position
+    let minPickupCost = Infinity;
+    let bestPickupIdx = 1;
+    for (let i = 1; i < waypoints.length; i++) {
+      const cost = haversine(waypoints[i - 1], newPickup)
+                 + haversine(newPickup, waypoints[i])
+                 - haversine(waypoints[i - 1], waypoints[i]);
+      if (cost < minPickupCost) { minPickupCost = cost; bestPickupIdx = i; }
+    }
+
+    // Build sequence with pickup inserted
+    const withPickup = [
+      ...waypoints.slice(0, bestPickupIdx),
+      newPickup,
+      ...waypoints.slice(bestPickupIdx),
+    ];
+
+    // Find cheapest dropoff insertion (must be after the pickup position)
+    let minDropoffCost = Infinity;
+    for (let i = bestPickupIdx + 1; i < withPickup.length; i++) {
+      const cost = haversine(withPickup[i - 1], newDropoff)
+                 + haversine(newDropoff, withPickup[i])
+                 - haversine(withPickup[i - 1], withPickup[i]);
+      if (cost < minDropoffCost) minDropoffCost = cost;
+    }
+
+    return Math.max(0, minPickupCost + minDropoffCost);
+  }
+
+  // ---------------------------------------------------------------------------
+  // optimizePool — simplified pool builder for testing
+  // ---------------------------------------------------------------------------
+
+  function optimizePool(driver, candidates, riderMap, config = DEFAULT_MATCH_CONFIG) {
+    if (candidates.length === 0 || driver.availableSeats <= 0) return null;
+
+    const maxRiders = config.maxRidersPerPool;
+    const maxDetourKm = config.maxPoolDetourKm ?? config.thresholds?.maxAbsoluteDetourKm ?? 10;
+    const maxSeats = driver.availableSeats;
+
+    const selected = [];
+    let seatsUsed = 0;
+    let cumulativeDetourKm = 0;
+    // Ordered stop sequence rebuilt after each acceptance
+    let currentStops = [];
+
+    for (const candidate of candidates) {
+      if (seatsUsed + 1 > maxSeats) continue;
+      if (selected.length >= maxRiders) break;
+
+      const riderData = riderMap.get(candidate.riderId);
+      if (!riderData) continue;
+
+      const marginalKm = computeMarginalDetourKm(
+        driver.departure,
+        driver.destination,
+        riderData.pickup,
+        riderData.dropoff,
+        currentStops,
+      );
+
+      if (cumulativeDetourKm + marginalKm > maxDetourKm) continue;
+
+      selected.push(candidate);
+      seatsUsed += 1;
+      cumulativeDetourKm += marginalKm;
+
+      // Rebuild ordered stops for next iteration
+      currentStops = [];
+      for (const m of selected) {
+        const rd = riderMap.get(m.riderId);
+        if (rd) {
+          currentStops.push({ type: 'pickup', riderId: m.riderId, location: rd.pickup });
+          currentStops.push({ type: 'dropoff', riderId: m.riderId, location: rd.dropoff });
+        }
+      }
+    }
+
+    if (selected.length === 0) return null;
+
+    const totalScore = selected.reduce((sum, m) => sum + m.score, 0);
+    const totalDetourMinutes = Math.round((cumulativeDetourKm / 30) * 60 * 10) / 10;
+
+    return {
+      driverTripId: driver.id,
+      driverId: driver.driverId,
+      riders: selected,
+      totalScore,
+      averageScore: totalScore / selected.length,
+      seatsUsed,
+      seatsRemaining: maxSeats - seatsUsed,
+      totalDetourMinutes,
+      cumulativeDetourKm,
+    };
+  }
+
   // Matching engine (simplified inline for testing)
   const DEFAULT_MATCH_CONFIG = {
-    weights: { pickupDistance: 0.30, dropoffDistance: 0.30, timeMatch: 0.18, seatAvailability: 0.07, shiftAlignment: 0.05, detourCost: 0.05, driverRating: 0.05 },
-    thresholds: { maxPickupDistanceKm: 2.0, maxDropoffDistanceKm: 2.0, maxTimeDiffMinutes: 20, maxDetourFraction: 0.30, boundingBoxPaddingDeg: 0.03 },
+    weights: { pickupDistance: 0.30, dropoffDistance: 0.30, timeMatch: 0.15, seatAvailability: 0.05, shiftAlignment: 0.02, detourCost: 0.13, driverRating: 0.05 },
+    thresholds: { maxPickupDistanceKm: 2.0, maxDropoffDistanceKm: 2.0, maxTimeDiffMinutes: 20, maxDetourFraction: 0.30, boundingBoxPaddingDeg: 0.03, maxAbsoluteDetourKm: 10 },
     maxResults: 20,
     enableMultiRider: true,
     maxRidersPerPool: 4,
     maxPoolDetourMinutes: 20,
+    maxPoolDetourKm: 10,
   };
 
   function matchRiderToDrivers(rider, drivers, config = DEFAULT_MATCH_CONFIG) {
@@ -262,6 +370,10 @@ async function runTests() {
       if (dropoffResult.distance > config.thresholds.maxDropoffDistanceKm) continue;
 
       if (route.length >= 2 && pickupResult.segmentIndex > dropoffResult.segmentIndex) continue;
+
+      // Absolute detour hard filter (10 km cap)
+      const detourKm = route.length >= 2 ? estimateDetourKm(rider.pickup, rider.dropoff, route) : 0;
+      if (config.thresholds.maxAbsoluteDetourKm && detourKm > config.thresholds.maxAbsoluteDetourKm) continue;
       passedP2++;
 
       // Phase 3
@@ -275,12 +387,14 @@ async function runTests() {
       const timeScore = Math.min(timeDiffMin / t.maxTimeDiffMinutes, 1);
       const seatScore = driver.availableSeats <= rider.seatsNeeded ? 0 : Math.min((driver.availableSeats - rider.seatsNeeded) / driver.totalSeats, 1);
       const ratingScore = driver.driverRating !== undefined ? Math.max(0, (5 - driver.driverRating) / 5) : 0;
+      // detourKm already computed in Phase 2; normalise against absolute cap for consistency
+      const detourScore = t.maxAbsoluteDetourKm ? Math.min(detourKm / t.maxAbsoluteDetourKm, 1) : 0;
 
       const score = pickupScore * w.pickupDistance + dropoffScore * w.dropoffDistance +
-        timeScore * w.timeMatch + seatScore * w.seatAvailability + ratingScore * w.driverRating;
+        timeScore * w.timeMatch + seatScore * w.seatAvailability + ratingScore * w.driverRating +
+        detourScore * (w.detourCost || 0);
 
       const riderDist = haversine(rider.pickup, rider.dropoff);
-      const detourKm = route.length >= 2 ? estimateDetourKm(rider.pickup, rider.dropoff, route) : 0;
       const carbonSaved = estimateCarbonSavedKg(riderDist, detourKm);
 
       results.push({
@@ -891,6 +1005,7 @@ async function runTests() {
       assertGreaterThan(t.maxTimeDiffMinutes, 0);
       assertGreaterThan(t.maxDetourFraction, 0);
       assertGreaterThan(t.boundingBoxPaddingDeg, 0);
+      assertGreaterThan(t.maxAbsoluteDetourKm, 0);
     });
 
     it('maxResults should be reasonable', () => {
@@ -955,6 +1070,176 @@ async function runTests() {
       const dist = haversine(northPole, southPole);
       assertGreaterThan(dist, 19000, 'Pole-to-pole should be > 19000 km');
       assertLessThan(dist, 21000, 'Pole-to-pole should be < 21000 km');
+    });
+  });
+
+  // =========================================================================
+  // NEW: 10 km Absolute Detour Hard Filter
+  // =========================================================================
+
+  describe('10km Absolute Detour Hard Filter', () => {
+    // Config with relaxed proximity so we can test detour independently
+    const relaxedProximityConfig = {
+      ...DEFAULT_MATCH_CONFIG,
+      thresholds: {
+        ...DEFAULT_MATCH_CONFIG.thresholds,
+        maxPickupDistanceKm: 25,
+        maxDropoffDistanceKm: 25,
+        maxAbsoluteDetourKm: 10,
+      },
+    };
+
+    it('should reject a rider whose route requires > 10 km detour', () => {
+      // Rider pickup is at Kempton Park — far east of the JHB→Sandton route
+      // estimateDetourKm will be ≈ 22 km (pickup dist ~17km + rider dist ~18km - orig ~12km)
+      const rider = makeRider({
+        pickup: KEMPTON_PARK,
+        dropoff: SANDTON,
+        earliestDeparture: NOW + 55 * MIN,
+        latestDeparture: NOW + 90 * MIN,
+      });
+      const driver = makeDriver({ routePolyline: [JHB_CBD, SANDTON] });
+      const { matches } = matchRiderToDrivers(rider, [driver], relaxedProximityConfig);
+      assertEqual(matches.length, 0, 'Rider with > 10 km detour should be rejected');
+    });
+
+    it('should accept a rider whose detour is well within the 10 km limit', () => {
+      // Rider pickup at Rosebank — almost collinear with JHB→Sandton route
+      const rider = makeRider({
+        pickup: ROSEBANK,
+        dropoff: SANDTON,
+        earliestDeparture: NOW + 55 * MIN,
+        latestDeparture: NOW + 90 * MIN,
+      });
+      const driver = makeDriver({ routePolyline: [JHB_CBD, SANDTON] });
+      const { matches } = matchRiderToDrivers(rider, [driver], relaxedProximityConfig);
+      assertGreaterThan(matches.length, 0, 'Near-route rider should be accepted');
+    });
+
+    it('should apply a custom maxAbsoluteDetourKm limit', () => {
+      // Use a 15 km cap — Kempton Park causes ≈ 22 km detour so should be rejected,
+      // while it would pass the default 10 km cap if we weren't also testing the cap.
+      // (Kempton is ~17 km east of the route: pickupDist + riderDist - routeLen ≈ 22 km)
+      const customConfig = {
+        ...relaxedProximityConfig,
+        thresholds: { ...relaxedProximityConfig.thresholds, maxAbsoluteDetourKm: 15 },
+      };
+      const rider = makeRider({
+        pickup: KEMPTON_PARK,
+        dropoff: SANDTON,
+        earliestDeparture: NOW + 55 * MIN,
+        latestDeparture: NOW + 90 * MIN,
+      });
+      const driver = makeDriver({ routePolyline: [JHB_CBD, SANDTON] });
+      const { matches } = matchRiderToDrivers(rider, [driver], customConfig);
+      assertEqual(matches.length, 0, 'Kempton Park detour (≈22 km) should be rejected with 15 km cap');
+    });
+  });
+
+  // =========================================================================
+  // NEW: computeMarginalDetourKm
+  // =========================================================================
+
+  describe('computeMarginalDetourKm', () => {
+    // Simple north-south route for predictable math
+    const ORIGIN = { lat: -26.2, lng: 28.0 };
+    const DEST   = { lat: -26.1, lng: 28.0 };
+
+    it('should return ~0 for a rider perfectly on the direct route', () => {
+      // pickup = midpoint of route (exactly on the straight line)
+      const midpointPickup = { lat: -26.15, lng: 28.0 };
+      const marginal = computeMarginalDetourKm(ORIGIN, DEST, midpointPickup, DEST, []);
+      // Triangle collinearity: dist(O, pick) + dist(pick, D) ≈ dist(O, D), so cost ≈ 0
+      assertLessThan(marginal, 0.5, 'On-route rider should add < 0.5 km marginal detour');
+    });
+
+    it('should return positive cost for an off-route rider', () => {
+      // pickup is 4 km east of the midpoint — requires a detour
+      const offRoutePickup = { lat: -26.15, lng: 28.04 }; // ~4 km east (0.04° × ~99.8 km/°)
+      const marginal = computeMarginalDetourKm(ORIGIN, DEST, offRoutePickup, DEST, []);
+      assertGreaterThan(marginal, 0, 'Off-route rider should add positive marginal km');
+    });
+
+    it('should return less cost when existing stops partially cover the off-route path', () => {
+      // Existing stop C is already near the new rider's pickup
+      const STOP_C = { lat: -26.15, lng: 28.03 }; // 3 km east of route
+      const existingStops = [{ location: STOP_C }];
+
+      const newPickup  = { lat: -26.15, lng: 28.04 }; // 4 km east — 1 km beyond STOP_C
+      const newDropoff = DEST;
+
+      const marginalWithout = computeMarginalDetourKm(ORIGIN, DEST, newPickup, newDropoff, []);
+      const marginalWith    = computeMarginalDetourKm(ORIGIN, DEST, newPickup, newDropoff, existingStops);
+
+      assertLessThan(marginalWith, marginalWithout,
+        'Existing nearby stop should reduce the marginal insertion cost');
+    });
+  });
+
+  // =========================================================================
+  // NEW: Pool Optimizer - Cumulative Km Budget
+  // =========================================================================
+
+  describe('Pool Optimizer - Cumulative Km Budget', () => {
+    function makeMatch(riderId, score = 0.3) {
+      return {
+        riderId,
+        driverTripId: 'driver-trip-1',
+        driverId: 'driver-1',
+        riderRequestId: `req-${riderId}`,
+        score,
+        explanation: 'test match',
+        breakdown: {},
+      };
+    }
+
+    it('should accept riders whose combined marginal km is within budget', () => {
+      const driver = makeDriver({ availableSeats: 3, routePolyline: [JHB_CBD, SANDTON] });
+      const riderMap = new Map([
+        ['r1', { pickup: { lat: -26.18, lng: 28.045 }, dropoff: SANDTON }],
+        ['r2', { pickup: ROSEBANK, dropoff: SANDTON }],
+      ]);
+      const candidates = [makeMatch('r1', 0.2), makeMatch('r2', 0.3)];
+
+      const pool = optimizePool(driver, candidates, riderMap);
+      assert(pool !== null, 'Pool should not be null');
+      assertGreaterThan(pool.riders.length, 0, 'Should accept at least one near-route rider');
+      assertLessThan(pool.cumulativeDetourKm, DEFAULT_MATCH_CONFIG.maxPoolDetourKm + 0.1,
+        'Cumulative detour should stay within budget');
+    });
+
+    it('should reject a rider whose marginal km would exceed the pool budget', () => {
+      // Budget set very tight so Kempton Park (large marginal) is always rejected
+      const tightConfig = { ...DEFAULT_MATCH_CONFIG, maxPoolDetourKm: 2 };
+      const driver = makeDriver({ availableSeats: 3, routePolyline: [JHB_CBD, SANDTON] });
+      const riderMap = new Map([
+        ['r1', { pickup: ROSEBANK, dropoff: SANDTON }],        // ≈ 0 km marginal → accepted
+        ['r2', { pickup: KEMPTON_PARK, dropoff: SANDTON }],    // ≈ 27 km marginal → rejected
+      ]);
+      const candidates = [makeMatch('r1', 0.2), makeMatch('r2', 0.3)];
+
+      const pool = optimizePool(driver, candidates, riderMap, tightConfig);
+      assert(pool !== null, 'Pool should not be null');
+      assertEqual(pool.riders.length, 1, 'Should accept only r1');
+      assertEqual(pool.riders[0].riderId, 'r1', 'r1 should be the accepted rider');
+    });
+
+    it('should skip a high-marginal rider and still accept a subsequent low-marginal rider', () => {
+      // r1 has the better score (0.1) so it is evaluated first, but its large marginal km
+      // exceeds even the tight budget; r2 has a small marginal and should be accepted.
+      const tightConfig = { ...DEFAULT_MATCH_CONFIG, maxPoolDetourKm: 3 };
+      const driver = makeDriver({ availableSeats: 3, routePolyline: [JHB_CBD, SANDTON] });
+      const riderMap = new Map([
+        ['r1', { pickup: KEMPTON_PARK, dropoff: SANDTON }],    // large marginal (≈ 27 km)
+        ['r2', { pickup: ROSEBANK, dropoff: SANDTON }],        // small marginal (≈ 0 km)
+      ]);
+      // r1 has lower (better) score so optimizer evaluates it first
+      const candidates = [makeMatch('r1', 0.1), makeMatch('r2', 0.4)];
+
+      const pool = optimizePool(driver, candidates, riderMap, tightConfig);
+      assert(pool !== null, 'Pool should not be null');
+      assert(pool.riders.some(r => r.riderId === 'r2'), 'r2 should be accepted');
+      assert(!pool.riders.some(r => r.riderId === 'r1'), 'r1 should be rejected (exceeds budget)');
     });
   });
 
