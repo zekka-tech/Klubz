@@ -31,8 +31,10 @@ interface UserProfileRow {
   phone_encrypted: string | null;
   avatar_url: string | null;
   role: string;
+  organization_id: string | null;
   email_verified: number;
   mfa_enabled: number;
+  tos_version_accepted: string | null;
   created_at: string;
   last_login_at: string | null;
   total_trips: number;
@@ -115,6 +117,10 @@ const createTripSchema = z.object({
   price: z.number().min(0).max(10000).optional(),
 });
 
+const tosAcceptSchema = z.object({
+  tosVersion: z.string().trim().min(1).max(20),
+}).strict();
+
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
 }
@@ -143,11 +149,12 @@ userRoutes.get('/profile', async (c) => {
     const row = await db
       .prepare(
         `SELECT u.id, u.email, u.first_name_encrypted, u.last_name_encrypted, u.phone_encrypted,
-                u.avatar_url, u.role, u.is_active, u.email_verified, u.mfa_enabled,
+                u.avatar_url, u.role, u.organization_id, u.is_active, u.email_verified, u.mfa_enabled,
                 u.created_at, u.last_login_at,
                 (SELECT COUNT(*) FROM trip_participants tp WHERE tp.user_id = u.id) as total_trips,
                 (SELECT COALESCE(SUM(CASE WHEN tp.status = 'completed' THEN 1 ELSE 0 END), 0) FROM trip_participants tp WHERE tp.user_id = u.id) as completed_trips,
-                (SELECT COALESCE(AVG(tp.rating), 0) FROM trip_participants tp WHERE tp.user_id = u.id AND tp.rating IS NOT NULL) as avg_rating
+                (SELECT COALESCE(AVG(tp.rating), 0) FROM trip_participants tp WHERE tp.user_id = u.id AND tp.rating IS NOT NULL) as avg_rating,
+                (SELECT ta.tos_version FROM tos_acceptances ta WHERE ta.user_id = u.id ORDER BY ta.accepted_at DESC, ta.id DESC LIMIT 1) as tos_version_accepted
          FROM users u WHERE u.id = ? AND u.deleted_at IS NULL`
       )
       .bind(user.id)
@@ -167,10 +174,12 @@ userRoutes.get('/profile', async (c) => {
       email: row.email,
       name: [decryptedFirst, decryptedLast].filter(Boolean).join(' ') || user.name,
       role: row.role,
+      organizationId: row.organization_id ?? null,
       phone: decryptedPhone || null,
       avatar: row.avatar_url || null,
       emailVerified: !!row.email_verified,
       mfaEnabled: !!row.mfa_enabled,
+      tosVersionAccepted: row.tos_version_accepted ?? null,
       stats: {
         totalTrips: row.total_trips ?? 0,
         completedTrips: row.completed_trips ?? 0,
@@ -476,6 +485,38 @@ userRoutes.put('/preferences', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /tos-accept
+// ---------------------------------------------------------------------------
+
+userRoutes.post('/tos-accept', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const db = getDB(c);
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+
+  const parsed = tosAcceptSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid terms acceptance payload' } }, 400);
+  }
+
+  await db
+    .prepare(
+      `INSERT INTO tos_acceptances (user_id, tos_version, ip_address)
+       SELECT ?, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM tos_acceptances WHERE user_id = ? AND tos_version = ?
+       )`,
+    )
+    .bind(user.id, parsed.data.tosVersion, getIP(c), user.id, parsed.data.tosVersion)
+    .run();
+
+  return c.json({ accepted: true });
+});
+
+// ---------------------------------------------------------------------------
 // GET /export - GDPR Data Export (Article 15 - Right of Access)
 // ---------------------------------------------------------------------------
 
@@ -577,6 +618,45 @@ userRoutes.get('/export', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// GET /earnings - Driver earnings summary grouped by month
+// ---------------------------------------------------------------------------
+
+userRoutes.get('/earnings', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const db = getDB(c);
+
+  const rows = await db.prepare(`
+    SELECT
+      strftime('%Y-%m', t.departure_time / 1000, 'unixepoch') AS month,
+      COUNT(*) AS trip_count,
+      SUM(tp.fare_rate_per_km * COALESCE(t.route_distance_km, 0)) AS estimated_earnings
+    FROM trip_participants tp
+    JOIN trips t ON tp.trip_id = t.id
+    WHERE tp.user_id = ?
+      AND tp.role = 'driver'
+      AND tp.status = 'accepted'
+      AND t.status = 'completed'
+    GROUP BY month
+    ORDER BY month DESC
+    LIMIT 24
+  `).bind(user.id).all<{ month: string; trip_count: number; estimated_earnings: number }>();
+
+  const months = rows.results ?? [];
+  const total = months.reduce((sum, r) => sum + (r.estimated_earnings || 0), 0);
+  const totalTrips = months.reduce((sum, r) => sum + r.trip_count, 0);
+  const avgPerTrip = totalTrips > 0 ? total / totalTrips : 0;
+
+  return c.json({
+    months,
+    summary: {
+      totalEarnings: Math.round(total * 100) / 100,
+      totalTrips,
+      avgPerTrip: Math.round(avgPerTrip * 100) / 100,
+    },
+  });
+});
+
 // DELETE /account - GDPR Data Deletion (Article 17 - Right to be Forgotten)
 // ---------------------------------------------------------------------------
 

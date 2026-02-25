@@ -46,6 +46,40 @@ export interface KVNamespace {
   }>;
 }
 
+export interface R2Bucket {
+  put(key: string, value: ArrayBuffer | ArrayBufferView | string | ReadableStream | Blob, options?: { httpMetadata?: Record<string, string>; customMetadata?: Record<string, string> }): Promise<R2Object>;
+  get(key: string): Promise<R2ObjectBody | null>;
+  delete(key: string): Promise<void>;
+  head(key: string): Promise<R2Object | null>;
+  list(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<{ objects: R2Object[]; truncated: boolean; cursor?: string }>;
+  createMultipartUpload(key: string, options?: Record<string, unknown>): Promise<R2MultipartUpload>;
+}
+
+export interface R2Object {
+  key: string;
+  size: number;
+  etag: string;
+  httpMetadata?: Record<string, string>;
+  customMetadata?: Record<string, string>;
+  uploaded: Date;
+}
+
+export interface R2ObjectBody extends R2Object {
+  body: ReadableStream;
+  arrayBuffer(): Promise<ArrayBuffer>;
+  text(): Promise<string>;
+  json<T = unknown>(): Promise<T>;
+  blob(): Promise<Blob>;
+}
+
+export interface R2MultipartUpload {
+  uploadId: string;
+  key: string;
+  uploadPart(partNumber: number, value: ArrayBuffer | ArrayBufferView | string | ReadableStream | Blob): Promise<{ partNumber: number; etag: string }>;
+  complete(uploadedParts: Array<{ partNumber: number; etag: string }>): Promise<R2Object>;
+  abort(): Promise<void>;
+}
+
 /** Cloudflare Worker environment bindings */
 export interface Bindings {
   // Database
@@ -68,6 +102,15 @@ export interface Bindings {
   MAPBOX_ACCESS_TOKEN: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
+  APPLE_CLIENT_ID: string;
+  APPLE_TEAM_ID: string;
+  APPLE_KEY_ID: string;
+  APPLE_PRIVATE_KEY: string;
+  VAPID_PUBLIC_KEY: string;
+  VAPID_PRIVATE_KEY: string;
+
+  // R2 Storage
+  STORAGE: R2Bucket;
 
   // Environment variables
   ENVIRONMENT: string;
@@ -129,6 +172,7 @@ export interface UserRow {
   phone_encrypted: string | null;
   avatar_url: string | null;
   role: 'user' | 'admin' | 'super_admin';
+  organization_id?: string | null;
   is_active: number; // SQLite boolean
   email_verified: number;
   phone_verified: number;

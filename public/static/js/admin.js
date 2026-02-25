@@ -57,11 +57,20 @@ const apiService = {
       },
       body: JSON.stringify(data),
     });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return response.json();
+  },
+
+  async put(endpoint, data) {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     return response.json();
   },
 };
@@ -85,17 +94,18 @@ const ErrorMessage = ({ message, onRetry }) => (
 );
 
 // Sidebar Component
-const Sidebar = ({ isCollapsed, toggleSidebar }) => {
-  const [activeItem, setActiveItem] = useState('dashboard');
+const Sidebar = ({ isCollapsed, toggleSidebar, currentView, setView }) => {
+  const activeItem = currentView;
   
   const menuItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: 'fas fa-tachometer-alt' },
-    { id: 'users', label: 'Users', icon: 'fas fa-users' },
-    { id: 'trips', label: 'Trips', icon: 'fas fa-route' },
-    { id: 'organizations', label: 'Organizations', icon: 'fas fa-building' },
-    { id: 'monitoring', label: 'Monitoring', icon: 'fas fa-chart-line' },
-    { id: 'compliance', label: 'Compliance', icon: 'fas fa-shield-alt' },
-    { id: 'settings', label: 'Settings', icon: 'fas fa-cog' },
+    { id: 'dashboard',    label: 'Dashboard',    icon: 'fas fa-tachometer-alt' },
+    { id: 'users',        label: 'Users',         icon: 'fas fa-users' },
+    { id: 'organizations',label: 'Organizations', icon: 'fas fa-building' },
+    { id: 'documents',    label: 'Documents',     icon: 'fas fa-id-card' },
+    { id: 'disputes',     label: 'Disputes',      icon: 'fas fa-gavel' },
+    { id: 'promo-codes',  label: 'Promo Codes',   icon: 'fas fa-tags' },
+    { id: 'audit-logs',   label: 'Audit Logs',    icon: 'fas fa-shield-alt' },
+    { id: 'analytics',    label: 'Analytics',     icon: 'fas fa-chart-line' },
   ];
   
   return React.createElement('div', {
@@ -114,7 +124,7 @@ const Sidebar = ({ isCollapsed, toggleSidebar }) => {
         menuItems.map(item =>
           React.createElement('div', {
             key: item.id,
-            onClick: () => setActiveItem(item.id),
+            onClick: () => setView(item.id),
             className: `nav-item ${activeItem === item.id ? 'active' : ''} p-3 cursor-pointer`
           },
             React.createElement('i', { className: `${item.icon} mr-3` }),
@@ -172,7 +182,7 @@ const Dashboard = () => {
         React.createElement('div', { className: 'metric-label' }, 'Revenue')
       ),
       React.createElement('div', { className: 'metric-card' },
-        React.createElement('div', className: 'metric-value' }, `${stats.sla.availability}%`),
+        React.createElement('div', { className: 'metric-value' }, stats.sla ? `${stats.sla.availability}%` : '--'),
         React.createElement('div', { className: 'metric-label' }, 'Uptime')
       )
     ),
@@ -297,6 +307,429 @@ const UsersManagement = () => {
   );
 };
 
+// ─── Documents Queue Component ───
+const DocumentsQueue = () => {
+  const [docs, setDocs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+
+  const fetchDocs = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await apiService.get(`/admin/documents?page=${page}&status=pending`);
+      setDocs(data.documents || []);
+    } catch (err) {
+      console.error(err);
+    } finally { setLoading(false); }
+  }, [page]);
+
+  useEffect(() => { fetchDocs(); }, [fetchDocs]);
+
+  const handleVerify = async (id, status, reason) => {
+    try {
+      await apiService.put(`/admin/documents/${id}`, { status, rejectionReason: reason || undefined });
+      fetchDocs();
+    } catch (err) { alert(err.message); }
+  };
+
+  if (loading) return React.createElement(Loading);
+
+  return React.createElement('div', { className: 'p-6' },
+    React.createElement('h1', { className: 'text-3xl font-bold text-gray-900 mb-6' }, 'Driver Document Verification'),
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'table-container' },
+        React.createElement('table', { className: 'data-table' },
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              ['User ID', 'Doc Type', 'Status', 'Submitted', 'Actions'].map(h =>
+                React.createElement('th', { key: h }, h)
+              )
+            )
+          ),
+          React.createElement('tbody', null,
+            docs.length === 0 && React.createElement('tr', null,
+              React.createElement('td', { colSpan: 5, className: 'text-center text-gray-400 py-8' }, 'No pending documents')
+            ),
+            docs.map(doc =>
+              React.createElement('tr', { key: doc.id },
+                React.createElement('td', null, doc.user_id),
+                React.createElement('td', null, doc.doc_type.replace(/_/g, ' ')),
+                React.createElement('td', null, React.createElement('span', { className: `status-badge status-${doc.status}` }, doc.status)),
+                React.createElement('td', null, formatDate(doc.created_at)),
+                React.createElement('td', null,
+                  doc.status === 'pending' && React.createElement('div', { className: 'flex gap-2' },
+                    React.createElement('button', {
+                      className: 'btn btn-sm btn-success',
+                      onClick: () => handleVerify(doc.id, 'approved', null),
+                    }, 'Approve'),
+                    React.createElement('button', {
+                      className: 'btn btn-sm btn-danger',
+                      onClick: () => { const r = prompt('Rejection reason:'); if (r) handleVerify(doc.id, 'rejected', r); },
+                    }, 'Reject')
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  );
+};
+
+// ─── Disputes Component ───
+const Disputes = () => {
+  const [disputes, setDisputes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('open');
+
+  const fetchDisputes = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await apiService.get(`/admin/disputes?status=${statusFilter}&page=1`);
+      setDisputes(data.disputes || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [statusFilter]);
+
+  useEffect(() => { fetchDisputes(); }, [fetchDisputes]);
+
+  const handleResolve = async (id) => {
+    const resolution = prompt('Enter resolution notes:');
+    if (!resolution) return;
+    const refundStr = prompt('Refund amount in cents (0 for no refund):');
+    const refundCents = parseInt(refundStr || '0', 10);
+    try {
+      await apiService.put(`/admin/disputes/${id}`, { status: 'resolved', resolution, refundCents: refundCents || 0 });
+      fetchDisputes();
+    } catch (err) { alert(err.message); }
+  };
+
+  if (loading) return React.createElement(Loading);
+
+  return React.createElement('div', { className: 'p-6' },
+    React.createElement('div', { className: 'flex justify-between items-center mb-6' },
+      React.createElement('h1', { className: 'text-3xl font-bold text-gray-900' }, 'Disputes'),
+      React.createElement('select', {
+        className: 'border rounded px-3 py-2',
+        value: statusFilter,
+        onChange: e => setStatusFilter(e.target.value),
+      },
+        ['open', 'investigating', 'resolved', 'closed'].map(s =>
+          React.createElement('option', { key: s, value: s }, s.charAt(0).toUpperCase() + s.slice(1))
+        )
+      )
+    ),
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'table-container' },
+        React.createElement('table', { className: 'data-table' },
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              ['ID', 'Trip', 'Filed By', 'Reason', 'Status', 'Actions'].map(h =>
+                React.createElement('th', { key: h }, h)
+              )
+            )
+          ),
+          React.createElement('tbody', null,
+            disputes.length === 0 && React.createElement('tr', null,
+              React.createElement('td', { colSpan: 6, className: 'text-center text-gray-400 py-8' }, 'No disputes found')
+            ),
+            disputes.map(d =>
+              React.createElement('tr', { key: d.id },
+                React.createElement('td', null, d.id),
+                React.createElement('td', null, d.trip_id),
+                React.createElement('td', null, d.filed_by),
+                React.createElement('td', null, d.reason && d.reason.slice(0, 60) + (d.reason.length > 60 ? '…' : '')),
+                React.createElement('td', null, React.createElement('span', { className: `status-badge status-${d.status}` }, d.status)),
+                React.createElement('td', null,
+                  d.status === 'open' && React.createElement('button', {
+                    className: 'btn btn-sm btn-primary',
+                    onClick: () => handleResolve(d.id),
+                  }, 'Resolve')
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  );
+};
+
+// ─── Promo Codes Component ───
+const PromoCodes = () => {
+  const [codes, setCodes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ code: '', discount_type: 'percent', discount_value: 10, max_uses: '', expires_at: '' });
+
+  const fetchCodes = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await apiService.get('/admin/promo-codes');
+      setCodes(data.promoCodes || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchCodes(); }, [fetchCodes]);
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    try {
+      await apiService.post('/admin/promo-codes', {
+        ...form,
+        discount_value: parseInt(form.discount_value, 10),
+        max_uses: form.max_uses ? parseInt(form.max_uses, 10) : null,
+        expires_at: form.expires_at || null,
+      });
+      setShowForm(false);
+      fetchCodes();
+    } catch (err) { alert(err.message); }
+  };
+
+  const handleToggle = async (id, isActive) => {
+    try {
+      await apiService.put(`/admin/promo-codes/${id}`, { isActive: !isActive });
+      fetchCodes();
+    } catch (err) { alert(err.message); }
+  };
+
+  if (loading) return React.createElement(Loading);
+
+  return React.createElement('div', { className: 'p-6' },
+    React.createElement('div', { className: 'flex justify-between items-center mb-6' },
+      React.createElement('h1', { className: 'text-3xl font-bold text-gray-900' }, 'Promo Codes'),
+      React.createElement('button', { className: 'btn btn-primary', onClick: () => setShowForm(!showForm) },
+        showForm ? 'Cancel' : '+ New Code'
+      )
+    ),
+
+    showForm && React.createElement('div', { className: 'card p-6 mb-6' },
+      React.createElement('form', { onSubmit: handleCreate, className: 'grid grid-cols-2 gap-4' },
+        React.createElement('div', null,
+          React.createElement('label', { className: 'block text-sm font-medium mb-1' }, 'Code'),
+          React.createElement('input', { className: 'border rounded px-3 py-2 w-full', value: form.code, onChange: e => setForm({ ...form, code: e.target.value.toUpperCase() }), required: true, placeholder: 'SAVE20' })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { className: 'block text-sm font-medium mb-1' }, 'Discount Type'),
+          React.createElement('select', { className: 'border rounded px-3 py-2 w-full', value: form.discount_type, onChange: e => setForm({ ...form, discount_type: e.target.value }) },
+            React.createElement('option', { value: 'percent' }, 'Percent'),
+            React.createElement('option', { value: 'fixed_cents' }, 'Fixed (cents)')
+          )
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { className: 'block text-sm font-medium mb-1' }, 'Value'),
+          React.createElement('input', { type: 'number', className: 'border rounded px-3 py-2 w-full', value: form.discount_value, onChange: e => setForm({ ...form, discount_value: e.target.value }), required: true })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { className: 'block text-sm font-medium mb-1' }, 'Max Uses (blank = unlimited)'),
+          React.createElement('input', { type: 'number', className: 'border rounded px-3 py-2 w-full', value: form.max_uses, onChange: e => setForm({ ...form, max_uses: e.target.value }), placeholder: 'Unlimited' })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { className: 'block text-sm font-medium mb-1' }, 'Expires At'),
+          React.createElement('input', { type: 'date', className: 'border rounded px-3 py-2 w-full', value: form.expires_at, onChange: e => setForm({ ...form, expires_at: e.target.value }) })
+        ),
+        React.createElement('div', { className: 'col-span-2' },
+          React.createElement('button', { type: 'submit', className: 'btn btn-primary' }, 'Create Code')
+        )
+      )
+    ),
+
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'table-container' },
+        React.createElement('table', { className: 'data-table' },
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              ['Code', 'Type', 'Value', 'Uses', 'Expires', 'Active', 'Actions'].map(h =>
+                React.createElement('th', { key: h }, h)
+              )
+            )
+          ),
+          React.createElement('tbody', null,
+            codes.map(c =>
+              React.createElement('tr', { key: c.id },
+                React.createElement('td', null, React.createElement('code', null, c.code)),
+                React.createElement('td', null, c.discount_type),
+                React.createElement('td', null, c.discount_type === 'percent' ? `${c.discount_value}%` : `R${(c.discount_value / 100).toFixed(2)}`),
+                React.createElement('td', null, `${c.uses_count}${c.max_uses ? ` / ${c.max_uses}` : ''}`),
+                React.createElement('td', null, c.expires_at ? formatDate(c.expires_at) : 'Never'),
+                React.createElement('td', null, React.createElement('span', { className: `status-badge ${c.is_active ? 'status-active' : 'status-inactive'}` }, c.is_active ? 'Active' : 'Inactive')),
+                React.createElement('td', null,
+                  React.createElement('button', {
+                    className: `btn btn-sm ${c.is_active ? 'btn-danger' : 'btn-success'}`,
+                    onClick: () => handleToggle(c.id, c.is_active),
+                  }, c.is_active ? 'Deactivate' : 'Activate')
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  );
+};
+
+// ─── Audit Logs Component ───
+const AuditLogs = () => {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await apiService.get(`/admin/logs?page=${page}&limit=50`);
+      setLogs(data.logs || data.auditLogs || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [page]);
+
+  useEffect(() => { fetchLogs(); }, [fetchLogs]);
+
+  if (loading) return React.createElement(Loading);
+
+  return React.createElement('div', { className: 'p-6' },
+    React.createElement('div', { className: 'flex justify-between items-center mb-6' },
+      React.createElement('h1', { className: 'text-3xl font-bold text-gray-900' }, 'Audit Logs'),
+      React.createElement('div', { className: 'flex gap-2' },
+        React.createElement('button', { className: 'btn btn-sm', onClick: () => setPage(p => Math.max(1, p - 1)), disabled: page === 1 }, '← Prev'),
+        React.createElement('span', { className: 'px-3 py-2 text-sm' }, `Page ${page}`),
+        React.createElement('button', { className: 'btn btn-sm', onClick: () => setPage(p => p + 1) }, 'Next →')
+      )
+    ),
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'table-container' },
+        React.createElement('table', { className: 'data-table' },
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              ['Time', 'User', 'Action', 'Resource', 'Success', 'IP'].map(h =>
+                React.createElement('th', { key: h }, h)
+              )
+            )
+          ),
+          React.createElement('tbody', null,
+            logs.map((log, i) =>
+              React.createElement('tr', { key: log.id || i },
+                React.createElement('td', null, formatDateTime(log.created_at)),
+                React.createElement('td', null, log.user_id),
+                React.createElement('td', null, React.createElement('code', { className: 'text-xs' }, log.action)),
+                React.createElement('td', null, log.resource_type),
+                React.createElement('td', null, log.success
+                  ? React.createElement('span', { className: 'text-green-600' }, '✓')
+                  : React.createElement('span', { className: 'text-red-600' }, '✗')
+                ),
+                React.createElement('td', null, log.ip_address)
+              )
+            )
+          )
+        )
+      )
+    )
+  );
+};
+
+// ─── Analytics Component ───
+const Analytics = () => {
+  const [tripsData, setTripsData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await apiService.get('/admin/analytics/trips-over-time');
+        setTripsData(data.weeks || []);
+      } catch { setTripsData([]); }
+      finally { setLoading(false); }
+    })();
+  }, []);
+
+  if (loading) return React.createElement(Loading);
+
+  return React.createElement('div', { className: 'p-6' },
+    React.createElement('h1', { className: 'text-3xl font-bold text-gray-900 mb-6' }, 'Analytics'),
+    React.createElement('div', { className: 'card p-6 mb-6' },
+      React.createElement('h3', { className: 'text-lg font-semibold mb-4' }, 'Trips Over Time (last 90 days)'),
+      tripsData && tripsData.length > 0
+        ? React.createElement('div', { className: 'overflow-x-auto' },
+            React.createElement('table', { className: 'data-table' },
+              React.createElement('thead', null,
+                React.createElement('tr', null,
+                  React.createElement('th', null, 'Week'),
+                  React.createElement('th', null, 'Trips'),
+                  React.createElement('th', null, 'Bar')
+                )
+              ),
+              React.createElement('tbody', null,
+                tripsData.map((w, i) => {
+                  const max = Math.max(...tripsData.map(x => x.count || 0)) || 1;
+                  return React.createElement('tr', { key: i },
+                    React.createElement('td', null, w.week),
+                    React.createElement('td', null, w.count),
+                    React.createElement('td', null,
+                      React.createElement('div', {
+                        style: { width: `${Math.round((w.count / max) * 200)}px`, height: '16px', background: '#3B82F6', borderRadius: '4px' }
+                      })
+                    )
+                  );
+                })
+              )
+            )
+          )
+        : React.createElement('p', { className: 'text-gray-400' }, 'No data available yet.')
+    )
+  );
+};
+
+// ─── Organizations Component ───
+const Organizations = () => {
+  const [orgs, setOrgs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await apiService.get('/admin/organizations');
+        setOrgs(data.organizations || []);
+      } catch { setOrgs([]); }
+      finally { setLoading(false); }
+    })();
+  }, []);
+
+  if (loading) return React.createElement(Loading);
+
+  return React.createElement('div', { className: 'p-6' },
+    React.createElement('h1', { className: 'text-3xl font-bold text-gray-900 mb-6' }, 'Organizations'),
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'table-container' },
+        React.createElement('table', { className: 'data-table' },
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              ['ID', 'Name', 'Invite Code', 'Active', 'Created'].map(h =>
+                React.createElement('th', { key: h }, h)
+              )
+            )
+          ),
+          React.createElement('tbody', null,
+            orgs.length === 0 && React.createElement('tr', null,
+              React.createElement('td', { colSpan: 5, className: 'text-center text-gray-400 py-8' }, 'No organizations found')
+            ),
+            orgs.map(org =>
+              React.createElement('tr', { key: org.id },
+                React.createElement('td', null, org.id),
+                React.createElement('td', null, org.name),
+                React.createElement('td', null, React.createElement('code', null, org.invite_code || '—')),
+                React.createElement('td', null, org.is_active ? '✓' : '✗'),
+                React.createElement('td', null, formatDate(org.created_at))
+              )
+            )
+          )
+        )
+      )
+    )
+  );
+};
+
 // Main App Component
 const App = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -308,19 +741,24 @@ const App = () => {
   
   const renderContent = () => {
     switch (currentView) {
-      case 'dashboard':
-        return React.createElement(Dashboard);
-      case 'users':
-        return React.createElement(UsersManagement);
-      default:
-        return React.createElement(Dashboard);
+      case 'dashboard':      return React.createElement(Dashboard);
+      case 'users':          return React.createElement(UsersManagement);
+      case 'organizations':  return React.createElement(Organizations);
+      case 'documents':      return React.createElement(DocumentsQueue);
+      case 'disputes':       return React.createElement(Disputes);
+      case 'promo-codes':    return React.createElement(PromoCodes);
+      case 'audit-logs':     return React.createElement(AuditLogs);
+      case 'analytics':      return React.createElement(Analytics);
+      default:               return React.createElement(Dashboard);
     }
   };
   
   return React.createElement('div', { className: 'flex h-screen bg-gray-50' },
     React.createElement(Sidebar, {
       isCollapsed: sidebarCollapsed,
-      toggleSidebar: toggleSidebar
+      toggleSidebar: toggleSidebar,
+      currentView: currentView,
+      setView: setCurrentView,
     }),
     React.createElement('div', {
       className: `flex-1 overflow-auto transition-all duration-300 ${

@@ -20,6 +20,7 @@ export type EventType =
   | 'pool:assigned'
   | 'payment:succeeded'
   | 'payment:failed'
+  | 'location:update'
   | 'system:alert';
 
 export interface AppEvent {

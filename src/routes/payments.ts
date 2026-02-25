@@ -10,6 +10,7 @@ import { eventBus } from '../lib/eventBus';
 import { createNotification } from '../lib/notificationStore';
 import { getUserNotificationPreferences } from '../lib/userPreferences';
 import { withRequestContext } from '../lib/observability';
+import { awardPoints } from '../lib/points';
 
 export const paymentRoutes = new Hono<AppEnv>();
 
@@ -253,6 +254,21 @@ function getRequiredMetadata(
     if (!out[key]) return null;
   }
   return out;
+}
+
+async function awardPointsOnce(
+  db: D1Database,
+  userId: number,
+  delta: number,
+  reason: string,
+  referenceId: number,
+): Promise<void> {
+  const existing = await db
+    .prepare('SELECT id FROM points_ledger WHERE user_id = ? AND reason = ? AND reference_id = ? LIMIT 1')
+    .bind(userId, reason, referenceId)
+    .first<{ id: number }>();
+  if (existing) return;
+  await awardPoints(db, userId, delta, reason, referenceId);
 }
 
 async function writePaymentAudit(
@@ -642,10 +658,30 @@ paymentRoutes.post('/webhook', async (c) => {
       try {
         const subscriptionId = paymentIntent.metadata?.subscriptionId;
         if (subscriptionId) {
+          const parsedSubscriptionId = parseInt(subscriptionId, 10);
           await db
             .prepare(`UPDATE monthly_subscriptions SET payment_status = 'paid', status = 'active', payment_completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE stripe_payment_intent_id = ?`)
             .bind(paymentIntent.id)
             .run();
+          const subscriberUserId = paymentIntent.metadata?.userId ? parseInt(paymentIntent.metadata.userId, 10) : null;
+          if (subscriberUserId && Number.isFinite(subscriberUserId) && Number.isFinite(parsedSubscriptionId)) {
+            try {
+              await awardPointsOnce(
+                db,
+                subscriberUserId,
+                100,
+                'subscription_payment_succeeded',
+                parsedSubscriptionId,
+              );
+            } catch (pointsErr: unknown) {
+              logger.warn('Failed to award subscription points (non-critical)', {
+                ...withRequestContext(c),
+                error: pointsErr instanceof Error ? pointsErr.message : String(pointsErr),
+                subscriptionId,
+                userId: subscriberUserId,
+              });
+            }
+          }
           // Audit log
           try {
             await db.prepare(`
@@ -867,6 +903,56 @@ paymentRoutes.post('/webhook', async (c) => {
 
   await markEventProcessed(c, event.id, event.type);
   return c.json(response);
+});
+
+// ---------------------------------------------------------------------------
+// POST /payments/:intentId/refund  — Admin: manual Stripe refund
+// ---------------------------------------------------------------------------
+
+paymentRoutes.post('/:intentId/refund', authMiddleware(['admin', 'super_admin']), async (c) => {
+  const admin = c.get('user') as AuthUser;
+  const intentId = c.req.param('intentId');
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+
+  const { amountCents, reason } = (body as { amountCents?: number; reason?: string }) || {};
+  if (typeof amountCents !== 'number' || amountCents <= 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'amountCents must be a positive integer' } }, 400);
+  }
+
+  const stripeKey = c.env?.STRIPE_SECRET_KEY;
+  if (!stripeKey) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Stripe not configured' } }, 503);
+  }
+
+  try {
+    const refundRes = await fetch('https://api.stripe.com/v1/refunds', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${stripeKey}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        payment_intent: intentId,
+        amount: String(amountCents),
+        ...(reason ? { reason: 'fraudulent' } : {}),
+      }).toString(),
+    });
+
+    const refundData = await refundRes.json() as { id?: string; status?: string; error?: { message?: string } };
+    if (!refundRes.ok) {
+      return c.json({ error: { code: 'PAYMENT_ERROR', message: refundData?.error?.message || 'Refund failed' } }, 400);
+    }
+
+    logger.info('Admin refund issued', { adminId: admin.id, intentId, amountCents, refundId: refundData.id });
+    return c.json({ refundId: refundData.id, status: refundData.status, amountCents });
+  } catch (err) {
+    logger.error('Refund API call failed', err instanceof Error ? err : undefined, { intentId });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Refund failed' } }, 500);
+  }
 });
 
 export default paymentRoutes;

@@ -23,6 +23,7 @@ import { getCacheService } from '../lib/cache';
 import { createNotification } from '../lib/notificationStore';
 import { getUserNotificationPreferences } from '../lib/userPreferences';
 import { calculateFareCents, estimateETAMinutes, haversineKm, estimatedRoadKm, TRIP_RATES } from '../lib/pricing';
+import { awardPoints } from '../lib/points';
 
 export const tripRoutes = new Hono<AppEnv>();
 
@@ -173,6 +174,7 @@ const bookTripSchema = z.object({
     address: z.string().trim().min(1).optional(),
   }).passthrough(),
   passengers: z.number().int().min(1).max(4).optional().default(1),
+  promoCode: z.string().max(30).optional(),
 }).strict();
 
 const tripReasonSchema = z.object({
@@ -267,6 +269,21 @@ function parseMaybeJsonLocation(value: string, fallback: { lat: number; lng: num
   } catch {
     return fallback;
   }
+}
+
+async function awardPointsOnce(
+  db: { prepare(query: string): { bind(...args: unknown[]): { first<T = unknown>(): Promise<T | null> } } },
+  userId: number,
+  delta: number,
+  reason: string,
+  referenceId: number,
+): Promise<void> {
+  const existing = await db
+    .prepare('SELECT id FROM points_ledger WHERE user_id = ? AND reason = ? AND reference_id = ? LIMIT 1')
+    .bind(userId, reason, referenceId)
+    .first<{ id: number }>();
+  if (existing) return;
+  await awardPoints(db as Parameters<typeof awardPoints>[0], userId, delta, reason, referenceId);
 }
 
 function parseBoundedNumber(value: string, label: string, min: number, max: number): number {
@@ -477,7 +494,7 @@ tripRoutes.post('/:tripId/book', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedBody.error.issues.map((i) => i.message).join(', ') } }, 400);
   }
 
-  const { pickupLocation, dropoffLocation, passengers } = parsedBody.data;
+  const { pickupLocation, dropoffLocation, passengers, promoCode } = parsedBody.data;
   const idempotencyKey = getIdempotencyKey(c, user.id, `trip-book:${tripId}`);
   if (idempotencyKey) {
     const { replay } = await isIdempotentReplay(c, idempotencyKey);
@@ -522,6 +539,51 @@ tripRoutes.post('/:tripId/book', async (c) => {
     const fareRatePerKm = hasPaidSub ? TRIP_RATES.MONTHLY_PER_KM : TRIP_RATES.DAILY_PER_KM;
     const subId = hasPaidSub ? activeSub!.id : null;
 
+    // Validate promo code if provided
+    let promoCodeId: number | null = null;
+    let discountCents = 0;
+    if (promoCode) {
+      const promo = await db.prepare(`
+        SELECT id, discount_type, discount_value, max_uses, uses_count, min_fare_cents, expires_at
+        FROM promo_codes
+        WHERE code = ? COLLATE NOCASE AND is_active = 1
+      `).bind(promoCode).first<{
+        id: number;
+        discount_type: 'percent' | 'fixed_cents';
+        discount_value: number;
+        max_uses: number | null;
+        uses_count: number;
+        min_fare_cents: number;
+        expires_at: string | null;
+      }>();
+
+      if (!promo) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid or inactive promo code' } }, 400);
+      }
+      if (promo.expires_at && new Date(promo.expires_at) < new Date()) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Promo code has expired' } }, 400);
+      }
+      if (promo.max_uses !== null && promo.uses_count >= promo.max_uses) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Promo code usage limit reached' } }, 400);
+      }
+
+      const alreadyUsed = await db.prepare(
+        'SELECT id FROM promo_redemptions WHERE promo_code_id = ? AND user_id = ?'
+      ).bind(promo.id, user.id).first<{ id: number }>();
+      if (alreadyUsed) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Promo code already used' } }, 400);
+      }
+
+      promoCodeId = promo.id;
+      if (promo.discount_type === 'percent') {
+        // Estimate fare for discount calculation — use a rough value; actual charge is done at payment time
+        const estimatedFareCents = Math.round(fareRatePerKm * 30 * 100); // 30 km placeholder
+        discountCents = Math.min(Math.round(estimatedFareCents * promo.discount_value / 100), estimatedFareCents);
+      } else {
+        discountCents = promo.discount_value;
+      }
+    }
+
     await db
       .prepare(
         `INSERT INTO trip_participants (trip_id, user_id, role, status, pickup_location_encrypted, dropoff_location_encrypted, passenger_count, subscription_id, fare_rate_per_km)
@@ -536,6 +598,17 @@ tripRoutes.post('/:tripId/book', async (c) => {
         fareRatePerKm,
       )
       .run();
+
+    // Record promo redemption
+    if (promoCodeId !== null) {
+      await db.prepare(
+        `INSERT INTO promo_redemptions (promo_code_id, user_id, trip_id, discount_applied_cents)
+         VALUES (?, ?, ?, ?)`
+      ).bind(promoCodeId, user.id, Number(tripId), discountCents).run();
+      await db.prepare(
+        'UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ?'
+      ).bind(promoCodeId).run();
+    }
 
     // Emit real-time booking event
     eventBus.emit('booking:requested', {
@@ -614,7 +687,7 @@ tripRoutes.post('/:tripId/book', async (c) => {
         logger.warn('Failed to send booking notification', { error: err instanceof Error ? err.message : String(err) });
       }
 
-    return c.json({ message: 'Booking request submitted successfully', booking: { tripId, passengerId: user.id, status: 'requested', createdAt: new Date().toISOString() } });
+    return c.json({ message: 'Booking request submitted successfully', booking: { tripId, passengerId: user.id, status: 'requested', createdAt: new Date().toISOString(), discountApplied: discountCents > 0 ? discountCents : undefined } });
   } catch (err: unknown) {
     const parsedError = parseError(err);
     logger.error('Booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
@@ -1271,6 +1344,83 @@ tripRoutes.post('/:tripId/cancel', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /:tripId/complete
+// ---------------------------------------------------------------------------
+
+tripRoutes.post('/:tripId/complete', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = c.req.param('tripId');
+  const db = getDBOptional(c);
+
+  if (!db) {
+    logger.error('Trip completion denied because DB is unavailable', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+
+  const trip = await db
+    .prepare('SELECT id, driver_id, status FROM trips WHERE id = ?')
+    .bind(tripId)
+    .first<TripOwnerRow>();
+
+  if (!trip) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+  }
+  if (trip.driver_id !== user.id) {
+    return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can complete this trip' } }, 403);
+  }
+  if (trip.status === 'completed') {
+    return c.json({ error: { code: 'CONFLICT', message: 'Trip is already completed' } }, 409);
+  }
+  if (trip.status === 'cancelled') {
+    return c.json({ error: { code: 'CONFLICT', message: 'Cancelled trips cannot be completed' } }, 409);
+  }
+
+  const completeTripResult = await db
+    .prepare("UPDATE trips SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('scheduled', 'active')")
+    .bind(tripId)
+    .run();
+  const completedRows = getAffectedRows(completeTripResult);
+  if (completedRows === 0) {
+    return c.json({ error: { code: 'CONFLICT', message: 'Trip cannot be completed from current status' } }, 409);
+  }
+
+  await db
+    .prepare(
+      `UPDATE trip_participants
+       SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+       WHERE trip_id = ? AND (
+         (role = 'driver' AND status = 'accepted')
+         OR (role = 'rider' AND status = 'accepted')
+       )`,
+    )
+    .bind(tripId)
+    .run();
+
+  const acceptedRiders = await db
+    .prepare(`SELECT user_id FROM trip_participants WHERE trip_id = ? AND role = 'rider' AND status = 'completed'`)
+    .bind(tripId)
+    .all<{ user_id: number }>();
+
+  try {
+    await awardPointsOnce(db, user.id, 50, 'trip_completed_driver', Number.parseInt(tripId, 10));
+    for (const rider of acceptedRiders.results ?? []) {
+      await awardPointsOnce(db, rider.user_id, 20, 'trip_completed_rider', Number.parseInt(tripId, 10));
+    }
+  } catch (err) {
+    logger.warn('Trip completion points award failed (non-critical)', {
+      tripId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  eventBus.emit('trip:completed', { tripId, completedBy: user.id }, user.id);
+
+  return c.json({ message: 'Trip completed successfully', trip: { id: tripId, status: 'completed', completedAt: new Date().toISOString() } });
+});
+
+// ---------------------------------------------------------------------------
 // POST /:tripId/rate
 // ---------------------------------------------------------------------------
 
@@ -1319,6 +1469,230 @@ tripRoutes.post('/:tripId/rate', async (c) => {
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Trip rating failed' } }, 500);
   }
   return c.json({ message: 'Rating submitted successfully', rating: { tripId, userId: user.id, rating, comment: comment || null, createdAt: new Date().toISOString() } });
+});
+
+// ---------------------------------------------------------------------------
+// POST /:tripId/location  — Driver updates GPS position (CACHE KV only)
+// GET  /:tripId/location  — Rider/driver polls last known position
+// ---------------------------------------------------------------------------
+
+tripRoutes.post('/:tripId/location', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = parseInt(c.req.param('tripId'));
+  if (isNaN(tripId)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid trip ID' } }, 400);
+  }
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+
+  const { lat, lng, heading, speed, accuracy } = (body as { lat?: number; lng?: number; heading?: number; speed?: number; accuracy?: number }) || {};
+  if (typeof lat !== 'number' || typeof lng !== 'number') {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'lat and lng required' } }, 400);
+  }
+
+  const db = getDBOptional(c);
+  if (db) {
+    // Verify caller is the driver of this trip
+    const trip = await db
+      .prepare('SELECT driver_id FROM trips WHERE id = ?')
+      .bind(tripId)
+      .first<{ driver_id: number }>();
+    if (!trip || trip.driver_id !== user.id) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can update location' } }, 403);
+    }
+  }
+
+  const payload = JSON.stringify({ lat, lng, heading: heading ?? null, speed: speed ?? null, accuracy: accuracy ?? null, updatedAt: new Date().toISOString() });
+  await c.env?.CACHE?.put(`location:trip:${tripId}`, payload, { expirationTtl: 120 });
+
+  // Broadcast via SSE so connected riders see real-time updates
+  eventBus.emit('location:update', { tripId, coords: { lat, lng, heading, speed } }, user.id);
+
+  return c.json({ success: true });
+});
+
+tripRoutes.get('/:tripId/location', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = parseInt(c.req.param('tripId'));
+  if (isNaN(tripId)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid trip ID' } }, 400);
+  }
+
+  // Verify caller is driver or accepted rider
+  const db = getDBOptional(c);
+  if (db) {
+    const trip = await db
+      .prepare('SELECT driver_id FROM trips WHERE id = ?')
+      .bind(tripId)
+      .first<{ driver_id: number }>();
+    if (!trip) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+    }
+    if (trip.driver_id !== user.id) {
+      const participant = await db
+        .prepare('SELECT id FROM trip_participants WHERE trip_id = ? AND user_id = ? AND status = ?')
+        .bind(tripId, user.id, 'accepted')
+        .first<{ id: number }>();
+      if (!participant) {
+        return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Access denied' } }, 403);
+      }
+    }
+  }
+
+  const raw = await c.env?.CACHE?.get(`location:trip:${tripId}`, 'text');
+  if (!raw) {
+    return c.json({ location: null });
+  }
+  return c.json({ location: JSON.parse(raw) });
+});
+
+// ---------------------------------------------------------------------------
+// GET /:tripId/route  — Return full route polyline + turn-by-turn steps
+// ---------------------------------------------------------------------------
+
+tripRoutes.get('/:tripId/route', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = parseInt(c.req.param('tripId'));
+  if (isNaN(tripId)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid trip ID' } }, 400);
+  }
+
+  const db = getDBOptional(c);
+  if (!db) return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Service unavailable' } }, 503);
+
+  const trip = await db
+    .prepare('SELECT id, driver_id, origin, destination FROM trips WHERE id = ?')
+    .bind(tripId)
+    .first<{ id: number; driver_id: number; origin: string; destination: string }>();
+
+  if (!trip) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+  }
+
+  const isDriver = trip.driver_id === user.id;
+  if (!isDriver) {
+    const participant = await db
+      .prepare('SELECT id FROM trip_participants WHERE trip_id = ? AND user_id = ? AND status = ?')
+      .bind(tripId, user.id, 'accepted')
+      .first<{ id: number }>();
+    if (!participant) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Access denied' } }, 403);
+    }
+  }
+
+  // Return cached route if available
+  const cacheKey = `route:trip:${tripId}`;
+  const cached = await c.env?.CACHE?.get(cacheKey, 'text');
+  if (cached) {
+    return c.json(JSON.parse(cached));
+  }
+
+  // Build route from origin/destination — decode stored lat/lng or fallback to text
+  // Route is fetched via the GeoService (Mapbox Directions)
+  try {
+    const { getGeoService } = await import('../integrations/geocoding');
+    const geoSvc = getGeoService(c.env);
+    if (!geoSvc) {
+      return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Route service not configured' } }, 503);
+    }
+
+    // Parse origin/destination — stored as JSON or plain text
+    let origin: { lat: number; lng: number };
+    let destination: { lat: number; lng: number };
+    try {
+      origin = JSON.parse(trip.origin);
+      destination = JSON.parse(trip.destination);
+    } catch {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Trip location data not geocoded' } }, 422);
+    }
+
+    const route = await geoSvc.getRoute(origin, destination);
+    const response = { tripId, ...route };
+    await c.env?.CACHE?.put(cacheKey, JSON.stringify(response), { expirationTtl: 3600 });
+    return c.json(response);
+  } catch (err) {
+    logger.error('Route fetch failed', err instanceof Error ? err : undefined, { tripId });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch route' } }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /:tripId/dispute  — Rider/driver files a dispute
+// ---------------------------------------------------------------------------
+
+tripRoutes.post('/:tripId/dispute', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = parseInt(c.req.param('tripId'));
+  if (isNaN(tripId)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid trip ID' } }, 400);
+  }
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+
+  const { reason, evidenceText } = (body as { reason?: string; evidenceText?: string }) || {};
+  if (!reason || reason.trim().length < 10) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Reason must be at least 10 characters' } }, 400);
+  }
+
+  const db = getDBOptional(c);
+  if (!db) return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Service unavailable' } }, 503);
+
+  const tripState = await db
+    .prepare('SELECT id, status FROM trips WHERE id = ?')
+    .bind(tripId)
+    .first<{ id: number; status: string }>();
+
+  if (!tripState) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+  }
+  if (tripState.status !== 'completed') {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Disputes can only be filed for completed trips' } }, 400);
+  }
+
+  // Verify the user was part of the trip
+  const participation = await db
+    .prepare('SELECT id FROM trip_participants WHERE trip_id = ? AND user_id = ?')
+    .bind(tripId, user.id)
+    .first<{ id: number }>();
+
+  if (!participation) {
+    // Check if driver
+    const trip = await db
+      .prepare('SELECT id FROM trips WHERE id = ? AND driver_id = ?')
+      .bind(tripId, user.id)
+      .first<{ id: number }>();
+    if (!trip) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'You were not part of this trip' } }, 403);
+      }
+  }
+
+  const existingOpen = await db
+    .prepare("SELECT id FROM disputes WHERE trip_id = ? AND filed_by = ? AND status IN ('open', 'investigating')")
+    .bind(tripId, user.id)
+    .first<{ id: number }>();
+  if (existingOpen) {
+    return c.json({ error: { code: 'CONFLICT', message: 'An open dispute for this trip already exists' } }, 409);
+  }
+
+  try {
+    const result = await db
+      .prepare(
+        `INSERT INTO disputes (trip_id, filed_by, reason, evidence_text) VALUES (?, ?, ?, ?)`,
+      )
+      .bind(tripId, user.id, reason.trim(), evidenceText?.trim() || null)
+      .run();
+
+    return c.json({ disputeId: result.meta?.last_row_id, status: 'open' }, 201);
+  } catch (err) {
+    logger.error('dispute create failed', err instanceof Error ? err : undefined, { tripId, userId: user.id });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to file dispute' } }, 500);
+  }
 });
 
 export default tripRoutes;

@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-23 06:15:00 UTC
+Last updated: 2026-02-25 17:58:00 UTC
 Current branch: `main`
 Tracking branch: `origin/main`
 
@@ -20,17 +20,12 @@ Mandatory updates to this file:
 
 ## Current State Snapshot
 Quality gate status (latest run):
-- `npm run type-check`: PASS
-- `npm run lint`: PASS
-- `npm test`: PASS (262/262)
-- `npm run build`: PASS (288.28 kB worker)
-- `npm run db:check-migrations`: PASS (13 files, next `0014`)
-- `npm run db:smoke`: BLOCKED IN SANDBOX (`listen EPERM 127.0.0.1`); enforced in CI workflow
-- `node tests/matching.test.js`: PASS (70/70)
+- `npm run verify`: PASS (`type-check`, `lint`, `test` 278/278, `build` 347.60 kB worker)
+- `npm run db:check-migrations`: PASS (18 files, next `0019`)
 
 Repository state:
-- Working tree has local modifications (reliability tests, payment route adjustment, docs)
-- `main` aligned with `origin/main`
+- Working tree has local roadmap implementation changes staged for commit
+- `main` is ahead of `origin/main` only after local commit (push pending)
 
 ---
 
@@ -128,6 +123,9 @@ Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
 - `2026-02-20 18:45 UTC` | codex | action | phase2-lifecycle-reliability-tests | exercised every `/api/trips` offer/accept/reject/cancel path under KV failure, ensured DB-ledger idempotency responses surface `IDEMPOTENCY_REPLAY`, and verified the monitoring metrics audit test logs the injected `X-Request-ID`.
+- `2026-02-25 17:58 UTC` | codex | action | roadmap-p0-p3-implementation | implemented roadmap delivery across backend/frontend: cron matching + reminders, documents R2 upload proxy, disputes/promo/loyalty/organizations routes, ToS acceptance, points hooks, Apple Sign-In OAuth flow, MFA/settings wiring, driver docs + earnings + referral + organization screens, and integration contract coverage.
+- `2026-02-25 17:58 UTC` | codex | action | quality-gates | ran `npm run verify` with full pass (`type-check`, `lint`, `test` 278/278, `build` 347.60 kB).
+- `2026-02-25 17:58 UTC` | codex | action | db-migration-order-check | ran `npm run db:check-migrations` -> `18 files, 18 unique versions, next 0019`.
 - `2026-02-20 18:48 UTC` | codex | action | phase2-payment-reliability-tests | extended payments coverage with KV/DB outage simulations (intent cache failure, webhook replay ledger fallback, config error guards) and asserted structured logging carries the same request ID as the HTTP response.
 - `2026-02-20 18:53 UTC` | codex | action | docs-phase2-reliability-audit | captured the new lifecycle/payment failure-mode contracts plus the monitoring metrics request-ID reasoning in `docs/PHASE2_RELIABILITY_AUDIT.md`.
 - `2026-02-20 19:00 UTC` | codex | action | quality-gates | reran `npm run type-check`, `npm run lint`, `npm test` (200), and `npm run build` to validate the new reliability surface end-to-end.

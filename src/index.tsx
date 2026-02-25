@@ -8,14 +8,23 @@ import { monitoringRoutes } from './routes/monitoring'
 import { paymentRoutes } from './routes/payments'
 import { notificationRoutes } from './routes/notifications'
 import { subscriptionRoutes } from './routes/subscriptions'
+import { pushRoutes } from './routes/push'
+import { documentRoutes } from './routes/documents'
+import { safetyRoutes } from './routes/safety'
+import { disputeRoutes } from './routes/disputes'
+import { promoRoutes } from './routes/promo'
+import { loyaltyRoutes } from './routes/loyalty'
+import { organizationRoutes } from './routes/organizations'
 import { eventBus, isEventVisibleToUser } from './lib/eventBus'
+import { runDailyTasks, runHourlyTasks } from './lib/cron'
 import { logger } from './lib/logger'
 import { getAnonymizedIP } from './lib/http'
 import { AppError } from './lib/errors'
 import { authMiddleware } from './middleware/auth'
 import { rateLimiter, authRateLimiter } from './middleware/rateLimiter'
+import { verifyToken } from './middleware/auth'
 import type { Context } from 'hono'
-import type { AppEnv, AuthUser } from './types'
+import type { AppEnv, AuthUser, Bindings } from './types'
 type AppJsonInit = Parameters<Context<AppEnv>['json']>[1]
 
 const app = new Hono<AppEnv>()
@@ -70,6 +79,7 @@ function buildConnectSources(c: Context<AppEnv>): string[] {
     "'self'",
     'https://api.klubz.com',
     'https://nominatim.openstreetmap.org', // geocoding used by client-side geocodeAddress()
+    'https://*.tile.openstreetmap.org',    // Leaflet map tiles
   ]);
   const appOrigin = normalizeOrigin(c.env?.APP_URL);
   if (appOrigin) {
@@ -104,7 +114,7 @@ function buildCspHeader(c: Context<AppEnv>, nonce: string): string {
     "font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com",
     `script-src 'self' 'nonce-${nonce}' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net`,
     // Inline style attributes are used in server-rendered shell HTML.
-    "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com https://fonts.googleapis.com https://cdn.jsdelivr.net",
+    "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com https://fonts.googleapis.com https://cdn.jsdelivr.net https://unpkg.com",
     `connect-src ${buildConnectSources(c).join(' ')}`,
   ];
 
@@ -382,8 +392,55 @@ app.route('/api/matching', matchingRoutes)
 
 app.route('/api/subscriptions', subscriptionRoutes)
 
+// Push notification routes: /api/push/vapid-key, /api/push/subscribe
+app.route('/api/push', pushRoutes)
+
+// Driver document routes: /api/users/documents, /api/admin/documents
+app.route('/api', documentRoutes)
+
+// Safety routes: /api/safety/contacts, /api/safety/sos
+app.route('/api/safety', safetyRoutes)
+
+// Dispute filing: /api/disputes
+app.route('/api/disputes', disputeRoutes)
+
+// Promo validation + loyalty routes: /api/promo-codes/*, /api/users/referral, /api/users/points, /api/referrals/redeem
+app.route('/api', promoRoutes)
+app.route('/api', loyaltyRoutes)
+
+// Organization self-serve routes: /api/organizations/*
+app.route('/api/organizations', organizationRoutes)
+
 // ═══ Real-Time Events (SSE) ═══
-app.get('/api/events', authMiddleware(), async (c) => {
+// Supports both Authorization: Bearer header AND ?token= query param
+// (EventSource does not support custom headers, so query param is needed for browser SSE)
+app.get('/api/events', async (c, next) => {
+  // If Authorization header present, delegate to standard authMiddleware
+  if (c.req.header('Authorization')) {
+    return authMiddleware()(c, next);
+  }
+  // Otherwise verify the ?token= query param manually
+  const token = c.req.query('token');
+  if (!token) {
+    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Authentication required' } }, 401);
+  }
+  const secret = c.env?.JWT_SECRET;
+  if (!secret) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Auth service unavailable' } }, 500);
+  }
+  const payload = await verifyToken(token, secret).catch(() => null);
+  if (!payload) {
+    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Invalid or expired token' } }, 401);
+  }
+  c.set('user', {
+    id: payload.sub,
+    email: payload.email,
+    name: payload.name,
+    role: payload.role as AuthUser['role'],
+    organizationId: payload.orgId,
+  } satisfies AuthUser);
+  await next();
+}, async (c) => {
   const user = c.get('user') as AuthUser;
   const { readable, writable } = new TransformStream()
   const writer = writable.getWriter()
@@ -465,6 +522,9 @@ app.get('/', (c) => {
   <!-- Styles -->
   <link rel="stylesheet" href="/static/style.css">
 
+  <!-- Leaflet CSS (OSM map tiles, MIT licence, no API key required) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+
   <!-- Preload critical assets -->
   <link rel="preload" href="/static/js/app.js" as="script">
 </head>
@@ -479,6 +539,10 @@ app.get('/', (c) => {
     </div>
   </div>
 
+  <!-- Leaflet JS (must load before app.js uses L.map) -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <!-- i18n strings (must load before app.js) -->
+  <script src="/static/js/i18n.js" defer></script>
   <!-- Application Script -->
   <script src="/static/js/app.js" defer></script>
 
@@ -531,4 +595,26 @@ app.get('*', (c) => {
   return c.redirect('/', 302)
 })
 
-export default app
+// ═══ Scheduled Handler (Cloudflare Cron Triggers) ═══
+interface ScheduledEvent {
+  cron: string;
+  scheduledTime: number;
+  noRetry(): void;
+}
+
+interface ExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
+  passThroughOnException(): void;
+}
+
+export default {
+  fetch: app.fetch,
+  // Expose Hono's test request helper so integration tests can call app.request(...)
+  request: (...args: Parameters<typeof app.request>) => app.request(...args),
+  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    // "0 3 * * *" = daily at 03:00 UTC (05:00 SAST)
+    // "50 * * * *" = every hour at :50
+    const isDaily = event.cron === '0 3 * * *';
+    ctx.waitUntil(isDaily ? runDailyTasks(env) : runHourlyTasks(env));
+  },
+}

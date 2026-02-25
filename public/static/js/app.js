@@ -119,11 +119,20 @@
       Store.setState({ isLoading: true });
       try {
         const data = await API.post('/auth/login', { email, password, rememberMe });
+        if (data.mfaRequired && data.mfaToken) {
+          sessionStorage.setItem('mfaToken', data.mfaToken);
+          Store.setState({ isLoading: false });
+          Router.navigate('mfa-verify');
+          return;
+        }
         localStorage.setItem(CONFIG.TOKEN_KEY, data.accessToken);
         localStorage.setItem(CONFIG.REFRESH_KEY, data.refreshToken);
         localStorage.setItem(CONFIG.USER_KEY, JSON.stringify(data.user));
         Store.setState({ isAuthenticated: true, user: data.user, isLoading: false });
+        const tosOk = await enforceTosAcceptance();
+        if (!tosOk) return;
         Toast.show('Welcome back!', 'success');
+        subscribeToNotifications();
         Router.navigate('home');
       } catch (err) {
         Store.setState({ isLoading: false });
@@ -167,14 +176,40 @@
         localStorage.setItem(CONFIG.REFRESH_KEY, data.refreshToken);
         localStorage.setItem(CONFIG.USER_KEY, JSON.stringify(data.user));
         Store.setState({ isAuthenticated: true, user: data.user, isLoading: false });
-        Toast.show('Signed in with Google!', 'success');
+        const tosOk = await enforceTosAcceptance();
+        if (!tosOk) return;
+        Toast.show('Signed in successfully!', 'success');
+        subscribeToNotifications();
         Router.navigate('home');
       } catch {
-        Toast.show('Google sign-in failed. Please try again.', 'error');
+        Toast.show('OAuth sign-in failed. Please try again.', 'error');
         Router.navigate('login');
       }
     }
   };
+
+  async function enforceTosAcceptance() {
+    try {
+      const pendingVersion = localStorage.getItem('klubz_pending_tos_version');
+      if (pendingVersion) {
+        await API.post('/users/tos-accept', { tosVersion: pendingVersion });
+        localStorage.removeItem('klubz_pending_tos_version');
+      }
+
+      const profile = await API.get('/users/profile');
+      if (!profile?.tosVersionAccepted) {
+        const accepted = window.confirm('Please accept the Klubz Terms of Service to continue.');
+        if (!accepted) {
+          Auth.logout();
+          return false;
+        }
+        await API.post('/users/tos-accept', { tosVersion: '1.0' });
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
 
   // ═══ Router ═══
   const Router = {
@@ -211,6 +246,9 @@
 
       const toast = document.createElement('div');
       toast.className = `toast toast--${type}`;
+      toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+      toast.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+      toast.setAttribute('aria-atomic', 'true');
       toast.innerHTML = `
         <span class="toast__icon" style="color:var(--${type === 'success' ? 'accent' : type === 'error' ? 'danger' : type === 'warning' ? 'warning' : 'primary'})">${icons[type]}</span>
         <span class="toast__message">${escapeHtml(message)}</span>
@@ -307,6 +345,198 @@
     return R * c;
   }
 
+  // ═══ Polyline Decoder ═══
+  function decodePolyline(encoded) {
+    var points = [];
+    var index = 0, lat = 0, lng = 0;
+    while (index < encoded.length) {
+      var b, shift = 0, result = 0;
+      do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      lat += (result & 1) ? ~(result >> 1) : result >> 1;
+      shift = 0; result = 0;
+      do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      lng += (result & 1) ? ~(result >> 1) : result >> 1;
+      points.push([lat / 1e5, lng / 1e5]);
+    }
+    return points;
+  }
+
+  // ═══ Map Manager (Leaflet) ═══
+  const MapManager = {
+    _maps: {},
+    init(containerId, center, zoom) {
+      if (!window.L) return;
+      if (this._maps[containerId]) { this._maps[containerId].remove(); delete this._maps[containerId]; }
+      const el = document.getElementById(containerId);
+      if (!el) return;
+      const map = window.L.map(el, { zoomControl: true }).setView(center || [-29.858, 31.029], zoom || 12);
+      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19,
+      }).addTo(map);
+      this._maps[containerId] = { map, markers: {}, route: null };
+    },
+    setRoute(containerId, polylinePoints) {
+      const m = this._maps[containerId];
+      if (!m || !window.L) return;
+      if (m.route) { m.route.remove(); m.route = null; }
+      if (!polylinePoints || !polylinePoints.length) return;
+      m.route = window.L.polyline(polylinePoints, { color: '#3B82F6', weight: 4, opacity: 0.8 }).addTo(m.map);
+    },
+    setMarker(containerId, key, latlng, opts) {
+      const m = this._maps[containerId];
+      if (!m || !window.L) return;
+      if (m.markers[key]) { m.markers[key].setLatLng(latlng); return; }
+      const icon = opts && opts.icon === 'car'
+        ? window.L.divIcon({ html: '<div style="background:#3B82F6;border-radius:50%;width:16px;height:16px;border:3px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.4)"></div>', iconSize: [16, 16], iconAnchor: [8, 8] })
+        : window.L.divIcon({ html: '<div style="background:#EF4444;border-radius:50%;width:14px;height:14px;border:2px solid #fff"></div>', iconSize: [14, 14], iconAnchor: [7, 7] });
+      m.markers[key] = window.L.marker(latlng, { icon }).addTo(m.map);
+      if (opts && opts.label) m.markers[key].bindPopup(opts.label);
+    },
+    removeMarker(containerId, key) {
+      const m = this._maps[containerId];
+      if (!m || !m.markers[key]) return;
+      m.markers[key].remove();
+      delete m.markers[key];
+    },
+    fitRoute(containerId) {
+      const m = this._maps[containerId];
+      if (!m) return;
+      if (m.route) { m.map.fitBounds(m.route.getBounds(), { padding: [20, 20] }); return; }
+      const pts = Object.values(m.markers).map(mk => mk.getLatLng());
+      if (pts.length > 1) m.map.fitBounds(window.L.latLngBounds(pts), { padding: [20, 20] });
+    },
+    destroy(containerId) {
+      const m = this._maps[containerId];
+      if (!m) return;
+      m.map.remove();
+      delete this._maps[containerId];
+    },
+  };
+
+  // ═══ Notification Badge ═══
+  const NotificationBadge = {
+    _count: parseInt(localStorage.getItem('klubz_notif_count') || '0', 10),
+    increment() {
+      this._count++;
+      localStorage.setItem('klubz_notif_count', String(this._count));
+      const badge = document.querySelector('.header-btn__badge');
+      if (badge) badge.textContent = String(this._count);
+    },
+    reset() {
+      this._count = 0;
+      localStorage.setItem('klubz_notif_count', '0');
+      const badge = document.querySelector('.header-btn__badge');
+      if (badge) badge.textContent = '0';
+    },
+  };
+
+  // ═══ SSE Client ═══
+  const SSEClient = {
+    _es: null,
+    _retryMs: 3000,
+    connect() {
+      if (this._es) return;
+      const token = localStorage.getItem(CONFIG.TOKEN_KEY);
+      if (!token) return;
+      this._es = new EventSource(`${CONFIG.API_BASE}/events?token=${encodeURIComponent(token)}`);
+      this._es.onmessage = (e) => {
+        try { this._handle(JSON.parse(e.data)); } catch { /* ignore parse errors */ }
+      };
+      this._es.onerror = () => {
+        this.disconnect();
+        setTimeout(() => this.connect(), this._retryMs);
+      };
+    },
+    disconnect() {
+      if (this._es) { this._es.close(); this._es = null; }
+    },
+    _handle(event) {
+      switch (event.type) {
+        case 'booking:accepted':
+          Toast.show('Your booking was accepted!', 'success');
+          if (Store.state.currentScreen === 'my-trips') loadTrips('upcoming');
+          NotificationBadge.increment();
+          break;
+        case 'booking:requested':
+          Toast.show('New booking request received', 'info');
+          if (Store.state.currentScreen === 'my-trips') loadTrips('upcoming');
+          NotificationBadge.increment();
+          break;
+        case 'booking:rejected':
+          Toast.show('A booking was rejected', 'warning');
+          break;
+        case 'trip:cancelled':
+          Toast.show('A trip was cancelled', 'error');
+          if (Store.state.currentScreen === 'my-trips') loadTrips('upcoming');
+          break;
+        case 'match:confirmed':
+          Toast.show('Match confirmed!', 'success');
+          break;
+        case 'location:update':
+          if (event.data && event.data.coords) {
+            MapManager.setMarker('trip-map', 'driver', [event.data.coords.lat, event.data.coords.lng], { icon: 'car' });
+          }
+          break;
+        case 'payment:succeeded':
+          Toast.show('Payment successful!', 'success');
+          break;
+      }
+    },
+  };
+
+  // ═══ Push Notifications ═══
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+  }
+
+  async function subscribeToNotifications() {
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
+    if (Notification.permission === 'denied') return;
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') return;
+      const vapidData = await API.get('/push/vapid-key');
+      if (!vapidData || !vapidData.publicKey) return;
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidData.publicKey),
+      });
+      await API.post('/push/subscribe', sub.toJSON());
+    } catch { /* Push not supported or denied — silent fail */ }
+  }
+
+  // ═══ Location Sharing ═══
+  let locationWatcher = null;
+  function startLocationSharing(tripId) {
+    if (!navigator.geolocation || locationWatcher !== null) return;
+    locationWatcher = navigator.geolocation.watchPosition(
+      async (pos) => {
+        try {
+          await API.post(`/trips/${tripId}/location`, {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+            heading: pos.coords.heading,
+            speed: pos.coords.speed,
+          });
+        } catch { /* best-effort */ }
+      },
+      null,
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 },
+    );
+  }
+  function stopLocationSharing() {
+    if (locationWatcher !== null) {
+      navigator.geolocation.clearWatch(locationWatcher);
+      locationWatcher = null;
+    }
+  }
+
   // ═══ Screen Renderers ═══
 
   function renderLoginScreen() {
@@ -345,6 +575,10 @@
         <button id="google-signin-btn" class="social-btn" style="margin-bottom:var(--space-sm)">
           <svg viewBox="0 0 24 24" width="20" height="20"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
           Continue with Google
+        </button>
+        <button id="apple-signin-btn" class="social-btn" style="margin-bottom:var(--space-sm)">
+          <span style="font-size:1.125rem;line-height:1">&#63743;</span>
+          Continue with Apple
         </button>
 
         <p style="text-align:center;margin-top:var(--space-lg);font-size:0.875rem;color:var(--text-secondary)">
@@ -385,6 +619,12 @@
               <button type="button" class="tab active" data-role="passenger">Ride</button>
               <button type="button" class="tab" data-role="driver">Drive</button>
             </div>
+          </div>
+          <div class="form-group" style="margin-top:var(--space-sm)">
+            <label style="display:flex;gap:8px;align-items:flex-start;font-size:0.8125rem;color:var(--text-secondary)">
+              <input type="checkbox" id="reg-tos" required style="margin-top:2px">
+              <span>I agree to the Terms of Service and Privacy Policy.</span>
+            </label>
           </div>
           <button type="submit" class="btn btn--primary btn--full btn--lg" id="register-btn">Create Account</button>
         </form>
@@ -515,11 +755,21 @@
             </div>
           </div>
 
+          <div class="card" style="margin-bottom:var(--space-md)">
+            <div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:var(--space-xs)">Have a promo code?</div>
+            <div style="display:flex;gap:var(--space-sm)">
+              <input class="form-input" id="promo-input" placeholder="Enter code">
+              <button type="button" class="btn btn--secondary btn--sm" id="promo-apply-btn">Apply</button>
+            </div>
+            <div id="promo-status" style="font-size:0.75rem;color:var(--text-muted);margin-top:6px"></div>
+          </div>
+
           <button type="submit" class="btn btn--primary btn--full btn--lg" id="find-rides-btn">
             ${Icons.search} Find Matches
           </button>
         </form>
 
+        <div id="fr-map" class="map-container" style="display:none"></div>
         <div id="match-results" style="margin-top:var(--space-xl)"></div>
       </div>
     `;
@@ -589,6 +839,7 @@
             ${Icons.car} Publish Trip
           </button>
         </form>
+        <div id="or-map" class="map-container" style="margin-top:var(--space-md);display:none"></div>
       </div>
     `;
   }
@@ -695,11 +946,43 @@
             </div>
             <div class="list-item__action">&rsaquo;</div>
           </div>
-          <div class="list-item" style="cursor:pointer">
+          <div class="list-item" id="profile-security-item" style="cursor:pointer">
             <div class="list-item__icon" style="background:rgba(139,92,246,0.12);color:#8B5CF6">${Icons.shield}</div>
             <div class="list-item__content">
               <div class="list-item__title">Security</div>
               <div class="list-item__subtitle">MFA, password, sessions</div>
+            </div>
+            <div class="list-item__action">&rsaquo;</div>
+          </div>
+          <div class="list-item" id="profile-docs-item" style="cursor:pointer">
+            <div class="list-item__icon" style="background:rgba(59,130,246,0.12);color:var(--primary)">${Icons.check}</div>
+            <div class="list-item__content">
+              <div class="list-item__title">Driver Documents</div>
+              <div class="list-item__subtitle">Upload license and verification docs</div>
+            </div>
+            <div class="list-item__action">&rsaquo;</div>
+          </div>
+          <div class="list-item" id="profile-earnings-item" style="cursor:pointer">
+            <div class="list-item__icon" style="background:rgba(16,185,129,0.12);color:var(--accent)">${Icons.star}</div>
+            <div class="list-item__content">
+              <div class="list-item__title">Earnings</div>
+              <div class="list-item__subtitle">Driver trip earnings summary</div>
+            </div>
+            <div class="list-item__action">&rsaquo;</div>
+          </div>
+          <div class="list-item" id="profile-referral-item" style="cursor:pointer">
+            <div class="list-item__icon" style="background:rgba(245,158,11,0.12);color:var(--warning)">${Icons.plus}</div>
+            <div class="list-item__content">
+              <div class="list-item__title">Referral & Points</div>
+              <div class="list-item__subtitle">Invite friends and earn rewards</div>
+            </div>
+            <div class="list-item__action">&rsaquo;</div>
+          </div>
+          <div class="list-item" id="profile-org-item" style="cursor:pointer">
+            <div class="list-item__icon" style="background:rgba(99,102,241,0.14);color:#6366F1">${Icons.users}</div>
+            <div class="list-item__content">
+              <div class="list-item__title">Organization</div>
+              <div class="list-item__subtitle">Create or join a team</div>
             </div>
             <div class="list-item__action">&rsaquo;</div>
           </div>
@@ -725,10 +1008,13 @@
   }
 
   function renderSettingsScreen() {
+    const user = Store.state.user || {};
+    const mfaEnabled = !!(user.mfaEnabled || user.mfa_enabled);
+
     return `
       <div style="padding:var(--space-lg)">
         <div style="display:flex;align-items:center;gap:var(--space-md);margin-bottom:var(--space-xl)">
-          <button class="icon-btn" id="settings-back-btn" style="background:none;border:none;cursor:pointer;font-size:1.5rem;color:var(--text-primary)">&#8592;</button>
+          <button class="icon-btn" id="settings-back-btn" aria-label="Back" style="background:none;border:none;cursor:pointer;font-size:1.5rem;color:var(--text-primary)">&#8592;</button>
           <h2 style="font-size:1.25rem;font-weight:700">Settings</h2>
         </div>
         <div class="card" style="margin-bottom:var(--space-md)">
@@ -739,6 +1025,13 @@
           <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-md) 0">
             <span>${Icons.shield} Privacy &amp; Security</span><span style="color:var(--text-muted)">&#8250;</span>
           </div>
+        </div>
+        <div class="card" style="margin-bottom:var(--space-md)">
+          <h3 style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:var(--space-md)">Account Security</h3>
+          ${mfaEnabled
+            ? '<button class="btn btn--danger btn--full" id="settings-mfa-disable-btn">Disable Two-Factor Auth</button>'
+            : '<button class="btn btn--primary btn--full" id="settings-mfa-enable-btn">Enable Two-Factor Auth</button>'
+          }
         </div>
         <div class="card" style="margin-bottom:var(--space-md)">
           <h3 style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:var(--space-md)">Appearance</h3>
@@ -1113,6 +1406,218 @@
     return 'Good evening';
   }
 
+  // ═══ MFA Screen Renderers ═══
+
+  function renderMfaVerifyScreen() {
+    return `
+      <div class="auth-screen">
+        <div class="auth-screen__header">
+          <div class="auth-screen__logo" style="font-size:2rem">🔐</div>
+          <h2 style="font-size:1.25rem;margin-bottom:var(--space-xs)">Two-Factor Authentication</h2>
+          <p class="auth-screen__subtitle">Enter the 6-digit code from your authenticator app</p>
+        </div>
+        <form id="mfa-verify-form" novalidate>
+          <div class="form-group">
+            <label class="form-label" for="mfa-code">Authentication Code</label>
+            <input class="form-input" id="mfa-code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" autocomplete="one-time-code" style="letter-spacing:0.3em;text-align:center;font-size:1.5rem">
+          </div>
+          <button type="submit" class="btn btn--primary btn--full btn--lg">Verify</button>
+        </form>
+        <p style="text-align:center;margin-top:var(--space-md);font-size:0.875rem;color:var(--text-secondary)">
+          Lost access? <a href="#" id="mfa-backup-link" style="color:var(--primary);font-weight:600">Use a backup code</a>
+        </p>
+        <p style="text-align:center;margin-top:var(--space-sm);font-size:0.8125rem">
+          <a href="#" id="mfa-cancel-link" style="color:var(--text-muted)">Cancel and go back</a>
+        </p>
+      </div>
+    `;
+  }
+
+  function renderMfaSetupScreen(setupData) {
+    return `
+      <div class="auth-screen">
+        <div class="auth-screen__header">
+          <h2>Set Up Authenticator</h2>
+          <p class="auth-screen__subtitle">Scan this QR code with Google Authenticator, Authy, or any TOTP app</p>
+        </div>
+        <div style="text-align:center;margin:var(--space-lg) 0">
+          <img src="${escapeHtml(setupData.qrCodeUrl)}" alt="QR Code" style="width:180px;height:180px;border-radius:8px">
+          <p style="font-size:0.8125rem;color:var(--text-muted);margin-top:var(--space-sm)">Or enter manually: <strong>${escapeHtml(setupData.secret)}</strong></p>
+        </div>
+        <div style="background:var(--surface-alt);border-radius:8px;padding:var(--space-md);margin-bottom:var(--space-lg)">
+          <p style="font-size:0.8125rem;font-weight:600;margin-bottom:var(--space-xs)">Backup Codes (save these!)</p>
+          <div style="font-family:monospace;font-size:0.8125rem;display:grid;grid-template-columns:1fr 1fr;gap:4px">
+            ${(setupData.backupCodes || []).map(c => `<span>${escapeHtml(c)}</span>`).join('')}
+          </div>
+        </div>
+        <form id="mfa-confirm-form" novalidate>
+          <div class="form-group">
+            <label class="form-label" for="mfa-confirm-code">Enter code to confirm</label>
+            <input class="form-input" id="mfa-confirm-code" type="text" inputmode="numeric" maxlength="6" placeholder="000000" style="letter-spacing:0.3em;text-align:center;font-size:1.5rem">
+          </div>
+          <button type="submit" class="btn btn--primary btn--full">Activate MFA</button>
+        </form>
+        <button id="mfa-setup-cancel-btn" class="btn btn--ghost btn--full" style="margin-top:var(--space-sm)">Cancel</button>
+      </div>
+    `;
+  }
+
+  // ═══ Trip Active / Navigation Screen Renderers ═══
+
+  function renderTripActiveScreen() {
+    const trip = Store.state.activeTrip || {};
+    const isDriver = trip.role === 'driver';
+    return `
+      <div class="screen" style="position:relative;height:100%">
+        <div id="trip-map" class="map-container" style="height:300px;border-radius:0"></div>
+        <div style="padding:var(--space-lg)">
+          <h2 style="margin-bottom:var(--space-xs)">${isDriver ? 'You are driving' : 'Your ride is on the way'}</h2>
+          <p style="color:var(--text-muted);font-size:0.875rem;margin-bottom:var(--space-lg)">${escapeHtml(trip.title || '')}</p>
+          <div style="display:flex;gap:var(--space-md);margin-bottom:var(--space-lg)">
+            <div style="flex:1;background:var(--surface-alt);padding:var(--space-md);border-radius:8px;text-align:center">
+              <div style="font-size:0.75rem;color:var(--text-muted)">ETA</div>
+              <div id="trip-eta" style="font-size:1.25rem;font-weight:700">--</div>
+            </div>
+            <div style="flex:1;background:var(--surface-alt);padding:var(--space-md);border-radius:8px;text-align:center">
+              <div style="font-size:0.75rem;color:var(--text-muted)">Status</div>
+              <div style="font-size:1rem;font-weight:600;color:var(--accent)">Active</div>
+            </div>
+          </div>
+          ${isDriver ? `<button id="nav-start-btn" class="btn btn--primary btn--full" style="margin-bottom:var(--space-sm)">Start Navigation</button>` : ''}
+          <button id="trip-end-btn" class="btn btn--danger btn--full" style="margin-bottom:var(--space-sm)">End Trip</button>
+        </div>
+        <button id="sos-btn" aria-label="Emergency SOS" style="position:fixed;bottom:90px;right:var(--space-lg);width:56px;height:56px;border-radius:50%;background:#EF4444;color:#fff;font-weight:700;font-size:0.875rem;border:none;box-shadow:0 4px 12px rgba(239,68,68,.5);cursor:pointer;z-index:1000">SOS</button>
+      </div>
+    `;
+  }
+
+  function renderNavigationScreen() {
+    return `
+      <div class="screen" style="position:relative">
+        <div id="nav-map" class="map-container" style="height:50vh;border-radius:0"></div>
+        <div style="background:var(--surface);padding:var(--space-lg);border-radius:12px 12px 0 0;margin-top:-12px;position:relative;z-index:1">
+          <div style="display:flex;align-items:center;gap:var(--space-md);margin-bottom:var(--space-md)">
+            <div id="nav-step-icon" style="width:40px;height:40px;background:var(--primary-bg);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0">→</div>
+            <div>
+              <div id="nav-step-text" style="font-size:1rem;font-weight:600">Loading route...</div>
+              <div id="nav-step-distance" style="font-size:0.8125rem;color:var(--text-muted)"></div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span id="nav-eta" style="font-size:0.875rem;color:var(--text-secondary)">Calculating ETA...</span>
+            <button id="nav-end-btn" class="btn btn--danger btn--sm">End Trip</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderDriverDocsScreen() {
+    const docs = [
+      { key: 'drivers_license', label: 'Driver License' },
+      { key: 'id_document', label: 'ID Document' },
+      { key: 'vehicle_registration', label: 'Vehicle Registration' },
+      { key: 'proof_of_insurance', label: 'Proof of Insurance' },
+    ];
+
+    return `
+      <div class="screen fade-in">
+        <div style="display:flex;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-lg)">
+          <button class="icon-btn" id="driver-docs-back-btn" aria-label="Back">&#8592;</button>
+          <h2 class="section-title" style="margin:0;font-size:1.25rem">Driver Documents</h2>
+        </div>
+        <p class="section-subtitle">Upload and track verification status</p>
+        <div id="driver-docs-list" class="card" style="padding:var(--space-md)">
+          ${docs.map((doc) => `
+            <div class="list-item" data-doc-type="${doc.key}">
+              <div class="list-item__content">
+                <div class="list-item__title">${doc.label}</div>
+                <div class="list-item__subtitle" id="doc-status-${doc.key}">Not uploaded</div>
+              </div>
+              <button class="btn btn--secondary btn--sm doc-upload-btn" data-doc-type="${doc.key}">Upload</button>
+            </div>
+          `).join('')}
+        </div>
+        <input type="file" id="doc-file-input" accept=".pdf,image/*" style="display:none">
+      </div>
+    `;
+  }
+
+  function renderDriverEarningsScreen() {
+    return `
+      <div class="screen fade-in">
+        <div style="display:flex;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-lg)">
+          <button class="icon-btn" id="driver-earnings-back-btn" aria-label="Back">&#8592;</button>
+          <h2 class="section-title" style="margin:0;font-size:1.25rem">Driver Earnings</h2>
+        </div>
+
+        <div id="earnings-summary" class="stats-grid" style="margin-bottom:var(--space-lg)">
+          <div class="stat-card"><div class="skeleton" style="height:40px"></div></div>
+          <div class="stat-card"><div class="skeleton" style="height:40px"></div></div>
+          <div class="stat-card"><div class="skeleton" style="height:40px"></div></div>
+        </div>
+
+        <div class="card">
+          <h4 style="font-size:0.9375rem;font-weight:700;margin-bottom:var(--space-sm)">Monthly Breakdown</h4>
+          <div id="earnings-table">
+            <div class="skeleton" style="height:120px"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderReferralScreen() {
+    return `
+      <div class="screen fade-in">
+        <div style="display:flex;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-lg)">
+          <button class="icon-btn" id="referral-back-btn" aria-label="Back">&#8592;</button>
+          <h2 class="section-title" style="margin:0;font-size:1.25rem">Referral & Points</h2>
+        </div>
+
+        <div class="card" style="margin-bottom:var(--space-md)">
+          <div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:var(--space-xs)">Your referral code</div>
+          <div id="referral-code" style="font-size:1.125rem;font-weight:800;letter-spacing:0.08em">Loading...</div>
+          <div style="display:flex;gap:var(--space-sm);margin-top:var(--space-sm)">
+            <button class="btn btn--secondary btn--sm" id="referral-copy-btn">Copy</button>
+            <button class="btn btn--secondary btn--sm" id="referral-share-btn">Share</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:var(--space-md)">
+          <div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:var(--space-xs)">Redeem a friend's code</div>
+          <div style="display:flex;gap:var(--space-sm)">
+            <input class="form-input" id="referral-input" placeholder="Enter code">
+            <button class="btn btn--primary btn--sm" id="referral-redeem-btn">Redeem</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-sm)">
+            <h4 style="font-size:0.9375rem;font-weight:700;margin:0">Points History</h4>
+            <span id="points-balance" class="chip chip--active">0 pts</span>
+          </div>
+          <div id="points-history" style="display:flex;flex-direction:column;gap:var(--space-xs)"></div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderOrganizationScreen() {
+    return `
+      <div class="screen fade-in">
+        <div style="display:flex;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-lg)">
+          <button class="icon-btn" id="organization-back-btn" aria-label="Back">&#8592;</button>
+          <h2 class="section-title" style="margin:0;font-size:1.25rem">Organization</h2>
+        </div>
+
+        <div id="organization-content">
+          <div class="skeleton" style="height:180px"></div>
+        </div>
+      </div>
+    `;
+  }
+
   // ═══ Renderer ═══
   // AbortController for the current screen's event listeners.
   // Aborted and replaced on every render so old listeners are cleaned up.
@@ -1123,11 +1628,22 @@
       const { currentScreen, isAuthenticated } = Store.state;
 
       // Auth guard
-      const publicScreens = ['login', 'register', 'forgot-password', 'reset-password'];
+      const publicScreens = ['login', 'register', 'forgot-password', 'reset-password', 'mfa-verify'];
       if (!isAuthenticated && !publicScreens.includes(currentScreen)) {
         Router.navigate('login');
         return;
       }
+
+      // Teardown map instances from the leaving screen
+      const prevScreen = Store.state.prevScreen;
+      if (prevScreen && prevScreen !== currentScreen) {
+        MapManager.destroy('fr-map');
+        MapManager.destroy('or-map');
+        MapManager.destroy('trip-map');
+        MapManager.destroy('nav-map');
+        stopLocationSharing();
+      }
+      Store.setState({ prevScreen: currentScreen });
 
       const content = document.getElementById('app-content');
       const nav = document.getElementById('bottom-nav');
@@ -1154,8 +1670,23 @@
         case 'reset-password': content.innerHTML = renderResetPasswordScreen(); break;
         case 'subscription': content.innerHTML = renderSubscriptionScreen(); break;
         case 'monthly-calendar': content.innerHTML = renderMonthlyCalendarScreen(currentSubscriptionId); break;
+        case 'mfa-verify': content.innerHTML = renderMfaVerifyScreen(); break;
+        case 'mfa-setup':
+          content.innerHTML = mfaSetupData
+            ? renderMfaSetupScreen(mfaSetupData)
+            : '<div class="screen"><div class="skeleton" style="height:220px"></div></div>';
+          break;
+        case 'trip-active': content.innerHTML = renderTripActiveScreen(); break;
+        case 'navigation': content.innerHTML = renderNavigationScreen(); break;
+        case 'driver-docs': content.innerHTML = renderDriverDocsScreen(); break;
+        case 'driver-earnings': content.innerHTML = renderDriverEarningsScreen(); break;
+        case 'referral': content.innerHTML = renderReferralScreen(); break;
+        case 'organization': content.innerHTML = renderOrganizationScreen(); break;
         default: content.innerHTML = renderHomeScreen(); break;
       }
+
+      content.setAttribute('tabindex', '-1');
+      content.focus();
 
       // Update nav active state
       document.querySelectorAll('.nav-item').forEach(item => {
@@ -1177,6 +1708,7 @@
         case 'login':
           on('login-form', 'submit', handleLogin);
           on('google-signin-btn', 'click', handleGoogleSignIn);
+          on('apple-signin-btn', 'click', handleAppleSignIn);
           on('link-to-register', 'click', (e) => { e.preventDefault(); Router.navigate('register'); });
           on('link-to-forgot', 'click', (e) => { e.preventDefault(); Router.navigate('forgot-password'); });
           break;
@@ -1215,6 +1747,7 @@
           on('find-monthly-btn', 'click', () => {
             Router.navigate('subscription');
           });
+          on('promo-apply-btn', 'click', handleApplyPromoCode);
           break;
         }
         case 'offer-ride': {
@@ -1229,6 +1762,10 @@
             e.currentTarget.classList.add('active');
             loadTrips(e.currentTarget.dataset.tab);
           });
+          onAll('.report-issue-btn', 'click', (e) => {
+            const tripId = parseInt(e.currentTarget.dataset.tripId || '0', 10);
+            if (tripId > 0) handleReportIssue(tripId);
+          });
           break;
         case 'home':
           onAll('[data-action]', 'click', (e) => Router.navigate(e.currentTarget.dataset.action));
@@ -1238,11 +1775,21 @@
           on('theme-toggle-item', 'click', toggleTheme);
           on('profile-settings-item', 'click', () => Router.navigate('settings'));
           on('profile-carbon-item', 'click', () => Router.navigate('carbon'));
+          on('profile-security-item', 'click', () => Router.navigate('settings'));
+          on('profile-docs-item', 'click', () => Router.navigate('driver-docs'));
+          on('profile-earnings-item', 'click', () => Router.navigate('driver-earnings'));
+          on('profile-referral-item', 'click', () => Router.navigate('referral'));
+          on('profile-org-item', 'click', () => Router.navigate('organization'));
           on('logout-btn', 'click', () => Auth.logout());
           break;
         case 'settings':
           on('settings-back-btn', 'click', () => Router.navigate('profile'));
           on('settings-theme-btn', 'click', toggleTheme);
+          on('settings-mfa-enable-btn', 'click', () => {
+            mfaSetupData = null;
+            Router.navigate('mfa-setup');
+          });
+          on('settings-mfa-disable-btn', 'click', handleMfaDisable);
           break;
         case 'forgot-password':
           on('forgot-form', 'submit', handleForgotPassword);
@@ -1312,6 +1859,66 @@
           if (subFormEl) subFormEl.addEventListener('submit', handleCreateSubscription, { signal: signal });
           break;
         }
+        case 'mfa-verify':
+          on('mfa-verify-form', 'submit', handleMfaVerify);
+          on('mfa-backup-link', 'click', (e) => {
+            e.preventDefault();
+            const code = prompt('Enter your backup code:');
+            if (code) handleMfaVerifyWithBackup(code);
+          });
+          on('mfa-cancel-link', 'click', (e) => {
+            e.preventDefault();
+            sessionStorage.removeItem('mfaToken');
+            Router.navigate('login');
+          });
+          break;
+        case 'mfa-setup':
+          on('mfa-confirm-form', 'submit', handleMfaConfirm);
+          on('mfa-setup-cancel-btn', 'click', () => Router.navigate('settings'));
+          break;
+        case 'trip-active': {
+          const activeTripId = Store.state.activeTrip?.id;
+          if (activeTripId) {
+            setTimeout(() => {
+              MapManager.init('trip-map', null, 14);
+              if (Store.state.activeTrip?.role === 'driver') startLocationSharing(activeTripId);
+            }, 100);
+          }
+          on('nav-start-btn', 'click', () => Router.navigate('navigation'));
+          on('trip-end-btn', 'click', () => {
+            stopLocationSharing();
+            Store.setState({ activeTrip: null });
+            Router.navigate('my-trips');
+          });
+          on('sos-btn', 'click', handleSOS);
+          break;
+        }
+        case 'navigation': {
+          setTimeout(async () => {
+            MapManager.init('nav-map', null, 14);
+            const tripId = Store.state.activeTrip?.id;
+            if (tripId) {
+              try {
+                const routeData = await API.get(`/trips/${tripId}/route`);
+                if (routeData.polyline) {
+                  const pts = decodePolyline(routeData.polyline);
+                  MapManager.setRoute('nav-map', pts);
+                  MapManager.fitRoute('nav-map');
+                }
+                if (routeData.steps && routeData.steps.length) {
+                  Store.setState({ navSteps: routeData.steps, navStepIndex: 0 });
+                  updateNavDisplay();
+                }
+              } catch { /* best-effort */ }
+            }
+          }, 100);
+          on('nav-end-btn', 'click', () => {
+            stopLocationSharing();
+            Store.setState({ activeTrip: null, navSteps: null, navStepIndex: 0 });
+            Router.navigate('my-trips');
+          });
+          break;
+        }
         case 'monthly-calendar': {
           var calBackBtn = document.getElementById('cal-back-btn');
           if (calBackBtn) calBackBtn.addEventListener('click', function() { Router.navigate('home'); }, { signal: signal });
@@ -1341,6 +1948,28 @@
           if (destToggleEl) destToggleEl.addEventListener('change', toggleDestChange, { signal: signal });
           break;
         }
+        case 'driver-docs':
+          on('driver-docs-back-btn', 'click', () => Router.navigate('profile'));
+          onAll('.doc-upload-btn', 'click', (e) => {
+            const docType = e.currentTarget.dataset.docType;
+            if (docType) handleDocumentUpload(docType);
+          });
+          break;
+        case 'driver-earnings':
+          on('driver-earnings-back-btn', 'click', () => Router.navigate('profile'));
+          break;
+        case 'referral':
+          on('referral-back-btn', 'click', () => Router.navigate('profile'));
+          on('referral-copy-btn', 'click', copyReferralCode);
+          on('referral-share-btn', 'click', shareReferralCode);
+          on('referral-redeem-btn', 'click', handleReferralRedeem);
+          break;
+        case 'organization':
+          on('organization-back-btn', 'click', () => Router.navigate('profile'));
+          on('org-create-form', 'submit', handleCreateOrganization);
+          on('org-join-form', 'submit', handleJoinOrganization);
+          on('org-copy-code-btn', 'click', copyOrganizationInviteCode);
+          break;
       }
     },
 
@@ -1360,11 +1989,173 @@
         case 'monthly-calendar':
           loadMonthlyCalendar();
           break;
+        case 'mfa-setup':
+          loadMfaSetupData();
+          break;
+        case 'driver-docs':
+          loadDriverDocs();
+          break;
+        case 'driver-earnings':
+          loadDriverEarnings();
+          break;
+        case 'referral':
+          loadReferralData();
+          break;
+        case 'organization':
+          loadOrganization();
+          break;
+        case 'navigation':
+        case 'trip-active':
+          // data loaded via bindEvents after map init
+          break;
       }
     }
   };
 
   // ═══ Event Handlers ═══
+
+  // ─── MFA Handlers ───
+
+  async function handleMfaVerify(e) {
+    e.preventDefault();
+    const code = document.getElementById('mfa-code')?.value?.trim();
+    const mfaToken = sessionStorage.getItem('mfaToken');
+    if (!code || !mfaToken) {
+      Toast.show('Please enter your 6-digit code', 'error');
+      return;
+    }
+    try {
+      const data = await API.post('/auth/mfa/verify', { mfaToken, code });
+      sessionStorage.removeItem('mfaToken');
+      localStorage.setItem(CONFIG.TOKEN_KEY, data.accessToken);
+      localStorage.setItem(CONFIG.REFRESH_KEY, data.refreshToken);
+      localStorage.setItem(CONFIG.USER_KEY, JSON.stringify(data.user));
+      Store.setState({ isAuthenticated: true, user: data.user });
+      const tosOk = await enforceTosAcceptance();
+      if (!tosOk) return;
+      Toast.show('Signed in successfully!', 'success');
+      subscribeToNotifications();
+      Router.navigate('home');
+    } catch (err) {
+      Toast.show(err.message || 'Invalid code. Please try again.', 'error');
+    }
+  }
+
+  async function handleMfaVerifyWithBackup(code) {
+    const mfaToken = sessionStorage.getItem('mfaToken');
+    if (!mfaToken) { Router.navigate('login'); return; }
+    try {
+      const data = await API.post('/auth/mfa/verify', { mfaToken, code, isBackupCode: true });
+      sessionStorage.removeItem('mfaToken');
+      localStorage.setItem(CONFIG.TOKEN_KEY, data.accessToken);
+      localStorage.setItem(CONFIG.REFRESH_KEY, data.refreshToken);
+      localStorage.setItem(CONFIG.USER_KEY, JSON.stringify(data.user));
+      Store.setState({ isAuthenticated: true, user: data.user });
+      const tosOk = await enforceTosAcceptance();
+      if (!tosOk) return;
+      Toast.show('Signed in with backup code. Please set up a new authenticator.', 'success');
+      subscribeToNotifications();
+      Router.navigate('home');
+    } catch (err) {
+      Toast.show(err.message || 'Invalid backup code.', 'error');
+    }
+  }
+
+  async function loadMfaSetupData() {
+    if (mfaSetupData) return;
+    try {
+      mfaSetupData = await API.post('/auth/mfa/setup', {});
+      if (Store.state.currentScreen === 'mfa-setup') Renderer.render();
+    } catch (err) {
+      Toast.show(err.message || 'Unable to load MFA setup right now.', 'error');
+      Router.navigate('settings');
+    }
+  }
+
+  async function handleMfaConfirm(e) {
+    e.preventDefault();
+    const code = document.getElementById('mfa-confirm-code')?.value?.trim();
+    if (!code || !/^[0-9]{6}$/.test(code)) {
+      Toast.show('Enter a valid 6-digit authentication code', 'warning');
+      return;
+    }
+
+    try {
+      await API.post('/auth/mfa/confirm', { code });
+      const user = { ...(Store.state.user || {}) };
+      user.mfaEnabled = true;
+      user.mfa_enabled = 1;
+      Store.setState({ user });
+      localStorage.setItem(CONFIG.USER_KEY, JSON.stringify(user));
+      mfaSetupData = null;
+      Toast.show('Two-factor authentication enabled.', 'success');
+      Router.navigate('settings');
+    } catch (err) {
+      Toast.show(err.message || 'Could not enable two-factor authentication.', 'error');
+    }
+  }
+
+  async function handleMfaDisable() {
+    const password = prompt('Enter your password to disable MFA:');
+    if (!password) return;
+    const code = prompt('Enter your current 6-digit authenticator code:');
+    if (!code) return;
+
+    try {
+      await API.post('/auth/mfa/disable', { password, code });
+      const user = { ...(Store.state.user || {}) };
+      user.mfaEnabled = false;
+      user.mfa_enabled = 0;
+      Store.setState({ user });
+      localStorage.setItem(CONFIG.USER_KEY, JSON.stringify(user));
+      Toast.show('Two-factor authentication disabled.', 'success');
+      Renderer.render();
+    } catch (err) {
+      Toast.show(err.message || 'Could not disable two-factor authentication.', 'error');
+    }
+  }
+
+  // ─── SOS Handler ───
+
+  async function handleSOS() {
+    const confirmed = window.confirm('Send emergency SOS alert? This will notify your emergency contacts and Klubz safety team.');
+    if (!confirmed) return;
+    try {
+      const tripId = Store.state.activeTrip?.id;
+      let lat, lng;
+      if (navigator.geolocation) {
+        await new Promise(resolve => {
+          navigator.geolocation.getCurrentPosition(pos => {
+            lat = pos.coords.latitude;
+            lng = pos.coords.longitude;
+            resolve();
+          }, () => resolve(), { timeout: 5000 });
+        });
+      }
+      await API.post('/safety/sos', { tripId, lat, lng });
+      Toast.show('SOS alert sent! Help is on the way.', 'error');
+    } catch {
+      Toast.show('SOS sent (offline mode). Please call emergency services directly.', 'warning');
+    }
+  }
+
+  // ─── Navigation Display ───
+
+  function updateNavDisplay() {
+    const steps = Store.state.navSteps;
+    const idx = Store.state.navStepIndex || 0;
+    if (!steps || !steps.length) return;
+    const step = steps[idx];
+    const stepText = document.getElementById('nav-step-text');
+    const stepDist = document.getElementById('nav-step-distance');
+    const eta = document.getElementById('nav-eta');
+    if (stepText) stepText.textContent = step.instruction || 'Continue';
+    if (stepDist) stepDist.textContent = step.distance ? `${Math.round(step.distance)} m` : '';
+    if (eta) {
+      const remaining = steps.slice(idx).reduce((s, st) => s + (st.duration || 0), 0);
+      eta.textContent = `ETA: ${Math.round(remaining / 60)} min`;
+    }
+  }
 
   // ═══ Subscription State ═══
 
@@ -1373,6 +2164,10 @@
   var subDropoffCoords = null;
   var subSelectedWeekdays = [1, 2, 3, 4, 5];
   var subSelectedMonth = null; // set during bindEvents when month radio is read
+  var activePromoCode = null;
+  var mfaSetupData = null;
+  var currentReferralCode = '';
+  var currentOrganizationInviteCode = '';
 
   // ═══ Subscription Helpers ═══
 
@@ -1641,6 +2436,10 @@
     window.location.href = '/api/auth/google';
   }
 
+  function handleAppleSignIn() {
+    window.location.href = '/api/auth/apple';
+  }
+
   async function handleForgotPassword(e) {
     e.preventDefault();
     const email = document.getElementById('forgot-email')?.value?.trim();
@@ -1716,6 +2515,7 @@
     const phone = document.getElementById('reg-phone')?.value?.trim();
     const password = document.getElementById('reg-password')?.value;
     const role = document.querySelector('#role-tabs .tab.active')?.dataset?.role || 'passenger';
+    const tosAccepted = document.getElementById('reg-tos')?.checked;
 
     if (!name || !email || !password) {
       Toast.show('Please fill in required fields', 'warning');
@@ -1725,10 +2525,45 @@
       Toast.show('Password must be at least 8 characters', 'warning');
       return;
     }
+    if (!tosAccepted) {
+      Toast.show('You must accept the Terms of Service to register.', 'warning');
+      return;
+    }
 
     try {
+      localStorage.setItem('klubz_pending_tos_version', '1.0');
       await Auth.register({ name, email, phone, password, role });
     } catch {}
+  }
+
+  async function handleApplyPromoCode() {
+    const input = document.getElementById('promo-input');
+    const statusEl = document.getElementById('promo-status');
+    const code = input?.value?.trim();
+    if (!code) {
+      activePromoCode = null;
+      if (statusEl) statusEl.textContent = 'Enter a promo code.';
+      return;
+    }
+
+    try {
+      const result = await API.get(`/promo-codes/validate?code=${encodeURIComponent(code)}`);
+      if (!result.isValid) {
+        activePromoCode = null;
+        if (statusEl) statusEl.textContent = `Promo invalid: ${String(result.reason || 'not available').replace(/_/g, ' ')}`;
+        return;
+      }
+      activePromoCode = code;
+      if (statusEl) {
+        const label = result.discountType === 'percent'
+          ? `${result.discountValue}% off`
+          : `${formatCurrency((result.discountValue || 0) / 100)} off`;
+        statusEl.textContent = `Applied: ${label}`;
+      }
+    } catch (err) {
+      activePromoCode = null;
+      if (statusEl) statusEl.textContent = err.message || 'Unable to validate promo code.';
+    }
   }
 
   async function handleFindRide(e) {
@@ -1762,6 +2597,14 @@
         Toast.show('Could not resolve one or both locations. Try a more specific address.', 'error');
         return;
       }
+
+      // Show pickup/dropoff pins on map
+      const frMapEl = document.getElementById('fr-map');
+      if (frMapEl) frMapEl.style.display = '';
+      MapManager.init('fr-map', [pickupCoords.lat, pickupCoords.lng], 13);
+      MapManager.setMarker('fr-map', 'pickup', [pickupCoords.lat, pickupCoords.lng], { label: 'Pickup' });
+      MapManager.setMarker('fr-map', 'dropoff', [dropoffCoords.lat, dropoffCoords.lng], { label: 'Dropoff' });
+      MapManager.fitRoute('fr-map');
 
       // Use the smart matching API
       const timestamp = date && time ? new Date(`${date}T${time}`).getTime() : Date.now() + 3600000;
@@ -1887,7 +2730,12 @@
       return;
     }
     try {
-      await API.post('/matching/confirm', { matchId, driverTripId, riderRequestId });
+      await API.post('/matching/confirm', {
+        matchId,
+        driverTripId,
+        riderRequestId,
+        promoCode: activePromoCode || undefined,
+      });
       Toast.show('Ride confirmed! The driver will be notified.', 'success');
       Router.navigate('my-trips');
     } catch (err) {
@@ -1991,6 +2839,9 @@
     // Round up to the next 15-minute boundary, at least 30 min from now
     now.setMinutes(Math.ceil((now.getMinutes() + 30) / 15) * 15, 0, 0);
     timeEl.value = now.toTimeString().slice(0, 5);
+    activePromoCode = null;
+    const promoStatus = document.getElementById('promo-status');
+    if (promoStatus) promoStatus.textContent = '';
   }
 
   async function loadCarbonStats() {
@@ -2070,7 +2921,22 @@
       const statusMap = { upcoming: 'scheduled', completed: 'completed', cancelled: 'cancelled' };
       const data = await API.get(`/users/trips?status=${statusMap[status] || ''}`);
       if (data.trips && data.trips.length > 0) {
-        container.innerHTML = data.trips.map(renderTripCard).join('');
+        container.innerHTML = data.trips.map((trip) => {
+          const card = renderTripCard(trip);
+          if (status === 'completed' && trip.participantRole === 'rider') {
+            return `${card}
+              <button class="btn btn--ghost btn--sm report-issue-btn" data-trip-id="${trip.id}" style="margin-top:-6px;margin-bottom:var(--space-md)">
+                Report Issue
+              </button>`;
+          }
+          return card;
+        }).join('');
+        container.querySelectorAll('.report-issue-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const tripId = parseInt(btn.dataset.tripId || '0', 10);
+            if (tripId > 0) handleReportIssue(tripId);
+          });
+        });
       } else {
         container.innerHTML = `
           <div class="empty-state">
@@ -2124,6 +2990,281 @@
         <p class="error-text" style="color:var(--danger);font-size:0.875rem">Could not load subscription.</p>
       `;
     }
+  }
+
+  async function loadDriverDocs() {
+    try {
+      const data = await API.get('/users/documents');
+      const docsByType = {};
+      (data.documents || []).forEach((doc) => {
+        if (!docsByType[doc.doc_type]) docsByType[doc.doc_type] = doc;
+      });
+
+      ['drivers_license', 'id_document', 'vehicle_registration', 'proof_of_insurance'].forEach((type) => {
+        const statusEl = document.getElementById(`doc-status-${type}`);
+        const uploadBtn = document.querySelector(`.doc-upload-btn[data-doc-type="${type}"]`);
+        const doc = docsByType[type];
+        if (statusEl) {
+          if (!doc) statusEl.textContent = 'Not uploaded';
+          else statusEl.textContent = `Status: ${String(doc.status || 'pending').replace('_', ' ')}`;
+        }
+        if (uploadBtn) {
+          uploadBtn.textContent = doc ? 'Re-upload' : 'Upload';
+        }
+      });
+    } catch {
+      Toast.show('Unable to load driver documents.', 'error');
+    }
+  }
+
+  async function handleDocumentUpload(docType) {
+    const input = document.getElementById('doc-file-input');
+    if (!input) return;
+
+    input.value = '';
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        const uploadData = await API.post('/users/documents/upload-url', { docType });
+        const token = localStorage.getItem(CONFIG.TOKEN_KEY);
+        const uploadRes = await fetch(`${CONFIG.API_BASE}/users/documents/r2-upload?uploadToken=${encodeURIComponent(uploadData.uploadToken)}`, {
+          method: 'POST',
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            'Content-Type': file.type || 'application/octet-stream',
+          },
+          body: file,
+        });
+        if (!uploadRes.ok) {
+          const err = await uploadRes.json().catch(() => ({}));
+          throw new Error(err.error?.message || 'Failed to upload file');
+        }
+        await API.post('/users/documents', {
+          fileKey: uploadData.fileKey,
+          docType,
+          fileName: file.name,
+        });
+        Toast.show('Document uploaded successfully.', 'success');
+        loadDriverDocs();
+      } catch (err) {
+        Toast.show(err.message || 'Document upload failed.', 'error');
+      }
+    };
+    input.click();
+  }
+
+  async function loadDriverEarnings() {
+    const summaryEl = document.getElementById('earnings-summary');
+    const tableEl = document.getElementById('earnings-table');
+    if (!summaryEl || !tableEl) return;
+
+    try {
+      const data = await API.get('/users/earnings');
+      const summary = data.summary || {};
+      const months = data.months || [];
+
+      summaryEl.innerHTML = `
+        <div class="stat-card">
+          <div class="stat-card__value">${formatCurrency(summary.totalEarnings || 0)}</div>
+          <div class="stat-card__label">Total</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__value">${summary.totalTrips || 0}</div>
+          <div class="stat-card__label">Trips</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__value">${formatCurrency(summary.avgPerTrip || 0)}</div>
+          <div class="stat-card__label">Avg / Trip</div>
+        </div>
+      `;
+
+      if (!months.length) {
+        tableEl.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:var(--space-md)">No completed driver trips yet.</p>';
+        return;
+      }
+
+      tableEl.innerHTML = months.map((row) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-sm) 0;border-bottom:1px solid var(--border)">
+          <div>
+            <div style="font-weight:600">${escapeHtml(row.month)}</div>
+            <div style="font-size:0.8125rem;color:var(--text-muted)">${row.trip_count} trip${row.trip_count === 1 ? '' : 's'}</div>
+          </div>
+          <div style="font-weight:700">${formatCurrency(row.estimated_earnings || 0)}</div>
+        </div>
+      `).join('');
+    } catch {
+      tableEl.innerHTML = '<p style="color:var(--danger);text-align:center;padding:var(--space-md)">Unable to load earnings.</p>';
+    }
+  }
+
+  async function handleReportIssue(tripId) {
+    const reason = prompt('Describe the issue (at least 10 characters):');
+    if (!reason) return;
+    if (reason.trim().length < 10) {
+      Toast.show('Please provide more detail in your report.', 'warning');
+      return;
+    }
+    try {
+      await API.post('/disputes', { tripId, reason: reason.trim() });
+      Toast.show('Your report has been submitted.', 'success');
+    } catch (err) {
+      Toast.show(err.message || 'Unable to submit report.', 'error');
+    }
+  }
+
+  async function loadReferralData() {
+    try {
+      const [ref, points] = await Promise.all([
+        API.get('/users/referral'),
+        API.get('/users/points'),
+      ]);
+
+      currentReferralCode = ref.code || '';
+      const referralCodeEl = document.getElementById('referral-code');
+      if (referralCodeEl) referralCodeEl.textContent = currentReferralCode || 'Unavailable';
+
+      const balanceEl = document.getElementById('points-balance');
+      if (balanceEl) balanceEl.textContent = `${points.balance || 0} pts`;
+
+      const historyEl = document.getElementById('points-history');
+      if (!historyEl) return;
+      const history = points.history || [];
+      if (!history.length) {
+        historyEl.innerHTML = '<p style="color:var(--text-muted);font-size:0.875rem">No points activity yet.</p>';
+        return;
+      }
+      historyEl.innerHTML = history.map((item) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-xs) 0;border-bottom:1px solid var(--border)">
+          <span style="font-size:0.8125rem">${escapeHtml(item.reason)}</span>
+          <span class="chip chip--${item.delta >= 0 ? 'active' : 'cancelled'}">${item.delta >= 0 ? '+' : ''}${item.delta}</span>
+        </div>
+      `).join('');
+    } catch {
+      Toast.show('Unable to load referral data.', 'error');
+    }
+  }
+
+  function copyReferralCode() {
+    if (!currentReferralCode) return;
+    navigator.clipboard.writeText(currentReferralCode).then(() => {
+      Toast.show('Referral code copied.', 'success');
+    }).catch(() => {
+      Toast.show('Could not copy referral code.', 'error');
+    });
+  }
+
+  async function shareReferralCode() {
+    if (!currentReferralCode) return;
+    const text = `Join me on Klubz! Use my referral code: ${currentReferralCode}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ text });
+        return;
+      } catch {
+        // fall back to copy
+      }
+    }
+    await navigator.clipboard.writeText(text).catch(() => {});
+    Toast.show('Referral message copied.', 'success');
+  }
+
+  async function handleReferralRedeem() {
+    const input = document.getElementById('referral-input');
+    const code = input?.value?.trim();
+    if (!code) {
+      Toast.show('Enter a referral code first.', 'warning');
+      return;
+    }
+    try {
+      await API.post('/referrals/redeem', { referralCode: code });
+      Toast.show('Referral redeemed. 200 points added!', 'success');
+      if (input) input.value = '';
+      loadReferralData();
+    } catch (err) {
+      Toast.show(err.message || 'Could not redeem referral code.', 'error');
+    }
+  }
+
+  async function loadOrganization() {
+    const content = document.getElementById('organization-content');
+    if (!content) return;
+
+    try {
+      const data = await API.get('/organizations/current');
+      const org = data.organization;
+      if (!org) {
+        content.innerHTML = `
+          <div class="card" style="margin-bottom:var(--space-md)">
+            <h4 style="font-size:0.9375rem;font-weight:700;margin-bottom:var(--space-sm)">Create an organization</h4>
+            <form id="org-create-form">
+              <input class="form-input" id="org-name-input" placeholder="Organization name" required style="margin-bottom:var(--space-sm)">
+              <button class="btn btn--primary btn--full" type="submit">Create</button>
+            </form>
+          </div>
+          <div class="card">
+            <h4 style="font-size:0.9375rem;font-weight:700;margin-bottom:var(--space-sm)">Join with invite code</h4>
+            <form id="org-join-form" style="display:flex;gap:var(--space-sm)">
+              <input class="form-input" id="org-invite-input" placeholder="Invite code" required>
+              <button class="btn btn--secondary" type="submit">Join</button>
+            </form>
+          </div>
+        `;
+      } else {
+        currentOrganizationInviteCode = org.inviteCode || '';
+        content.innerHTML = `
+          <div class="card">
+            <div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:var(--space-xs)">Organization</div>
+            <div style="font-size:1.125rem;font-weight:800;margin-bottom:var(--space-xs)">${escapeHtml(org.name)}</div>
+            <div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:var(--space-sm)">${org.memberCount || 0} members</div>
+            <div style="display:flex;gap:var(--space-sm);align-items:center">
+              <span class="chip chip--active">${escapeHtml(currentOrganizationInviteCode || 'No invite code')}</span>
+              <button class="btn btn--secondary btn--sm" id="org-copy-code-btn">Copy Code</button>
+            </div>
+          </div>
+        `;
+      }
+      content.querySelector('#org-create-form')?.addEventListener('submit', handleCreateOrganization);
+      content.querySelector('#org-join-form')?.addEventListener('submit', handleJoinOrganization);
+      content.querySelector('#org-copy-code-btn')?.addEventListener('click', copyOrganizationInviteCode);
+    } catch {
+      content.innerHTML = '<p style="color:var(--danger)">Unable to load organization data.</p>';
+    }
+  }
+
+  async function handleCreateOrganization(e) {
+    e.preventDefault();
+    const name = document.getElementById('org-name-input')?.value?.trim();
+    if (!name) return;
+    try {
+      await API.post('/organizations', { name });
+      Toast.show('Organization created successfully.', 'success');
+      loadOrganization();
+    } catch (err) {
+      Toast.show(err.message || 'Could not create organization.', 'error');
+    }
+  }
+
+  async function handleJoinOrganization(e) {
+    e.preventDefault();
+    const inviteCode = document.getElementById('org-invite-input')?.value?.trim();
+    if (!inviteCode) return;
+    try {
+      await API.post('/organizations/join', { inviteCode });
+      Toast.show('Joined organization successfully.', 'success');
+      loadOrganization();
+    } catch (err) {
+      Toast.show(err.message || 'Could not join organization.', 'error');
+    }
+  }
+
+  function copyOrganizationInviteCode() {
+    if (!currentOrganizationInviteCode) return;
+    navigator.clipboard.writeText(currentOrganizationInviteCode).then(() => {
+      Toast.show('Invite code copied.', 'success');
+    }).catch(() => {
+      Toast.show('Unable to copy invite code.', 'error');
+    });
   }
 
   function toggleTheme() {
@@ -2181,7 +3322,7 @@
       </header>
 
       <!-- Toast container -->
-      <div class="toast-container" id="toast-container"></div>
+      <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
       <!-- Main content -->
       <main class="app-content" id="app-content"></main>
@@ -2265,6 +3406,20 @@
     bindShellEvents();
     Renderer.render();
     registerSW();
+
+    // Wire SSE: connect when authenticated, disconnect on logout
+    Store.subscribe((state) => {
+      if (state.isAuthenticated) SSEClient.connect();
+      else SSEClient.disconnect();
+    });
+    if (Store.state.isAuthenticated) {
+      SSEClient.connect();
+      subscribeToNotifications();
+    }
+
+    // Restore notification badge count
+    const badge = document.querySelector('.header-btn__badge');
+    if (badge) badge.textContent = String(NotificationBadge._count);
 
     // Handle redirects with URL query parameters (email verification, OAuth callbacks)
     const params = new URLSearchParams(window.location.search);

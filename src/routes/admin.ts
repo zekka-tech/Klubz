@@ -5,6 +5,7 @@
  */
 
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { Context } from 'hono';
 import type { AppEnv, AuthUser, D1Database } from '../types';
 import { authMiddleware } from '../middleware/auth';
@@ -661,6 +662,160 @@ adminRoutes.post('/users/:userId/export', async (c) => {
     logger.error('Data export error', err instanceof Error ? err : undefined, { error: parsed.message });
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to export user data' } }, 500);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Promo Code Management
+// ---------------------------------------------------------------------------
+
+const promoCodeSchema = z.object({
+  code: z.string().min(3).max(30).regex(/^[A-Z0-9_-]+$/i, 'Alphanumeric, hyphens and underscores only'),
+  discountType: z.enum(['percent', 'fixed_cents']),
+  discountValue: z.number().int().positive(),
+  maxUses: z.number().int().positive().optional(),
+  minFareCents: z.number().int().min(0).optional(),
+  expiresAt: z.string().optional(),
+}).strict();
+
+// POST /api/admin/promo-codes
+adminRoutes.post('/promo-codes', async (c) => {
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+  const parsed = promoCodeSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid promo code data' } }, 400);
+  }
+  const { code, discountType, discountValue, maxUses, minFareCents, expiresAt } = parsed.data;
+  const db = getDB(c);
+  try {
+    const result = await db
+      .prepare(
+        `INSERT INTO promo_codes (code, discount_type, discount_value, max_uses, min_fare_cents, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(code.toUpperCase(), discountType, discountValue, maxUses ?? null, minFareCents ?? 0, expiresAt ?? null)
+      .run();
+    return c.json({ promoCodeId: result.meta?.last_row_id, code: code.toUpperCase() }, 201);
+  } catch (err) {
+    const e = err as { message?: string };
+    if (e?.message?.includes('UNIQUE')) {
+      return c.json({ error: { code: 'CONFLICT', message: 'Promo code already exists' } }, 409);
+    }
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create promo code' } }, 500);
+  }
+});
+
+// GET /api/admin/promo-codes
+adminRoutes.get('/promo-codes', async (c) => {
+  const db = getDB(c);
+  const { results } = await db
+    .prepare(
+      `SELECT id, code, discount_type, discount_value, max_uses, uses_count, min_fare_cents, expires_at, is_active, created_at
+       FROM promo_codes ORDER BY created_at DESC LIMIT 100`,
+    )
+    .all<{ id: number; code: string; discount_type: string; discount_value: number; max_uses: number | null; uses_count: number; min_fare_cents: number; expires_at: string | null; is_active: number; created_at: string }>();
+  return c.json({ promoCodes: results ?? [] });
+});
+
+// PUT /api/admin/promo-codes/:id
+adminRoutes.put('/promo-codes/:id', async (c) => {
+  const id = parseInt(c.req.param('id'));
+  if (isNaN(id)) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid ID' } }, 400);
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+  const isActive = (body as { isActive?: boolean })?.isActive;
+  if (typeof isActive !== 'boolean') {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'isActive boolean required' } }, 400);
+  }
+  const db = getDB(c);
+  await db.prepare('UPDATE promo_codes SET is_active = ? WHERE id = ?').bind(isActive ? 1 : 0, id).run();
+  return c.json({ success: true });
+});
+
+// ---------------------------------------------------------------------------
+// Dispute Management
+// ---------------------------------------------------------------------------
+
+// GET /api/admin/disputes
+adminRoutes.get('/disputes', async (c) => {
+  const status = c.req.query('status') || 'open';
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'));
+  const limit = Math.min(50, parseInt(c.req.query('limit') || '20'));
+  const offset = (page - 1) * limit;
+  const db = getDB(c);
+  const { results } = await db
+    .prepare(
+      `SELECT d.*, u.email as filed_by_email
+       FROM disputes d JOIN users u ON u.id = d.filed_by
+       WHERE d.status = ? ORDER BY d.created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .bind(status, limit, offset)
+    .all<{ id: number; trip_id: number; filed_by: number; filed_by_email: string; reason: string; status: string; resolution: string | null; refund_issued: number; created_at: string }>();
+  const total = await db.prepare('SELECT COUNT(*) as cnt FROM disputes WHERE status = ?').bind(status).first<{ cnt: number }>();
+  return c.json({ disputes: results ?? [], pagination: { page, limit, total: total?.cnt ?? 0 } });
+});
+
+// PUT /api/admin/disputes/:id
+adminRoutes.put('/disputes/:id', async (c) => {
+  const admin = c.get('user') as AuthUser;
+  const id = parseInt(c.req.param('id'));
+  if (isNaN(id)) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid ID' } }, 400);
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+  const { resolution, refundAmountCents } = (body as { resolution?: string; refundAmountCents?: number }) || {};
+  if (!resolution) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'resolution required' } }, 400);
+  const db = getDB(c);
+  const dispute = await db.prepare('SELECT id FROM disputes WHERE id = ?').bind(id).first<{ id: number }>();
+  if (!dispute) return c.json({ error: { code: 'NOT_FOUND', message: 'Dispute not found' } }, 404);
+  const hasRefund = typeof refundAmountCents === 'number' && refundAmountCents > 0;
+  await db
+    .prepare(
+      `UPDATE disputes SET status = 'resolved', resolution = ?, refund_issued = ?, refund_amount_cents = ?,
+       admin_id = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    )
+    .bind(resolution, hasRefund ? 1 : 0, hasRefund ? refundAmountCents : null, admin.id, id)
+    .run();
+  return c.json({ success: true, disputeId: id });
+});
+
+// ---------------------------------------------------------------------------
+// Analytics endpoints
+// ---------------------------------------------------------------------------
+
+// GET /api/admin/analytics/trips-over-time
+adminRoutes.get('/analytics/trips-over-time', async (c) => {
+  const db = getDB(c);
+  const { results } = await db
+    .prepare(
+      `SELECT strftime('%Y-W%W', created_at) as week, COUNT(*) as count
+       FROM trips WHERE created_at >= datetime('now', '-90 days')
+       GROUP BY week ORDER BY week ASC`,
+    )
+    .all<{ week: string; count: number }>();
+  return c.json({ data: results ?? [] });
+});
+
+// GET /api/admin/analytics/heatmap
+adminRoutes.get('/analytics/heatmap', async (c) => {
+  const db = getDB(c);
+  // Pickup coords stored in matching_rider_requests as lat/lng
+  const { results } = await db
+    .prepare(
+      `SELECT pickup_lat as lat, pickup_lng as lng, COUNT(*) as weight
+       FROM matching_rider_requests
+       WHERE pickup_lat IS NOT NULL AND pickup_lng IS NOT NULL
+         AND created_at >= datetime('now', '-30 days')
+       GROUP BY round(pickup_lat, 3), round(pickup_lng, 3)
+       LIMIT 500`,
+    )
+    .all<{ lat: number; lng: number; weight: number }>();
+  return c.json({ points: results ?? [] });
 });
 
 export default adminRoutes;

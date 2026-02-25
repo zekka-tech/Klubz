@@ -859,6 +859,12 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   height: 300px;
 }
 
+.map-container.map-fullscreen {
+  height: 50vh;
+  border-radius: 0;
+  margin-bottom: 0;
+}
+
 .map-container__overlay {
   position: absolute;
   inset: 0;

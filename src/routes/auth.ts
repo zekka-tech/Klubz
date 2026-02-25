@@ -13,9 +13,10 @@
  */
 
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { z } from 'zod';
-import type { AppEnv } from '../types';
-import { createToken, verifyToken, issueTokenPair } from '../middleware/auth';
+import type { AppEnv, AuthUser } from '../types';
+import { createToken, verifyToken, issueTokenPair, authMiddleware } from '../middleware/auth';
 import { hashPassword, verifyPassword, hashForLookup, isLegacyHash, encryptPII, safeDecryptPII } from '../lib/encryption';
 import { logger } from '../lib/logger';
 import { getDBOptional } from '../lib/db';
@@ -103,10 +104,93 @@ function generateSecureToken(): string {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function base64urlEncode(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64urlDecodeToText(value: string): string {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = (4 - (padded.length % 4)) % 4;
+  const decoded = atob(padded + '='.repeat(pad));
+  return decoded;
+}
+
+function parsePemPkcs8(pem: string): ArrayBuffer {
+  const cleaned = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+    .replace(/-----END PRIVATE KEY-----/g, '')
+    .replace(/\\n/g, '')
+    .replace(/\s+/g, '');
+  const raw = atob(cleaned);
+  const bytes = Uint8Array.from(raw, (ch) => ch.charCodeAt(0));
+  return bytes.buffer;
+}
+
+async function createAppleClientSecret(c: {
+  env?: {
+    APPLE_CLIENT_ID?: string;
+    APPLE_TEAM_ID?: string;
+    APPLE_KEY_ID?: string;
+    APPLE_PRIVATE_KEY?: string;
+  };
+}): Promise<string> {
+  const clientId = c.env?.APPLE_CLIENT_ID;
+  const teamId = c.env?.APPLE_TEAM_ID;
+  const keyId = c.env?.APPLE_KEY_ID;
+  const privateKeyPem = c.env?.APPLE_PRIVATE_KEY;
+
+  if (!clientId || !teamId || !keyId || !privateKeyPem) {
+    throw new Error('Apple OAuth is not configured');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: 'ES256', kid: keyId, typ: 'JWT' };
+  const payload = {
+    iss: teamId,
+    aud: 'https://appleid.apple.com',
+    sub: clientId,
+    iat: now,
+    exp: now + 5 * 60,
+  };
+
+  const signingInput = `${base64urlEncode(new TextEncoder().encode(JSON.stringify(header)))}.${base64urlEncode(new TextEncoder().encode(JSON.stringify(payload)))}`;
+  const privateKey = await crypto.subtle.importKey(
+    'pkcs8',
+    parsePemPkcs8(privateKeyPem),
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    privateKey,
+    new TextEncoder().encode(signingInput),
+  );
+  return `${signingInput}.${base64urlEncode(signature)}`;
+}
+
+function decodeJwtPayload<T>(jwt: string): T | null {
+  const parts = jwt.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const json = base64urlDecodeToText(parts[1]);
+    return JSON.parse(json) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** SESSIONS KV prefix for email verification tokens */
 const KV_EMAIL_VERIFY_PREFIX = 'ev:';
 /** SESSIONS KV prefix for password reset tokens */
 const KV_PWD_RESET_PREFIX = 'pr:';
+/** SESSIONS KV prefix for MFA challenge tokens issued at login */
+const KV_MFA_TOKEN_PREFIX = 'mfa:token:';
+/** SESSIONS KV prefix for MFA setup pending-confirmation tokens */
+const KV_MFA_SETUP_PREFIX = 'mfa:setup:';
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -177,6 +261,20 @@ authRoutes.post('/login', async (c) => {
             .run();
           logger.info('Migrated legacy PBKDF2 hash to bcrypt', withRequestContext(c, { userId: user.id }));
         } catch { /* best-effort re-hash */ }
+      }
+
+      // MFA gate — if MFA is enabled, issue a short-lived challenge token instead of JWT
+      if (user.mfa_enabled) {
+        const mfaToken = generateSecureToken();
+        const sessions = c.env?.SESSIONS;
+        if (sessions) {
+          await sessions.put(
+            `${KV_MFA_TOKEN_PREFIX}${mfaToken}`,
+            JSON.stringify({ userId: user.id }),
+            { expirationTtl: 300 }, // 5 minutes to complete MFA
+          );
+        }
+        return c.json({ mfaRequired: true, mfaToken });
       }
 
       // Update last login
@@ -578,18 +676,271 @@ authRoutes.post('/reset-password', async (c) => {
   }
 });
 
-// ── MFA Verify ─────────────────────────────────────────────────────────────
+// ── MFA — shared TOTP helpers ───────────────────────────────────────────────
+
+/** Generate a cryptographically random Base32 TOTP secret (20 bytes = 160 bits). */
+function generateTOTPSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let result = '';
+  for (let i = 0; i < bytes.length; i += 5) {
+    const b0 = bytes[i] || 0;
+    const b1 = bytes[i + 1] || 0;
+    const b2 = bytes[i + 2] || 0;
+    const b3 = bytes[i + 3] || 0;
+    const b4 = bytes[i + 4] || 0;
+    result += base32Chars[b0 >> 3];
+    result += base32Chars[((b0 & 0x07) << 2) | (b1 >> 6)];
+    result += base32Chars[(b1 >> 1) & 0x1f];
+    result += base32Chars[((b1 & 0x01) << 4) | (b2 >> 4)];
+    result += base32Chars[((b2 & 0x0f) << 1) | (b3 >> 7)];
+    result += base32Chars[(b3 >> 2) & 0x1f];
+    result += base32Chars[((b3 & 0x03) << 3) | (b4 >> 5)];
+    result += base32Chars[b4 & 0x1f];
+  }
+  return result;
+}
+
+/** Decode a Base32 string to bytes (standard RFC 4648 Base32). */
+function base32Decode(encoded: string): Uint8Array {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const cleaned = encoded.toUpperCase().replace(/=+$/, '');
+  let bits = 0;
+  let value = 0;
+  const output: number[] = [];
+  for (const char of cleaned) {
+    const idx = chars.indexOf(char);
+    if (idx === -1) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      output.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return new Uint8Array(output);
+}
+
+/** Generate a TOTP code for the given secret and Unix time counter. */
+async function generateTOTP(secret: string, counter: number): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new Uint8Array(base32Decode(secret)),
+    { name: 'HMAC', hash: 'SHA-1' },
+    false,
+    ['sign'],
+  );
+  const buf = new ArrayBuffer(8);
+  const view = new DataView(buf);
+  view.setUint32(4, counter, false); // big-endian counter in upper 4 bytes
+  const hmac = new Uint8Array(await crypto.subtle.sign('HMAC', key, buf));
+  const offset = hmac[19] & 0x0f;
+  const code = ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  return String(code % 1_000_000).padStart(6, '0');
+}
+
+/** Verify a TOTP code against a secret with a ±1 step window (30s each). */
+async function verifyTOTP(secret: string, code: string): Promise<boolean> {
+  const counter = Math.floor(Date.now() / 1000 / 30);
+  for (const delta of [-1, 0, 1]) {
+    if (await generateTOTP(secret, counter + delta) === code) return true;
+  }
+  return false;
+}
+
+// ── MFA Setup — generates secret, returns QR URL ───────────────────────────
+
+authRoutes.post('/mfa/setup', authMiddleware(), async (c) => {
+  const user = c.get('user') as AuthUser;
+  const db = getDBOptional(c);
+  if (!db) return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Service unavailable' } }, 503);
+
+  const secret = generateTOTPSecret();
+  const issuer = 'Klubz';
+  const label = encodeURIComponent(`${issuer}:${user.email}`);
+  const qrCodeUrl = `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+
+  // Store pending secret in KV until confirmed (10 min TTL)
+  const sessions = c.env?.SESSIONS;
+  if (sessions) {
+    await sessions.put(
+      `${KV_MFA_SETUP_PREFIX}${user.id}`,
+      JSON.stringify({ secret }),
+      { expirationTtl: 600 },
+    );
+  }
+
+  // Generate 8 backup codes (hex)
+  const backupCodes: string[] = Array.from({ length: 8 }, () =>
+    Array.from(crypto.getRandomValues(new Uint8Array(4)))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join(''),
+  );
+
+  return c.json({ secret, qrCodeUrl, backupCodes });
+});
+
+// ── MFA Confirm — verifies first code, enables MFA ─────────────────────────
+
+authRoutes.post('/mfa/confirm', authMiddleware(), async (c) => {
+  const user = c.get('user') as AuthUser;
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+
+  const code = (body as { code?: string })?.code?.trim() ?? '';
+  if (!/^\d{6}$/.test(code)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: '6-digit code required' } }, 400);
+  }
+
+  const sessions = c.env?.SESSIONS;
+  const db = getDBOptional(c);
+  if (!db || !sessions) return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Service unavailable' } }, 503);
+
+  const raw = await sessions.get(`${KV_MFA_SETUP_PREFIX}${user.id}`, 'text');
+  if (!raw) {
+    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'MFA setup session expired. Please restart setup.' } }, 400);
+  }
+  const { secret } = JSON.parse(raw) as { secret: string };
+
+  const valid = await verifyTOTP(secret, code);
+  if (!valid) {
+    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Invalid code. Check the time on your authenticator app.' } }, 400);
+  }
+
+  const encKey = c.env?.ENCRYPTION_KEY;
+  const encSecret = encKey ? await encryptPII(secret, encKey, user.id).catch(() => secret) : secret;
+
+  await db
+    .prepare('UPDATE users SET mfa_enabled = 1, mfa_secret_encrypted = ? WHERE id = ?')
+    .bind(encSecret, user.id)
+    .run();
+
+  await sessions.delete(`${KV_MFA_SETUP_PREFIX}${user.id}`);
+
+  return c.json({ success: true, message: 'MFA enabled successfully.' });
+});
+
+// ── MFA Verify — validates code during login ────────────────────────────────
 
 authRoutes.post('/mfa/verify', async (c) => {
-  // MFA is not yet fully implemented. Use password authentication only.
-  // To implement: Use speakeasy.totp.verify() with user's mfa_secret_encrypted
-  return c.json({
-    error: {
-      code: 'NOT_IMPLEMENTED',
-      message: 'MFA verification is not yet implemented. Please use password authentication.',
-      status: 501
-    }
-  }, 501);
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+
+  const { mfaToken, code } = (body as { mfaToken?: string; code?: string }) || {};
+  if (!mfaToken || !code) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'mfaToken and code required' } }, 400);
+  }
+
+  const sessions = c.env?.SESSIONS;
+  const db = getDBOptional(c);
+  if (!db || !sessions) return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Service unavailable' } }, 503);
+
+  const raw = await sessions.get(`${KV_MFA_TOKEN_PREFIX}${mfaToken}`, 'text');
+  if (!raw) {
+    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'MFA session expired. Please log in again.' } }, 401);
+  }
+  const { userId } = JSON.parse(raw) as { userId: number };
+
+  const userRow = await db
+    .prepare('SELECT id, email, first_name_encrypted, last_name_encrypted, role, mfa_secret_encrypted FROM users WHERE id = ?')
+    .bind(userId)
+    .first<{ id: number; email: string; first_name_encrypted: string | null; last_name_encrypted: string | null; role: string; mfa_secret_encrypted: string | null }>();
+
+  if (!userRow || !userRow.mfa_secret_encrypted) {
+    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'MFA not configured' } }, 401);
+  }
+
+  const encKey = c.env?.ENCRYPTION_KEY;
+  const secret = await safeDecryptPII(userRow.mfa_secret_encrypted, encKey, userId) ?? userRow.mfa_secret_encrypted;
+
+  const valid = await verifyTOTP(secret, code.trim());
+  if (!valid) {
+    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Invalid authentication code' } }, 401);
+  }
+
+  // Code valid — issue full JWT pair
+  await sessions.delete(`${KV_MFA_TOKEN_PREFIX}${mfaToken}`);
+
+  const decFirst = await safeDecryptPII(userRow.first_name_encrypted, encKey, userId);
+  const decLast = await safeDecryptPII(userRow.last_name_encrypted, encKey, userId);
+  const userName = [decFirst, decLast].filter(Boolean).join(' ') || userRow.email.split('@')[0];
+
+  const jwtSecret = getJWTSecret(c);
+  const { accessToken, refreshToken } = await issueTokenPair(
+    { id: userRow.id, email: userRow.email, name: userName, role: userRow.role, organizationId: undefined },
+    jwtSecret,
+  );
+
+  // Persist refresh token in sessions table
+  try {
+    const tokenHash = await hashToken(refreshToken);
+    const sessionId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
+    await db
+      .prepare(`INSERT INTO sessions (id, user_id, token_hash, ip_address, user_agent, expires_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .bind(sessionId, userRow.id, tokenHash, getAnonymizedIP(c), getUserAgent(c), expiresAt)
+      .run();
+  } catch { /* best-effort */ }
+
+  return c.json({ accessToken, refreshToken, user: { id: userRow.id, email: userRow.email, name: userName, role: userRow.role, mfaEnabled: true } });
+});
+
+// ── MFA Disable ─────────────────────────────────────────────────────────────
+
+authRoutes.post('/mfa/disable', authMiddleware(), async (c) => {
+  const user = c.get('user') as AuthUser;
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+
+  const { code, password } = (body as { code?: string; password?: string }) || {};
+  if (!code || !password) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'code and password required' } }, 400);
+  }
+
+  const db = getDBOptional(c);
+  if (!db) return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Service unavailable' } }, 503);
+
+  const userRow = await db
+    .prepare('SELECT id, password_hash, mfa_secret_encrypted FROM users WHERE id = ?')
+    .bind(user.id)
+    .first<{ id: number; password_hash: string; mfa_secret_encrypted: string | null }>();
+
+  if (!userRow) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
+  }
+
+  const pwValid = await verifyPassword(password, userRow.password_hash);
+  if (!pwValid) {
+    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Invalid password' } }, 401);
+  }
+
+  if (!userRow.mfa_secret_encrypted) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'MFA is not enabled' } }, 400);
+  }
+
+  const encKey = c.env?.ENCRYPTION_KEY;
+  const secret = await safeDecryptPII(userRow.mfa_secret_encrypted, encKey, user.id) ?? userRow.mfa_secret_encrypted;
+
+  const valid = await verifyTOTP(secret, code.trim());
+  if (!valid) {
+    return c.json({ error: { code: 'AUTHENTICATION_ERROR', message: 'Invalid authentication code' } }, 401);
+  }
+
+  await db
+    .prepare('UPDATE users SET mfa_enabled = 0, mfa_secret_encrypted = NULL, backup_codes_encrypted = NULL WHERE id = ?')
+    .bind(user.id)
+    .run();
+
+  return c.json({ success: true, message: 'MFA disabled.' });
 });
 
 // ── Token Refresh ──────────────────────────────────────────────────────────
@@ -1027,6 +1378,333 @@ authRoutes.get('/google/callback', async (c) => {
   }
 });
 
+// ── Apple OAuth — Initiate ─────────────────────────────────────────────────
+
+authRoutes.get('/apple', async (c) => {
+  const clientId = c.env?.APPLE_CLIENT_ID;
+  const kv = c.env?.SESSIONS;
+  if (!clientId || !kv) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Apple Sign-in is not configured' } }, 503);
+  }
+
+  const appUrl = c.env?.APP_URL || 'https://klubz.com';
+  const state = crypto.randomUUID();
+  await kv.put(`oauth:state:${state}`, '1', { expirationTtl: 600 });
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: `${appUrl}/api/auth/apple/callback`,
+    response_type: 'code',
+    response_mode: 'form_post',
+    scope: 'name email',
+    state,
+  });
+
+  return c.redirect(`https://appleid.apple.com/auth/authorize?${params.toString()}`, 302);
+});
+
+type AppleCallbackPayload = {
+  code?: string;
+  state?: string;
+  error?: string;
+  user?: string;
+};
+
+async function handleAppleOAuthCallback(c: Context<AppEnv>, payload: AppleCallbackPayload) {
+  const appUrl = c.env?.APP_URL || 'https://klubz.com';
+  const errorRedirect = (reason: string) =>
+    c.redirect(`${appUrl}/?oauth_error=${encodeURIComponent(reason)}#login`, 302);
+
+  if (payload.error || !payload.code) {
+    return errorRedirect('cancelled');
+  }
+
+  const sessions = c.env?.SESSIONS;
+  if (!sessions) {
+    return errorRedirect('service_unavailable');
+  }
+  if (!payload.state) {
+    return errorRedirect('state_missing');
+  }
+
+  const stateVal = await sessions.get(`oauth:state:${payload.state}`);
+  if (!stateVal) {
+    return errorRedirect('state_invalid');
+  }
+  await sessions.delete(`oauth:state:${payload.state}`);
+
+  let clientSecret: string;
+  try {
+    clientSecret = await createAppleClientSecret(c);
+  } catch {
+    return errorRedirect('config');
+  }
+
+  const clientId = c.env?.APPLE_CLIENT_ID;
+  if (!clientId) return errorRedirect('config');
+
+  try {
+    const tokenRes = await fetch('https://appleid.apple.com/auth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: payload.code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: `${appUrl}/api/auth/apple/callback`,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      logger.error('Apple token exchange failed', undefined, {
+        ...withRequestContext(c),
+        status: tokenRes.status,
+      });
+      return errorRedirect('token_exchange');
+    }
+
+    const tokenData = (await tokenRes.json()) as { id_token?: string };
+    if (!tokenData.id_token) return errorRedirect('token_exchange');
+
+    const idTokenPayload = decodeJwtPayload<{
+      sub?: string;
+      email?: string;
+    }>(tokenData.id_token);
+    const appleSub = idTokenPayload?.sub;
+    if (!appleSub) return errorRedirect('userinfo');
+
+    let appleEmail = idTokenPayload?.email;
+    if (!appleEmail && payload.user) {
+      try {
+        const parsedUser = JSON.parse(payload.user) as { email?: string };
+        appleEmail = parsedUser.email || appleEmail;
+      } catch {
+        // ignore malformed user payload
+      }
+    }
+
+    const db = getDBOptional(c);
+    if (!db) return errorRedirect('db_unavailable');
+
+    const encKey = c.env?.ENCRYPTION_KEY;
+    const jwtSecret = getJWTSecret(c);
+
+    const existingByApple = await db
+      .prepare(
+        `SELECT id, email, role, first_name_encrypted, last_name_encrypted, is_active
+         FROM users
+         WHERE oauth_provider = 'apple' AND oauth_id = ? AND deleted_at IS NULL
+         LIMIT 1`,
+      )
+      .bind(appleSub)
+      .first<{
+        id: number;
+        email: string;
+        role: string;
+        first_name_encrypted: string | null;
+        last_name_encrypted: string | null;
+        is_active: number;
+      }>();
+
+    let existingByEmail: {
+      id: number;
+      email: string;
+      role: string;
+      first_name_encrypted: string | null;
+      last_name_encrypted: string | null;
+      is_active: number;
+    } | null = null;
+
+    if (!existingByApple && appleEmail) {
+      const emailHash = await hashForLookup(appleEmail);
+      existingByEmail = await db
+        .prepare(
+          `SELECT id, email, role, first_name_encrypted, last_name_encrypted, is_active
+           FROM users
+           WHERE email_hash = ? AND deleted_at IS NULL
+           LIMIT 1`,
+        )
+        .bind(emailHash)
+        .first<{
+          id: number;
+          email: string;
+          role: string;
+          first_name_encrypted: string | null;
+          last_name_encrypted: string | null;
+          is_active: number;
+        }>();
+    }
+
+    const existingUser = existingByApple ?? existingByEmail;
+
+    let userId: number;
+    let userRole = 'user';
+    let userName = 'Apple User';
+    let userEmail = appleEmail ?? '';
+
+    if (existingUser) {
+      if (!existingUser.is_active) return errorRedirect('account_disabled');
+
+      userId = existingUser.id;
+      userRole = existingUser.role;
+      userEmail = existingUser.email || appleEmail || '';
+      if (!userEmail) return errorRedirect('no_email');
+
+      await db
+        .prepare(
+          `UPDATE users
+           SET oauth_provider = 'apple', oauth_id = ?, email_verified = TRUE,
+               last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+        )
+        .bind(appleSub, userId)
+        .run();
+
+      const decFirst = await safeDecryptPII(existingUser.first_name_encrypted, encKey, userId);
+      const decLast = await safeDecryptPII(existingUser.last_name_encrypted, encKey, userId);
+      userName = [decFirst, decLast].filter(Boolean).join(' ') || userEmail.split('@')[0];
+    } else {
+      if (!appleEmail) return errorRedirect('no_email');
+
+      const emailHash = await hashForLookup(appleEmail);
+      const parsedUser = payload.user
+        ? (() => {
+            try {
+              return JSON.parse(payload.user) as { name?: { firstName?: string; lastName?: string } };
+            } catch {
+              return null;
+            }
+          })()
+        : null;
+      const firstName = parsedUser?.name?.firstName || appleEmail.split('@')[0];
+      const lastName = parsedUser?.name?.lastName || null;
+
+      const insertResult = await db
+        .prepare(
+          `INSERT INTO users
+             (email, email_hash, password_hash, first_name_encrypted, last_name_encrypted,
+              oauth_provider, oauth_id, role, is_active, email_verified, created_ip)
+           VALUES (?, ?, ?, ?, ?, 'apple', ?, 'user', TRUE, TRUE, ?)`,
+        )
+        .bind(
+          appleEmail,
+          emailHash,
+          'OAUTH_NO_PASSWORD',
+          firstName,
+          lastName,
+          appleSub,
+          getAnonymizedIP(c),
+        )
+        .run();
+
+      userId = Number(insertResult.meta?.last_row_id ?? 0);
+      userEmail = appleEmail;
+      userName = `${firstName}${lastName ? ` ${lastName}` : ''}`.trim();
+
+      if (encKey && userId > 0) {
+        try {
+          const encFirst = await encryptPII(firstName, encKey, userId);
+          const encLast = lastName ? await encryptPII(lastName, encKey, userId) : null;
+          await db
+            .prepare('UPDATE users SET first_name_encrypted = ?, last_name_encrypted = ? WHERE id = ?')
+            .bind(encFirst, encLast, userId)
+            .run();
+        } catch {
+          // best effort
+        }
+      }
+
+      try {
+        await db
+          .prepare(
+            'INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+          )
+          .bind(userId, 'USER_REGISTER', 'user', userId, getAnonymizedIP(c), getUserAgent(c))
+          .run();
+      } catch {
+        // best effort
+      }
+    }
+
+    const { accessToken, refreshToken } = await issueTokenPair(
+      { id: userId, email: userEmail, name: userName, role: userRole, organizationId: undefined },
+      jwtSecret,
+    );
+
+    try {
+      const tokenHash = await hashToken(refreshToken);
+      const sessionId = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .replace('T', ' ')
+        .substring(0, 19);
+      await db
+        .prepare(
+          `INSERT INTO sessions (id, user_id, token_hash, ip_address, user_agent, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(sessionId, userId, tokenHash, getAnonymizedIP(c), getUserAgent(c), expiresAt)
+        .run();
+    } catch {
+      // best effort
+    }
+
+    try {
+      await db
+        .prepare(
+          'INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+        )
+        .bind(userId, 'USER_LOGIN', 'user', userId, getAnonymizedIP(c), getUserAgent(c))
+        .run();
+    } catch {
+      // best effort
+    }
+
+    const oauthCode = crypto.randomUUID();
+    await sessions.put(
+      `oauth:sess:${oauthCode}`,
+      JSON.stringify({
+        accessToken,
+        refreshToken,
+        user: {
+          id: userId,
+          email: userEmail,
+          name: userName,
+          role: userRole,
+          mfaEnabled: false,
+        },
+      }),
+      { expirationTtl: 120 },
+    );
+
+    return c.redirect(`${appUrl}/?oauth_code=${encodeURIComponent(oauthCode)}#login`, 302);
+  } catch (err) {
+    logger.error('Apple OAuth callback error', err instanceof Error ? err : undefined, withRequestContext(c));
+    return errorRedirect('server_error');
+  }
+}
+
+authRoutes.post('/apple/callback', async (c) => {
+  const formBody = await c.req.parseBody();
+  const payload: AppleCallbackPayload = {
+    code: typeof formBody.code === 'string' ? formBody.code : undefined,
+    state: typeof formBody.state === 'string' ? formBody.state : undefined,
+    error: typeof formBody.error === 'string' ? formBody.error : undefined,
+    user: typeof formBody.user === 'string' ? formBody.user : undefined,
+  };
+  return handleAppleOAuthCallback(c, payload);
+});
+
+authRoutes.get('/apple/callback', async (c) => {
+  const payload: AppleCallbackPayload = {
+    code: c.req.query('code'),
+    state: c.req.query('state'),
+    error: c.req.query('error'),
+  };
+  return handleAppleOAuthCallback(c, payload);
+});
+
 // ── OAuth Session Exchange ─────────────────────────────────────────────────
 //
 // Exchanges the short-lived oauth_code (UUID) for the actual Klubz token pair.
@@ -1064,4 +1742,3 @@ authRoutes.get('/oauth-session', async (c) => {
 });
 
 export default authRoutes;
-

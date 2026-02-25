@@ -291,22 +291,22 @@ describe('Security hardening integration flows', () => {
     expect(body.error?.message).toBe('Authentication service unavailable');
   });
 
-  test('mfa verify returns explicit not implemented contract', async () => {
+  test('mfa verify rejects missing required fields with validation error', async () => {
     const res = await app.request(
       '/api/auth/mfa/verify',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: '123456' }),
+        // omit mfaToken — endpoint now requires both mfaToken and code
+        body: JSON.stringify({ code: '123456' }),
       },
       { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
     );
 
-    expect(res.status).toBe(501);
-    const body = (await res.json()) as { error?: { code?: string; message?: string; status?: number } };
-    expect(body.error?.code).toBe('NOT_IMPLEMENTED');
-    expect(body.error?.status).toBe(501);
-    expect(body.error?.message).toContain('MFA verification is not yet implemented');
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.message).toContain('mfaToken and code required');
   });
 
   test('trip offer fails closed when trip DB is unavailable', async () => {
