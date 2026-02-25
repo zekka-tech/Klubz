@@ -773,8 +773,26 @@ async function runTests() {
       });
       const driver = makeDriver({ routePolyline: null });
       const { matches } = matchRiderToDrivers(rider, [driver]);
-      // Should still work via endpoint distance check
+      // Should still work via straight-line segment fallback
       assertGreaterThan(matches.length, 0, 'Should work without polyline');
+    });
+
+    it('should enforce 10km detour cap even without a polyline', () => {
+      // Kempton Park is ~17km east of the JHB→Sandton corridor.
+      // Without a polyline the straight-line segment is used; detour ≈ 22km > 10km cap.
+      const relaxed = {
+        ...DEFAULT_MATCH_CONFIG,
+        thresholds: { ...DEFAULT_MATCH_CONFIG.thresholds, maxPickupDistanceKm: 25, maxDropoffDistanceKm: 25 },
+      };
+      const rider = makeRider({
+        pickup: KEMPTON_PARK,
+        dropoff: SANDTON,
+        earliestDeparture: NOW + 55 * MIN,
+        latestDeparture: NOW + 90 * MIN,
+      });
+      const driver = makeDriver({ routePolyline: null }); // no polyline
+      const { matches } = matchRiderToDrivers(rider, [driver], relaxed);
+      assertEqual(matches.length, 0, '10km detour cap must be enforced without a polyline');
     });
   });
 

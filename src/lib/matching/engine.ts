@@ -22,6 +22,7 @@ import type {
   MatchResult,
   MatchConfig,
   ScoreBreakdown,
+  GeoPoint,
 } from './types';
 import { DEFAULT_MATCH_CONFIG } from './types';
 import {
@@ -163,27 +164,21 @@ function checkRouteCompatibility(
     dropoffSegmentIndex: -1,
   };
 
-  // If driver has no polyline, fall back to endpoint distance checks
-  if (!driver.routePolyline || driver.routePolyline.length < 2) {
-    result.pickupDistanceKm = Math.min(
-      haversine(rider.pickup, driver.departure),
-      haversine(rider.pickup, driver.destination),
-    );
-    result.dropoffDistanceKm = Math.min(
-      haversine(rider.dropoff, driver.departure),
-      haversine(rider.dropoff, driver.destination),
-    );
-    result.pickupSegmentIndex = 0;
-    result.dropoffSegmentIndex = 0;
-  } else {
-    const pickupResult = minDistanceToRoute(rider.pickup, driver.routePolyline);
-    const dropoffResult = minDistanceToRoute(rider.dropoff, driver.routePolyline);
+  // Use stored polyline if available; fall back to straight-line departure→destination.
+  // This ensures the 10 km detour cap and perpendicular proximity checks are always
+  // applied regardless of whether the driver stored a detailed route.
+  const effectiveRoute: GeoPoint[] =
+    driver.routePolyline && driver.routePolyline.length >= 2
+      ? driver.routePolyline
+      : [driver.departure, driver.destination];
 
-    result.pickupDistanceKm = pickupResult.distance;
-    result.dropoffDistanceKm = dropoffResult.distance;
-    result.pickupSegmentIndex = pickupResult.segmentIndex;
-    result.dropoffSegmentIndex = dropoffResult.segmentIndex;
-  }
+  const pickupResult = minDistanceToRoute(rider.pickup, effectiveRoute);
+  const dropoffResult = minDistanceToRoute(rider.dropoff, effectiveRoute);
+
+  result.pickupDistanceKm = pickupResult.distance;
+  result.dropoffDistanceKm = dropoffResult.distance;
+  result.pickupSegmentIndex = pickupResult.segmentIndex;
+  result.dropoffSegmentIndex = dropoffResult.segmentIndex;
 
   // Apply rider-specific max walk distance if set
   const maxPickup = rider.preferences?.maxWalkDistanceKm ??
@@ -201,22 +196,17 @@ function checkRouteCompatibility(
   }
 
   // Route direction check: pickup should occur before dropoff
-  if (
-    driver.routePolyline &&
-    driver.routePolyline.length >= 2 &&
-    result.pickupSegmentIndex > result.dropoffSegmentIndex
-  ) {
+  if (result.pickupSegmentIndex > result.dropoffSegmentIndex) {
     result.reason = 'wrong_direction';
     return result;
   }
 
-  // Absolute detour hard filter: never take driver > maxAbsoluteDetourKm off route
-  if (driver.routePolyline && driver.routePolyline.length >= 2) {
-    const detourKm = estimateDetourKm(rider.pickup, rider.dropoff, driver.routePolyline);
-    if (detourKm > config.thresholds.maxAbsoluteDetourKm) {
-      result.reason = 'detour_exceeds_max';
-      return result;
-    }
+  // Absolute detour hard filter: always enforced — no driver goes > maxAbsoluteDetourKm
+  // off their route corridor, whether or not a detailed polyline is stored.
+  const detourKm = estimateDetourKm(rider.pickup, rider.dropoff, effectiveRoute);
+  if (detourKm > config.thresholds.maxAbsoluteDetourKm) {
+    result.reason = 'detour_exceeds_max';
+    return result;
   }
 
   result.passed = true;
@@ -265,16 +255,13 @@ function computeScore(
   // --- Detour cost score ---
   // Normalised against the absolute 10 km cap so the score is consistent
   // across all route lengths: 0 km detour → 0.0, 10 km detour → 1.0.
-  let detourKm = 0;
-  let detourScore = 0;
-  if (driver.routePolyline && driver.routePolyline.length >= 2) {
-    detourKm = estimateDetourKm(
-      rider.pickup,
-      rider.dropoff,
-      driver.routePolyline,
-    );
-    detourScore = Math.min(detourKm / t.maxAbsoluteDetourKm, 1);
-  }
+  // Uses the same effectiveRoute fallback so scoring is consistent with Phase 2.
+  const effectiveRoute: GeoPoint[] =
+    driver.routePolyline && driver.routePolyline.length >= 2
+      ? driver.routePolyline
+      : [driver.departure, driver.destination];
+  const detourKm = estimateDetourKm(rider.pickup, rider.dropoff, effectiveRoute);
+  const detourScore = Math.min(detourKm / t.maxAbsoluteDetourKm, 1);
 
   // --- Driver rating score (lower = better driver = lower score) ---
   let ratingScore = 0;
