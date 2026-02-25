@@ -173,6 +173,11 @@ export async function sendTripReminders(env: Bindings, window: '24h' | '1h'): Pr
   if (trips.length === 0) return;
 
   const cache = env.CACHE;
+  if (!cache) {
+    logger.warn('sendTripReminders: CACHE KV not available — skipping to prevent duplicate notifications');
+    return;
+  }
+
   const notifications = new NotificationService(env);
   logger.info(`sendTripReminders: ${trips.length} trips in ${window} window`);
 

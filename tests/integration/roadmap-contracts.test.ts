@@ -575,4 +575,83 @@ describe('Roadmap integration contracts', () => {
     const stored = await sessions.get(`oauth:sess:${oauthCode}`);
     expect(stored).toBeTruthy();
   });
+
+  test('organization join blocks users who are already in an org', async () => {
+    const token = await authToken(20);
+    const db = new MockDB((query, _params, kind) => {
+      // User already has an organization_id
+      if (query.includes('SELECT organization_id FROM users') && kind === 'first') {
+        return { organization_id: 'existing-org-uuid' };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/organizations/join',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inviteCode: 'NEWORG12' }),
+      },
+      { ...baseEnv, DB: db },
+    );
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+  });
+
+  test('organization current hides invite code from non-owner members', async () => {
+    const token = await authToken(21);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT organization_id FROM users') && kind === 'first') {
+        return { organization_id: 'org-abc-123' };
+      }
+      if (query.includes('FROM organizations') && query.includes('WHERE id = ?') && kind === 'first') {
+        return { id: 'org-abc-123', name: 'Acme Corp', invite_code: 'SECRET12', created_by: 99 }; // owner is user 99, not user 21
+      }
+      if (query.includes('COUNT(*) as count FROM users') && kind === 'first') {
+        return { count: 5 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/organizations/current',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { organization?: { inviteCode?: string | null; isOwner?: boolean } };
+    expect(body.organization?.isOwner).toBe(false);
+    expect(body.organization?.inviteCode).toBeNull();
+  });
+
+  test('organization current exposes invite code to the owner', async () => {
+    const token = await authToken(22);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT organization_id FROM users') && kind === 'first') {
+        return { organization_id: 'org-xyz-456' };
+      }
+      if (query.includes('FROM organizations') && query.includes('WHERE id = ?') && kind === 'first') {
+        return { id: 'org-xyz-456', name: 'Owner Corp', invite_code: 'OWNRCODE', created_by: 22 }; // owner is user 22
+      }
+      if (query.includes('COUNT(*) as count FROM users') && kind === 'first') {
+        return { count: 3 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/organizations/current',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { organization?: { inviteCode?: string | null; isOwner?: boolean } };
+    expect(body.organization?.isOwner).toBe(true);
+    expect(body.organization?.inviteCode).toBe('OWNRCODE');
+  });
 });

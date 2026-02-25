@@ -90,6 +90,18 @@ disputeRoutes.post('/', async (c) => {
       filedBy: user.id,
     });
 
+    // Best-effort audit log — do not fail the response if this write fails
+    await db
+      .prepare(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, created_at)
+         VALUES (?, 'DISPUTE_FILED', 'trip', ?, CURRENT_TIMESTAMP)`,
+      )
+      .bind(user.id, tripId)
+      .run()
+      .catch((auditErr: unknown) => {
+        logger.warn('Dispute audit log write failed', { disputeId, error: String(auditErr) });
+      });
+
     return c.json({ disputeId }, 201);
   } catch (err) {
     logger.error('Dispute create failed', err instanceof Error ? err : undefined, { tripId, userId: user.id });

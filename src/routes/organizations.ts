@@ -122,13 +122,14 @@ organizationRoutes.get('/current', async (c) => {
       .bind(fallback.id)
       .first<{ count: number }>();
 
+    const isOwner = fallback.created_by === user.id;
     return c.json({
       organization: {
         id: fallback.id,
         name: fallback.name,
-        inviteCode: fallback.invite_code,
+        inviteCode: isOwner ? fallback.invite_code : null,
         memberCount: Number(memberCountRow?.count ?? 0),
-        isOwner: fallback.created_by === user.id,
+        isOwner,
       },
     });
   }
@@ -138,13 +139,14 @@ organizationRoutes.get('/current', async (c) => {
     .bind(org.id)
     .first<{ count: number }>();
 
+  const isOwner = org.created_by === user.id;
   return c.json({
     organization: {
       id: org.id,
       name: org.name,
-      inviteCode: org.invite_code,
+      inviteCode: isOwner ? org.invite_code : null,
       memberCount: Number(memberCountRow?.count ?? 0),
-      isOwner: org.created_by === user.id,
+      isOwner,
     },
   });
 });
@@ -170,6 +172,15 @@ organizationRoutes.post('/join', async (c) => {
   }
 
   const inviteCode = parsed.data.inviteCode.toUpperCase();
+
+  const existing = await db
+    .prepare('SELECT organization_id FROM users WHERE id = ?')
+    .bind(user.id)
+    .first<{ organization_id: string | null }>();
+
+  if (existing?.organization_id) {
+    return c.json({ error: { code: 'CONFLICT', message: 'You are already a member of an organization' } }, 409);
+  }
 
   const org = await db
     .prepare('SELECT id, name FROM organizations WHERE invite_code = ? AND is_active = 1 LIMIT 1')

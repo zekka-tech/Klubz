@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-25 18:03:00 UTC
+Last updated: 2026-02-25 18:35:00 UTC
 Current branch: `main`
 Tracking branch: `origin/main`
 
@@ -20,18 +20,19 @@ Mandatory updates to this file:
 
 ## Current State Snapshot
 Quality gate status (latest run):
-- `npm run verify`: PASS (`type-check`, `lint`, `test` 278/278, `build` 347.60 kB worker)
+- `npm run verify`: PASS (`type-check`, `lint`, `test` 281/281, `build` 348.23 kB worker)
 - `npm run db:check-migrations`: PASS (18 files, next `0019`)
 
 Repository state:
-- Working tree clean after local commits
+- Working tree has uncommitted security + quality improvements (pending commit)
 - `main` synced with `origin/main`
 
 ---
 
 ## Implemented and Completed
 Recent delivery stream (newest first):
-1. `66d5409` - Daily & monthly trip types with distance-based pricing: migration 0013 (monthly_subscriptions, monthly_scheduled_days tables + trip_type/route_distance_km/rate_per_km columns); src/lib/pricing.ts (R2.85/km daily, R2.15/km monthly, haversine, ETA); src/routes/subscriptions.ts (full CRUD + calendar + Stripe upfront payment intent); trips.ts updated to compute system fare from coordinates; payments.ts webhook handles subscription payment state; subscription + monthly-calendar screens in app.js; trip cards show fareDaily/fareMonthly/etaMinutes; find-ride has daily/monthly toggle; my-trips shows subscription section.
+1. `(pending)` - Production readiness security hardening: restricted organization invite codes to owners only in GET /organizations/current (non-owner members receive null); added 409 guard in POST /organizations/join to prevent silent org switching when user already has an org; added DISPUTE_FILED audit log write in disputes.ts (best-effort, fire-and-forget); added CACHE availability guard in cron.ts sendTripReminders to prevent duplicate push+email notifications when deduplication KV is unavailable; 3 new integration contract tests for org security (join-blocks-existing-member, invite-code-hidden-for-non-owner, invite-code-visible-for-owner). Tests: 278→281.
+2. `66d5409` - Daily & monthly trip types with distance-based pricing: migration 0013 (monthly_subscriptions, monthly_scheduled_days tables + trip_type/route_distance_km/rate_per_km columns); src/lib/pricing.ts (R2.85/km daily, R2.15/km monthly, haversine, ETA); src/routes/subscriptions.ts (full CRUD + calendar + Stripe upfront payment intent); trips.ts updated to compute system fare from coordinates; payments.ts webhook handles subscription payment state; subscription + monthly-calendar screens in app.js; trip cards show fareDaily/fareMonthly/etaMinutes; find-ride has daily/monthly toggle; my-trips shows subscription section.
 2. `bb61889` - Route-efficient matching algorithm: added absolute 10 km per-rider detour hard cap (`maxAbsoluteDetourKm: 10` in MatchThresholds, Phase 2 hard filter in engine.ts); replaced pool-detour minute-estimate heuristic with cumulative km budget tracking using cheapest-insertion `computeMarginalDetourKm()` in geo.ts (`maxPoolDetourKm: 10` in MatchConfig); reweighted scoring so detour cost rises to 13% (from 5%) for route-efficiency priority (shiftAlignment ↓ to 2%, timeMatch ↓ to 15%, seatAvailability ↓ to 5%); 9 new matching unit tests (70 total in matching.test.js); all 262 Vitest tests still pass.
 3. `(pending)` - Implemented Google OAuth Sign-in with distance-based pricing: migration 0013 (monthly_subscriptions, monthly_scheduled_days tables + trip_type/route_distance_km/rate_per_km columns); src/lib/pricing.ts (R2.85/km daily, R2.15/km monthly, haversine, ETA); src/routes/subscriptions.ts (full CRUD + calendar + Stripe upfront payment intent); trips.ts updated to compute system fare from coordinates; payments.ts webhook handles subscription payment state; subscription + monthly-calendar screens in app.js; trip cards show fareDaily/fareMonthly/etaMinutes; find-ride has daily/monthly toggle; my-trips shows subscription section.
 3. `(pending)` - Implemented Google OAuth Sign-in (Authorization Code flow with CSRF state, short-lived code exchange, PII encryption for new users, account linking for existing accounts); added migration 0012 for oauth_provider/oauth_id columns; fixed CSP connect-src to include Nominatim geocoding; documented GOOGLE_CLIENT_ID/SECRET setup in ENVIRONMENT.md.
