@@ -1,3 +1,5 @@
+import { pathToFileURL } from 'node:url';
+
 // Basic API tests for Klubz platform
 
 const API_BASE_URL = 'http://localhost:3000/api';
@@ -187,11 +189,12 @@ runner.test('API response time should be under 500ms', async () => {
   assert.ok(responseTime < 500, `Response time ${responseTime}ms should be under 500ms`);
 });
 
-// Run tests
-if (require.main === module) {
+// Run tests (ESM-safe)
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
   runner.run().then(success => {
     process.exit(success ? 0 : 1);
   });
 }
 
-module.exports = { runner, api, assert };
+export { runner, api, assert };

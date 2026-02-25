@@ -5,9 +5,9 @@
  * Runs unit, integration, security, and performance tests
  */
 
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // Test configuration
 const TEST_CONFIG = {

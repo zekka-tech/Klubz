@@ -516,7 +516,10 @@ tripRoutes.post('/:tripId/book', async (c) => {
   }
   try {
     // Verify trip exists and has seats
-    const trip = await db.prepare('SELECT id, available_seats, status, driver_id FROM trips WHERE id = ?').bind(tripId).first<TripSeatRow>();
+    const trip = await db
+      .prepare('SELECT id, available_seats, status, driver_id FROM trips WHERE id = ?')
+      .bind(tripId)
+      .first<TripSeatRow>();
     if (!trip) return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
     if (trip.driver_id === user.id) {
       return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Drivers cannot book their own trips' } }, 403);
@@ -576,8 +579,14 @@ tripRoutes.post('/:tripId/book', async (c) => {
 
       promoCodeId = promo.id;
       if (promo.discount_type === 'percent') {
-        // Estimate fare for discount calculation — use a rough value; actual charge is done at payment time
-        const estimatedFareCents = Math.round(fareRatePerKm * 30 * 100); // 30 km placeholder
+        const tripDistance = await db
+          .prepare('SELECT route_distance_km FROM trips WHERE id = ?')
+          .bind(tripId)
+          .first<{ route_distance_km: number | null }>();
+        const routeDistanceKm = Number(tripDistance?.route_distance_km ?? 0);
+        const estimatedFareCents = Math.round(
+          fareRatePerKm * (routeDistanceKm > 0 ? routeDistanceKm : 30) * 100
+        );
         discountCents = Math.min(Math.round(estimatedFareCents * promo.discount_value / 100), estimatedFareCents);
       } else {
         discountCents = promo.discount_value;

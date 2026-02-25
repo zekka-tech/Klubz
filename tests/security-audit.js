@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 
 /**
- * Security Audit Tests for Klubz
- * Comprehensive security testing for A+ rating
+ * Deterministic security audit for Klubz.
+ *
+ * This replaces random/simulated checks with reproducible assertions:
+ * 1) cryptographic primitive checks (AES-256-GCM + HMAC)
+ * 2) security middleware policy checks from source
+ * 3) contract-level integration tests for authz/cors/csp/rate-limit/request-id
  */
 
-import crypto from 'crypto';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 const colors = {
   reset: '\x1b[0m',
@@ -13,322 +20,160 @@ const colors = {
   green: '\x1b[32m',
   red: '\x1b[31m',
   yellow: '\x1b[33m',
-  blue: '\x1b[34m'
+  blue: '\x1b[34m',
 };
 
 function log(message, color = 'reset') {
   console.log(`${colors[color]}${message}${colors.reset}`);
 }
 
-function header(text) {
-  log(`\n${'='.repeat(60)}`, 'bright');
-  log(text, 'bright');
-  log('='.repeat(60), 'bright');
+function section(title) {
+  log(`\n${'='.repeat(64)}`, 'bright');
+  log(title, 'bright');
+  log('='.repeat(64), 'bright');
 }
 
-// Security test implementations
-async function testEncryptionStrength() {
-  header('🔐 TESTING ENCRYPTION STRENGTH');
-  
-  try {
-    // Test AES-256-GCM encryption
-    const key = crypto.randomBytes(32); // 256-bit key
-    const iv = crypto.randomBytes(16);  // 128-bit IV
-    const cipher = crypto.createCipher('aes-256-gcm', key);
-    
-    const testData = 'Sensitive user data: user@example.com';
-    const encrypted = cipher.update(testData, 'utf8', 'hex') + cipher.final('hex');
-    
-    log(`✅ AES-256-GCM encryption working`, 'green');
-    log(`✅ Key length: ${key.length * 8} bits (required: 256)`, 'green');
-    log(`✅ IV length: ${iv.length * 8} bits (required: 128)`, 'green');
-    
+function check(condition, okMsg, errMsg) {
+  if (condition) {
+    log(`✅ ${okMsg}`, 'green');
     return true;
-  } catch (error) {
-    log(`❌ Encryption test failed: ${error.message}`, 'red');
-    return false;
   }
+  log(`❌ ${errMsg}`, 'red');
+  return false;
 }
 
-async function testPasswordSecurity() {
-  header('🔑 TESTING PASSWORD SECURITY');
-  
-  try {
-    const passwords = [
-      '123456',           // Weak
-      'password',       // Weak
-      'Abc123',         // Medium
-      'Abc123!@#',      // Strong
-      'MyP@ssw0rd123!'  // Very strong
-    ];
-    
-    const results = passwords.map(password => {
-      const hasUpper = /[A-Z]/.test(password);
-      const hasLower = /[a-z]/.test(password);
-      const hasNumber = /\d/.test(password);
-      const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(password);
-      const length = password.length;
-      
-      const strength = (hasUpper + hasLower + hasNumber + hasSpecial + (length >= 8));
-      return { password, strength, length };
-    });
-    
-    results.forEach(({ password, strength, length }) => {
-      const rating = strength >= 4 ? 'STRONG' : strength >= 3 ? 'MEDIUM' : 'WEAK';
-      const color = strength >= 4 ? 'green' : strength >= 3 ? 'yellow' : 'red';
-      log(`${password}: ${rating} (length: ${length}, score: ${strength}/5)`, color);
-    });
-    
-    const strongPasswords = results.filter(r => r.strength >= 4).length;
-    log(`\n✅ Password policy: ${strongPasswords}/${results.length} strong passwords`, 'green');
-    
-    return strongPasswords >= 2;
-  } catch (error) {
-    log(`❌ Password security test failed: ${error.message}`, 'red');
-    return false;
-  }
+function runCommand(command, args) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { stdio: 'inherit', shell: false });
+    child.on('close', (code) => resolve(code ?? 1));
+    child.on('error', () => resolve(1));
+  });
 }
 
-async function testJWTSecurity() {
-  header('🎫 TESTING JWT SECURITY');
-  
-  try {
-    // Simulate JWT token creation and validation
-    const header = { alg: 'HS256', typ: 'JWT' };
-    const payload = {
-      userId: '12345',
-      email: 'user@example.com',
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60) // 24 hours
-    };
-    
-    const secret = crypto.randomBytes(64).toString('hex'); // 512-bit secret
-    
-    // Simulate JWT structure
-    const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
-    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    const signature = crypto.createHmac('sha256', secret)
-      .update(`${encodedHeader}.${encodedPayload}`)
-      .digest('base64url');
-    
-    const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
-    
-    log(`✅ JWT structure valid`, 'green');
-    log(`✅ Secret length: ${secret.length * 4} bits (recommended: 256+ bits)`, 'green');
-    log(`✅ Algorithm: HS256 (secure)`, 'green');
-    log(`✅ Expiration: 24 hours (reasonable)`, 'green');
-    
-    return jwt.split('.').length === 3;
-  } catch (error) {
-    log(`❌ JWT security test failed: ${error.message}`, 'red');
-    return false;
-  }
-}
+function testAesGcm() {
+  section('🔐 CRYPTOGRAPHY: AES-256-GCM');
 
-async function testCSRFProtection() {
-  header('🛡️ TESTING CSRF PROTECTION');
-  
-  try {
-    // Simulate CSRF token generation
-    const csrfToken = crypto.randomBytes(32).toString('hex');
-    const sessionId = crypto.randomBytes(16).toString('hex');
-    
-    log(`✅ CSRF token generated: ${csrfToken.substring(0, 16)}...`, 'green');
-    log(`✅ Session ID: ${sessionId.substring(0, 16)}...`, 'green');
-    log(`✅ Token length: ${csrfToken.length} characters (secure)`, 'green');
-    
-    // Simulate token validation
-    const isValid = csrfToken.length === 64 && /^[a-f0-9]+$/.test(csrfToken);
-    
-    return isValid;
-  } catch (error) {
-    log(`❌ CSRF protection test failed: ${error.message}`, 'red');
-    return false;
-  }
-}
+  const plaintext = 'security-regression-check';
+  const key = crypto.randomBytes(32);
+  const iv = crypto.randomBytes(12);
 
-async function testHeadersSecurity() {
-  header('📋 TESTING SECURITY HEADERS');
-  
-  try {
-    const securityHeaders = {
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-      'X-XSS-Protection': '1; mode=block',
-      'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-      'Content-Security-Policy': "default-src 'self'",
-      'Referrer-Policy': 'strict-origin-when-cross-origin'
-    };
-    
-    const missingHeaders = [];
-    const presentHeaders = [];
-    
-    Object.entries(securityHeaders).forEach(([header, value]) => {
-      // Simulate header presence check
-      const isPresent = Math.random() > 0.1; // 90% chance of being present
-      
-      if (isPresent) {
-        presentHeaders.push(header);
-        log(`✅ ${header}: ${value}`, 'green');
-      } else {
-        missingHeaders.push(header);
-        log(`❌ ${header}: Missing`, 'red');
-      }
-    });
-    
-    const coverage = (presentHeaders.length / Object.keys(securityHeaders).length) * 100;
-    log(`\nSecurity header coverage: ${coverage.toFixed(1)}%`, coverage >= 80 ? 'green' : 'yellow');
-    
-    return coverage >= 80;
-  } catch (error) {
-    log(`❌ Headers security test failed: ${error.message}`, 'red');
-    return false;
-  }
-}
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
 
-async function testRateLimiting() {
-  header('⚡ TESTING RATE LIMITING');
-  
-  try {
-    const windowMs = 60 * 1000; // 1 minute
-    const maxRequests = 100;
-    const requests = [];
-    
-    // Simulate rate limiting
-    for (let i = 0; i < maxRequests + 20; i++) {
-      const timestamp = Date.now();
-      requests.push({
-        timestamp,
-        allowed: i < maxRequests
-      });
-    }
-    
-    const allowedRequests = requests.filter(r => r.allowed).length;
-    const blockedRequests = requests.filter(r => !r.allowed).length;
-    
-    log(`✅ Rate limit window: ${windowMs}ms`, 'green');
-    log(`✅ Max requests: ${maxRequests} per window`, 'green');
-    log(`✅ Allowed requests: ${allowedRequests}`, 'green');
-    log(`✅ Blocked requests: ${blockedRequests}`, 'green');
-    
-    return blockedRequests > 0 && allowedRequests === maxRequests;
-  } catch (error) {
-    log(`❌ Rate limiting test failed: ${error.message}`, 'red');
-    return false;
-  }
-}
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 
-async function testDataValidation() {
-  header('🔍 TESTING DATA VALIDATION');
-  
-  try {
-    const testCases = [
-      { input: 'user@example.com', type: 'email', expected: true },
-      { input: 'invalid-email', type: 'email', expected: false },
-      { input: '+1234567890', type: 'phone', expected: true },
-      { input: '123', type: 'phone', expected: false },
-      { input: 'StrongPass123!', type: 'password', expected: true },
-      { input: 'weak', type: 'password', expected: false }
-    ];
-    
-    let passed = 0;
-    
-    testCases.forEach(({ input, type, expected }) => {
-      // Simulate validation
-      let isValid = false;
-      
-      switch (type) {
-        case 'email':
-          isValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input);
-          break;
-        case 'phone':
-          isValid = /^\+?\d{10,}$/.test(input);
-          break;
-        case 'password':
-          isValid = input.length >= 8 && /[A-Z]/.test(input) && /\d/.test(input);
-          break;
-      }
-      
-      const result = isValid === expected;
-      const color = result ? 'green' : 'red';
-      const status = result ? '✅' : '❌';
-      
-      log(`${status} ${type}: "${input}" (${isValid ? 'valid' : 'invalid'})`, color);
-      
-      if (result) passed++;
-    });
-    
-    log(`\nValidation accuracy: ${passed}/${testCases.length}`, passed === testCases.length ? 'green' : 'yellow');
-    
-    return passed === testCases.length;
-  } catch (error) {
-    log(`❌ Data validation test failed: ${error.message}`, 'red');
-    return false;
-  }
-}
-
-// Main security audit function
-async function runSecurityAudit() {
-  header('🔒 KLUBZ SECURITY AUDIT');
-  log('Comprehensive security testing for A+ rating', 'blue');
-  log('Testing: Encryption, Authentication, Authorization, Data Protection', 'yellow');
-  
-  const tests = [
-    { name: 'Encryption Strength', test: testEncryptionStrength },
-    { name: 'Password Security', test: testPasswordSecurity },
-    { name: 'JWT Security', test: testJWTSecurity },
-    { name: 'CSRF Protection', test: testCSRFProtection },
-    { name: 'Security Headers', test: testHeadersSecurity },
-    { name: 'Rate Limiting', test: testRateLimiting },
-    { name: 'Data Validation', test: testDataValidation }
+  const checks = [
+    check(key.length === 32, 'Key length is 256 bits', 'Key length is not 256 bits'),
+    check(iv.length === 12, 'IV length is 96 bits (GCM standard)', 'IV length is not 96 bits'),
+    check(decrypted === plaintext, 'Round-trip encryption/decryption succeeds', 'AES-GCM round-trip failed'),
   ];
-  
-  const results = [];
-  
-  for (const { name, test } of tests) {
-    log(`\nRunning: ${name}...`, 'blue');
-    const result = await test();
-    results.push({ name, passed: result });
-  }
-  
-  // Calculate security score
-  const passedTests = results.filter(r => r.passed).length;
-  const totalTests = results.length;
-  const securityScore = (passedTests / totalTests) * 100;
-  
-  header('📊 SECURITY AUDIT RESULTS');
-  
-  results.forEach(({ name, passed }) => {
-    const status = passed ? '✅' : '❌';
-    const color = passed ? 'green' : 'red';
-    log(`${status} ${name}`, color);
-  });
-  
-  log(`\nSecurity Score: ${securityScore.toFixed(1)}%`, securityScore >= 90 ? 'green' : securityScore >= 70 ? 'yellow' : 'red');
-  
-  if (securityScore >= 90) {
-    log('\n🎉 A+ SECURITY RATING ACHIEVED!', 'green');
-    log('✅ Enterprise-grade security implemented', 'green');
-    log('✅ Ready for production deployment', 'green');
-  } else if (securityScore >= 70) {
-    log('\n⚠️  B+ SECURITY RATING', 'yellow');
-    log('Some security improvements recommended', 'yellow');
-  } else {
-    log('\n❌ SECURITY ISSUES DETECTED', 'red');
-    log('Security improvements required before deployment', 'red');
-  }
-  
-  return securityScore >= 90;
+
+  return checks.every(Boolean);
 }
 
-// Run security audit
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runSecurityAudit().then(success => {
-    process.exit(success ? 0 : 1);
-  }).catch(error => {
-    console.error('Security audit error:', error);
-    process.exit(1);
-  });
+function testJwtHmac() {
+  section('🎫 TOKEN SIGNING: HMAC-SHA256');
+
+  const payload = {
+    sub: 'user-123',
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 60 * 60,
+  };
+
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const secret = crypto.randomBytes(32).toString('hex');
+
+  const encHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+  const encPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signingInput = `${encHeader}.${encPayload}`;
+  const sig = crypto.createHmac('sha256', secret).update(signingInput).digest('base64url');
+
+  const jwt = `${signingInput}.${sig}`;
+  const recomputed = crypto.createHmac('sha256', secret).update(signingInput).digest('base64url');
+
+  const checks = [
+    check(secret.length >= 64, 'HMAC secret length is >= 256 bits', 'HMAC secret too short'),
+    check(jwt.split('.').length === 3, 'JWT has 3 segments', 'JWT shape is invalid'),
+    check(sig === recomputed, 'JWT signature verification succeeds', 'JWT signature verification failed'),
+  ];
+
+  return checks.every(Boolean);
+}
+
+function testSecurityMiddlewarePolicy() {
+  section('🛡️ MIDDLEWARE POLICY CHECKS');
+
+  const source = fs.readFileSync('src/index.tsx', 'utf8');
+
+  const checks = [
+    check(source.includes("c.header('Content-Security-Policy'"), 'CSP header is configured', 'CSP header missing'),
+    check(source.includes("c.header('X-Content-Type-Options', 'nosniff')"), 'X-Content-Type-Options configured', 'X-Content-Type-Options missing'),
+    check(source.includes("c.header('X-Frame-Options', 'DENY')"), 'X-Frame-Options configured', 'X-Frame-Options missing'),
+    check(source.includes("c.header('Referrer-Policy', 'strict-origin-when-cross-origin')"), 'Referrer-Policy configured', 'Referrer-Policy missing'),
+    check(source.includes("c.header('Strict-Transport-Security'"), 'HSTS configured', 'HSTS missing'),
+    check(source.includes("app.use('/api/*', rateLimiter({"), 'API rate limiter middleware enabled', 'API rate limiter middleware missing'),
+    check(source.includes('JWT_SECRET must be at least 32 characters in production'), 'Production JWT guard present', 'Production JWT guard missing'),
+    check(source.includes('ENCRYPTION_KEY must be a 64-character hex string in production'), 'Production encryption-key guard present', 'Production encryption-key guard missing'),
+  ];
+
+  return checks.every(Boolean);
+}
+
+async function testSecurityContracts() {
+  section('🧪 INTEGRATION SECURITY CONTRACTS');
+  log('Running focused Vitest security suites...', 'blue');
+
+  const files = [
+    'tests/integration/security-hardening.test.ts',
+    'tests/integration/csp-security-contracts.test.ts',
+    'tests/integration/cors-security-contracts.test.ts',
+    'tests/integration/rate-limiter-contracts.test.ts',
+    'tests/integration/request-id-contracts.test.ts',
+  ];
+
+  const code = await runCommand('npx', ['vitest', 'run', ...files]);
+  return check(code === 0, 'Security contract suites passed', 'Security contract suites failed');
+}
+
+async function runSecurityAudit() {
+  section('🔒 KLUBZ SECURITY AUDIT (DETERMINISTIC)');
+
+  const results = [];
+  results.push({ name: 'AES-256-GCM', passed: testAesGcm() });
+  results.push({ name: 'JWT HMAC', passed: testJwtHmac() });
+  results.push({ name: 'Security middleware policy', passed: testSecurityMiddlewarePolicy() });
+  results.push({ name: 'Security integration contracts', passed: await testSecurityContracts() });
+
+  const passed = results.filter((r) => r.passed).length;
+  const total = results.length;
+  const score = Math.round((passed / total) * 100);
+
+  section('📊 SECURITY AUDIT RESULTS');
+  for (const r of results) {
+    log(`${r.passed ? '✅' : '❌'} ${r.name}`, r.passed ? 'green' : 'red');
+  }
+  log(`\nSecurity score: ${score}%`, score >= 90 ? 'green' : score >= 75 ? 'yellow' : 'red');
+
+  if (score >= 90) {
+    log('\nSecurity gate: PASS', 'green');
+    return true;
+  }
+
+  log('\nSecurity gate: FAIL', 'red');
+  return false;
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  runSecurityAudit()
+    .then((ok) => process.exit(ok ? 0 : 1))
+    .catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
 }
 
 export { runSecurityAudit };
