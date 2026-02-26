@@ -5,12 +5,12 @@ This guide covers migration policy, execution, verification, and recovery.
 ## 1. Migration Policy
 
 Filename format:
-- `NNNN_description.sql` (e.g. `0011_add_feature_x.sql`)
+- `NNNN_description.sql` (e.g. `0022_add_feature_x.sql`)
 
 Ordering and determinism:
 - Numeric prefixes must be contiguous from `0001` and unique.
-- Duplicate prefixes are no longer permitted; renumber any legacy duplicates before introducing new migrations.
-- New migrations must use the next unique version (currently `0011_*`).
+- Duplicate prefixes are not permitted.
+- New migrations must use the next unique version (currently `0022_*`).
 
 Policy check:
 
@@ -29,11 +29,24 @@ npm run db:check-migrations
 - `0007_webhook_event_replay.sql`
 - `0008_idempotency_records.sql`
 - `0009_add_trip_participant_passenger_count.sql`
-- `0010_smart_matching.sql` (renamed from `0003_smart_matching.sql` to enforce prefix uniqueness)
+- `0010_smart_matching.sql`
+- `0011_schema_improvements.sql`
+- `0012_add_oauth_support.sql`
+- `0013_monthly_trips.sql`
+- `0014_push_tracking.sql`
+- `0015_driver_docs_safety.sql`
+- `0016_commerce.sql`
+- `0017_loyalty_orgs.sql`
+- `0018_user_organization_membership.sql`
+- `0019_messages.sql`
+- `0020_trip_waitlist.sql`
+- `0021_stripe_connect.sql`
 
-Expected next unique version: `0011_*`
+Expected next unique version: `0022_*`
 
-Migration order matches the numeric prefixes above, so the renamed smart matching migration now executes after the passenger-count upgrade instead of sharing the `0003` slot.
+Latest check output:
+- `21 files`
+- `21 unique versions`
 
 ## 3. Apply Migrations (Local)
 
@@ -56,13 +69,13 @@ The smoke script validates core tables/indexes including:
 
 ## 4. Apply Migrations (Remote)
 
-List pending:
+List remote migration state:
 
 ```bash
 wrangler d1 migrations list klubz-db-prod --remote
 ```
 
-Apply:
+Apply pending migrations:
 
 ```bash
 wrangler d1 migrations apply klubz-db-prod --remote

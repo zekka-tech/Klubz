@@ -62,7 +62,7 @@ Requests flow through: CORS → Security Headers → Request Logger → Rate Lim
 
 ### Database & Migrations
 
-Migrations live in `/migrations/` and must be sequentially numbered (0001–0010, next is 0011). Run `npm run db:check-migrations` to validate before deploying. Use prepared statements via `getDB(c)` from `src/lib/db.ts`.
+Migrations live in `/migrations/` and must be sequentially numbered with no gaps or duplicates. Run `npm run db:check-migrations` to validate the current sequence and next version before deploying. Use prepared statements via `getDB(c)` from `src/lib/db.ts`.
 
 ### Encryption
 
