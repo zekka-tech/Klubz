@@ -99,6 +99,7 @@ export interface Bindings {
   TWILIO_AUTH_TOKEN: string;
   TWILIO_PHONE_NUMBER: string;
   SENDGRID_API_KEY: string;
+  SENDGRID_FROM_EMAIL: string;
   MAPBOX_ACCESS_TOKEN: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;

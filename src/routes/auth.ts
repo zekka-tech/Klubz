@@ -450,9 +450,13 @@ authRoutes.post('/register', async (c) => {
               firstName,
               `${appUrl}/api/auth/verify-email?token=${verifyToken}`,
             );
+          } else {
+            logger.warn('Registration: verification email skipped — SENDGRID_API_KEY not configured', { userId, email });
           }
         }
-      } catch { /* non-fatal */ }
+      } catch (err) {
+        logger.warn('Registration: verification email failed (non-fatal)', { userId, email, error: String(err) });
+      }
 
       // Log audit
       try {

@@ -155,7 +155,10 @@ export class NotificationService {
       : null;
 
     this.sendgrid = env.SENDGRID_API_KEY
-      ? new SendGridService(env.SENDGRID_API_KEY)
+      ? new SendGridService(
+          env.SENDGRID_API_KEY,
+          env.SENDGRID_FROM_EMAIL || 'noreply@klubz.com',
+        )
       : null;
   }
 
