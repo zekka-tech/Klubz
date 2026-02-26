@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-26 16:07:01 UTC
+Last updated: 2026-02-26 16:07:45 UTC
 Current branch: `main`
 Tracking branch: `origin/main`
 
@@ -26,8 +26,8 @@ Quality gate status (latest run):
 - `npm run db:check-migrations`: PASS (21 files, next `0022`)
 
 Repository state:
-- Working tree has uncommitted migration + documentation updates (`migrations/0004_performance_indexes.sql`, `docs/IMPLEMENTATION_SUMMARY.md`, `MIGRATION_GUIDE.md`, `STATUS_REPORT.md`)
-- `main` synced with `origin/main` at commit `633546c`
+- Working tree clean after migration/docs refresh commit
+- `main` synced with `origin/main` at commit `1aad74b`
 
 ---
 
@@ -80,6 +80,8 @@ All implementation gaps from the 7-item plan have been shipped. 328 tests pass. 
 Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
+- `2026-02-26 16:07 UTC` | codex | commit | `1aad74b` | fixed migration replay compatibility in `0004_performance_indexes.sql` and refreshed implementation/status/migration docs
+- `2026-02-26 16:07 UTC` | codex | push | `main -> origin/main` | success (`df4c7a1..1aad74b`)
 - `2026-02-26 16:07 UTC` | codex | pull | `origin/main -> main` | success (`Already up to date`)
 - `2026-02-26 16:05 UTC` | codex | action | migration-replay-fix | updated `migrations/0004_performance_indexes.sql` to remove premature matching-table index creation, restoring clean replay compatibility after migration renumbering
 - `2026-02-26 16:05 UTC` | codex | action | quality-gates | ran `npm run verify:ci` (escalated due sandbox `listen EPERM`), PASS including `db:smoke` and full `verify` (`test` 328/328, build 379.01 kB)
