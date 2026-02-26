@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-26 16:44:37 UTC
+Last updated: 2026-02-26 16:45:17 UTC
 Current branch: `main`
 Tracking branch: `origin/main`
 
@@ -26,8 +26,8 @@ Quality gate status (latest run):
 - `npm run db:check-migrations`: PASS (21 files, next `0022`)
 
 Repository state:
-- Working tree has uncommitted registration UX + e2e updates (`public/static/js/app.js`, `tests/e2e/app-smoke.spec.ts`)
-- `main` synced with `origin/main` at commit `012c132`
+- Working tree clean after sign-up password-match implementation commit
+- `main` synced with `origin/main` at commit `d51262b`
 
 ---
 
@@ -80,6 +80,8 @@ All implementation gaps from the 7-item plan have been shipped. 328 tests pass. 
 Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
+- `2026-02-26 16:45 UTC` | codex | commit | `d51262b` | implemented dual password-match requirement on sign-up UI and added e2e regression coverage
+- `2026-02-26 16:45 UTC` | codex | push | `main -> origin/main` | success (`012c132..d51262b`)
 - `2026-02-26 16:44 UTC` | codex | action | register-password-match | added `Match Password` field to registration screen, live mismatch validity feedback, and submit-time enforcement blocking mismatched passwords
 - `2026-02-26 16:44 UTC` | codex | action | quality-gates | ran `npm run verify` PASS (`type-check`, `lint`, `test` 328/328, build 379.01 kB) and `npm run test:e2e` PASS (15 passed, 1 skipped)
 - `2026-02-26 16:07 UTC` | codex | commit | `1aad74b` | fixed migration replay compatibility in `0004_performance_indexes.sql` and refreshed implementation/status/migration docs
