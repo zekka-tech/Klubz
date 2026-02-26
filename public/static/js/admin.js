@@ -4,6 +4,45 @@ const { useState, useEffect, useCallback } = React;
 
 // API Configuration
 const API_BASE_URL = window.location.origin + '/api';
+const ADMIN_TOKEN_KEY = 'klubz_access_token';
+const LEGACY_ADMIN_TOKEN_KEY = 'accessToken';
+
+function getAdminAccessToken() {
+  const token = localStorage.getItem(ADMIN_TOKEN_KEY);
+  if (token) return token;
+
+  const legacyToken = localStorage.getItem(LEGACY_ADMIN_TOKEN_KEY);
+  if (legacyToken) {
+    // Promote legacy token key to the canonical key used by the PWA shell.
+    localStorage.setItem(ADMIN_TOKEN_KEY, legacyToken);
+    return legacyToken;
+  }
+
+  return null;
+}
+
+async function adminRequest(endpoint, options = {}) {
+  const token = getAdminAccessToken();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    ...options,
+    headers,
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return response.json();
+}
 
 // Utility Functions
 const formatCurrency = (amount, currency = 'ZAR') => {
@@ -34,44 +73,21 @@ const formatDateTime = (dateString) => {
 // API Service
 const apiService = {
   async get(endpoint) {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-        'Content-Type': 'application/json',
-      },
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
-    return response.json();
+    return adminRequest(endpoint);
   },
   
   async post(endpoint, data) {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    return adminRequest(endpoint, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify(data),
     });
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    return response.json();
   },
 
   async put(endpoint, data) {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    return adminRequest(endpoint, {
       method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify(data),
     });
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    return response.json();
   },
 };
 
