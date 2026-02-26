@@ -1,14 +1,17 @@
 # Klubz Implementation Summary
 
-Last updated: 2026-02-26 UTC
-Status: Code implementation is complete in-repo. Remaining work is external configuration and deployment operations.
+Last updated: 2026-02-26 16:05 UTC
+Status: In-repo implementation is complete and migration replay is now verified clean. Remaining work is external configuration and deployment operations.
 
 ## Verified Baseline
 
 Latest local verification:
+- `npm run verify:ci`: PASS (`db:check-migrations` + `db:smoke` + `verify`)
 - `npm run verify`: PASS (`type-check`, `lint`, `test` 328/328, `build` -> `dist/_worker.js` 379.01 kB)
 - `npm run db:check-migrations`: PASS (`21 files`, `21 unique versions`, next `0022`)
-- `npm run test:e2e -- --list`: 15 tests discovered across `accessibility`, `app-smoke`, and staged `apple-signin` specs
+- `npm run test:e2e`: PASS (`14 passed`, `1 skipped` staged Apple OAuth spec)
+- `npm run test:security`: PASS
+- `npm run test:load`: PASS
 
 ## Delivered Scope
 

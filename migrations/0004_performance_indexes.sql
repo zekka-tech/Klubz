@@ -3,9 +3,13 @@
 -- Purpose: Add indexes to optimize common query patterns
 
 -- NOTE:
--- This migration must be safe on a clean database created from 0001 + 0002 + 0003*.
+-- This migration must be safe on a clean database created from 0001 + 0002 + 0003.
 -- Some legacy environments may not have optional feature tables/columns yet.
 -- We only create indexes for schema that is guaranteed by prior migrations.
+--
+-- Matching-engine tables (`driver_trips`, `rider_requests`, etc.) are introduced
+-- in 0010_smart_matching.sql. Keep matching indexes with that migration so clean
+-- replay does not depend on historical numbering drift.
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Trip Indexes
@@ -95,21 +99,9 @@ ON audit_logs(action, created_at DESC);
 -- Matching Engine Indexes
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- Optimize driver trips queries for matching
-CREATE INDEX IF NOT EXISTS idx_driver_trips_status_departure
-ON driver_trips(status, departure_time);
-
--- Optimize spatial bounding box queries
-CREATE INDEX IF NOT EXISTS idx_driver_trips_bbox
-ON driver_trips(bbox_min_lat, bbox_max_lat, bbox_min_lng, bbox_max_lng, status);
-
--- Optimize rider request queries
-CREATE INDEX IF NOT EXISTS idx_rider_requests_status_departure
-ON rider_requests(status, earliest_departure);
-
--- Optimize rider user queries
-CREATE INDEX IF NOT EXISTS idx_rider_requests_user
-ON rider_requests(rider_id, status);
+-- Intentionally omitted in this migration:
+-- Matching tables are created later in 0010_smart_matching.sql and receive
+-- dedicated indexes there (idx_dt_*, idx_rr_*).
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Notification Indexes

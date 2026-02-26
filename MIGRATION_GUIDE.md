@@ -48,6 +48,10 @@ Latest check output:
 - `21 files`
 - `21 unique versions`
 
+Replay safety note:
+- `0004_performance_indexes.sql` is intentionally limited to tables available by `0001-0003`.
+- Matching-table indexes are owned by `0010_smart_matching.sql`, which creates `driver_trips` and `rider_requests`.
+
 ## 3. Apply Migrations (Local)
 
 ```bash
@@ -58,6 +62,12 @@ Deep smoke verification:
 
 ```bash
 npm run db:smoke
+```
+
+Full CI-grade local gate:
+
+```bash
+npm run verify:ci
 ```
 
 The smoke script validates core tables/indexes including:

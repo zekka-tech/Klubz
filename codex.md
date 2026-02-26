@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-26 15:34:00 UTC
+Last updated: 2026-02-26 16:07:01 UTC
 Current branch: `main`
 Tracking branch: `origin/main`
 
@@ -20,12 +20,13 @@ Mandatory updates to this file:
 
 ## Current State Snapshot
 Quality gate status (latest run):
+- `npm run verify:ci`: PASS (`db:check-migrations`, `db:smoke`, `verify`)
 - `npm run verify`: PASS (`type-check`, `lint`, `test` 328/328, `build` 379.01 kB worker)
 - `npm run test:e2e`: PASS (14 passed, 1 skipped gated Apple OAuth e2e)
 - `npm run db:check-migrations`: PASS (21 files, next `0022`)
 
 Repository state:
-- Working tree has uncommitted documentation updates (`docs/IMPLEMENTATION_SUMMARY.md`, `docs/DEV_PLAN_COMPLETION.md`, `MIGRATION_GUIDE.md`, `STATUS_REPORT.md`)
+- Working tree has uncommitted migration + documentation updates (`migrations/0004_performance_indexes.sql`, `docs/IMPLEMENTATION_SUMMARY.md`, `MIGRATION_GUIDE.md`, `STATUS_REPORT.md`)
 - `main` synced with `origin/main` at commit `633546c`
 
 ---
@@ -79,6 +80,10 @@ All implementation gaps from the 7-item plan have been shipped. 328 tests pass. 
 Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
 
+- `2026-02-26 16:07 UTC` | codex | pull | `origin/main -> main` | success (`Already up to date`)
+- `2026-02-26 16:05 UTC` | codex | action | migration-replay-fix | updated `migrations/0004_performance_indexes.sql` to remove premature matching-table index creation, restoring clean replay compatibility after migration renumbering
+- `2026-02-26 16:05 UTC` | codex | action | quality-gates | ran `npm run verify:ci` (escalated due sandbox `listen EPERM`), PASS including `db:smoke` and full `verify` (`test` 328/328, build 379.01 kB)
+- `2026-02-26 16:05 UTC` | codex | action | docs-status-refresh | refreshed `docs/IMPLEMENTATION_SUMMARY.md`, `STATUS_REPORT.md`, and `MIGRATION_GUIDE.md` with current CI-grade baseline and migration replay safety note
 - `2026-02-26 15:34 UTC` | codex | action | docs-status-refresh | rewrote stale status docs (`docs/IMPLEMENTATION_SUMMARY.md`, `docs/DEV_PLAN_COMPLETION.md`, `MIGRATION_GUIDE.md`, `STATUS_REPORT.md`, `CLAUDE.md`) to remove outdated phase/pending counters, align migration/version counts to `21`/`0022`, and reflect code-complete + externally-blocked state
 - `2026-02-26 14:20 UTC` | codex | pull | `origin/main -> main` | success (`Already up to date`, clean working tree at `633546c`)
 - `2026-02-26 14:20 UTC` | codex | action | quality-gates | `npm run verify` PASS (`type-check`, `lint`, `test` 328/328, `build` 379.01 kB); `npm run test:e2e` PASS (14 passed, 1 skipped); `npm run db:check-migrations` PASS (21 files, next `0022`)

@@ -1,6 +1,6 @@
 # Klubz Project Status Report
 
-Last updated: 2026-02-26 UTC
+Last updated: 2026-02-26 16:05 UTC
 
 ## Current Status
 
@@ -10,8 +10,12 @@ Implementation status:
 - Remaining work is external environment and operations configuration.
 
 Latest validated checks:
+- `npm run verify:ci`: PASS (`db:check-migrations` + `db:smoke` + `verify`)
 - `npm run verify`: PASS (`type-check`, `lint`, `test` 328/328, `build`)
 - `npm run db:check-migrations`: PASS (`21 files`, next `0022`)
+- `npm run test:e2e`: PASS (`14 passed`, `1 skipped`)
+- `npm run test:security`: PASS
+- `npm run test:load`: PASS
 
 ## Completed Delivery Areas
 
