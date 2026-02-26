@@ -242,6 +242,34 @@ Complete the flow in a browser:
 If the redirect returns `503 Google OAuth not configured`:
 Check both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set.
 
+### 6.4 Apple OAuth (Sign In with Apple)
+
+Set Apple secrets on staging:
+
+```bash
+wrangler pages secret put APPLE_CLIENT_ID --project-name=klubz-staging
+wrangler pages secret put APPLE_TEAM_ID --project-name=klubz-staging
+wrangler pages secret put APPLE_KEY_ID --project-name=klubz-staging
+wrangler pages secret put APPLE_PRIVATE_KEY --project-name=klubz-staging
+```
+
+Validate redirect wiring:
+
+```bash
+curl -s -o /dev/null -w "%{http_code} %{redirect_url}" \
+  https://klubz-staging.pages.dev/api/auth/apple
+```
+
+Expected: `302 https://appleid.apple.com/auth/authorize?...`
+
+Run gated Playwright e2e (real-provider check):
+
+```bash
+APPLE_OAUTH_E2E=1 \
+APPLE_OAUTH_E2E_BASE_URL=https://klubz-staging.pages.dev \
+npx playwright test -c playwright.config.ts tests/e2e/apple-signin.spec.ts
+```
+
 ---
 
 ## 7. Web Push (VAPID)

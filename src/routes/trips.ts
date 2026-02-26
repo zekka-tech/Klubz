@@ -76,6 +76,11 @@ interface TripParticipantOwnerRow {
   status: string;
 }
 
+interface TripArrivalParticipantRow {
+  id: number;
+  status: string;
+}
+
 interface RiderBookingCancelRow {
   booking_id: number;
   trip_id: number;
@@ -2012,6 +2017,93 @@ tripRoutes.post('/:tripId/complete', async (c) => {
   eventBus.emit('trip:completed', { tripId, completedBy: user.id }, user.id);
 
   return c.json({ message: 'Trip completed successfully', trip: { id: tripId, status: 'completed', completedAt: new Date().toISOString() } });
+});
+
+// ---------------------------------------------------------------------------
+// POST /:tripId/arrive
+// ---------------------------------------------------------------------------
+
+tripRoutes.post('/:tripId/arrive', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = Number.parseInt(c.req.param('tripId'), 10);
+  if (!Number.isFinite(tripId) || tripId <= 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid trip ID' } }, 400);
+  }
+
+  const db = getDBOptional(c);
+  if (!db) {
+    logger.error('Trip arrival denied because DB is unavailable', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+
+  const trip = await db
+    .prepare('SELECT id, driver_id, status FROM trips WHERE id = ?')
+    .bind(tripId)
+    .first<TripOwnerRow>();
+
+  if (!trip) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+  }
+  if (trip.driver_id === user.id) {
+    return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Drivers cannot mark rider arrival' } }, 403);
+  }
+  if (trip.status === 'cancelled' || trip.status === 'completed') {
+    return c.json({ error: { code: 'CONFLICT', message: 'Trip is no longer active' } }, 409);
+  }
+
+  const participant = await db
+    .prepare(`SELECT id, status FROM trip_participants WHERE trip_id = ? AND user_id = ? AND role = 'rider'`)
+    .bind(tripId, user.id)
+    .first<TripArrivalParticipantRow>();
+  if (!participant) {
+    return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only accepted riders can mark arrival' } }, 403);
+  }
+  if (participant.status !== 'accepted') {
+    return c.json({ error: { code: 'CONFLICT', message: 'Trip participation is not active' } }, 409);
+  }
+
+  const dedupeKey = `trip:arrived:${tripId}:${user.id}`;
+  const alreadyMarked = await c.env?.CACHE?.get(dedupeKey);
+  if (alreadyMarked) {
+    return c.json({ message: 'Arrival already noted', arrived: true, replayed: true });
+  }
+  await c.env?.CACHE?.put(dedupeKey, '1', { expirationTtl: 6 * 60 * 60 });
+
+  eventBus.emit('trip:arrived', { tripId, riderId: user.id }, trip.driver_id);
+
+  try {
+    await createNotification(db, {
+      userId: trip.driver_id,
+      tripId,
+      notificationType: 'system',
+      channel: 'in_app',
+      status: 'sent',
+      subject: 'Rider arrived',
+      message: 'A rider marked themselves as arrived for your active trip.',
+      metadata: { tripId, riderId: user.id },
+    });
+  } catch (err) {
+    logger.warn('Failed to persist rider arrival notification', {
+      tripId,
+      riderId: user.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  try {
+    await db
+      .prepare(
+        'INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .bind(user.id, 'TRIP_RIDER_ARRIVED', 'trip', tripId, getIP(c), getUserAgent(c))
+      .run();
+  } catch {
+    // best-effort
+  }
+
+  return c.json({ message: 'Arrival noted', arrived: true, tripId });
 });
 
 // ---------------------------------------------------------------------------

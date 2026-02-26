@@ -487,6 +487,59 @@ describe('Trips routes contract tests', () => {
     expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
   });
 
+  test('POST /trips/:id/arrive marks rider arrival for accepted participant', async () => {
+    const token = await authToken(7);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 9, status: 'active' };
+      }
+      if (query.includes('FROM trip_participants') && kind === 'first') {
+        return { id: 12, status: 'accepted' };
+      }
+      if (query.includes('INSERT INTO notifications') && kind === 'run') {
+        return { changes: 1, last_row_id: 91 };
+      }
+      if (query.includes('INSERT INTO audit_logs') && kind === 'run') {
+        return { changes: 1, last_row_id: 44 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/arrive',
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { arrived?: boolean; tripId?: number };
+    expect(body.arrived).toBe(true);
+    expect(body.tripId).toBe(1);
+  });
+
+  test('POST /trips/:id/arrive rejects non-participants', async () => {
+    const token = await authToken(7);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status FROM trips') && kind === 'first') {
+        return { id: 1, driver_id: 9, status: 'active' };
+      }
+      if (query.includes('FROM trip_participants') && kind === 'first') {
+        return null;
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/arrive',
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
   // ── Successful path sanity ────────────────────────────────────────────────
 
   test('POST /trips/offer returns 200 and tripId for valid payload', async () => {

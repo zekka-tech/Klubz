@@ -1,6 +1,6 @@
 # Codex Project Ledger - Klubz
 
-Last updated: 2026-02-25 18:35:00 UTC
+Last updated: 2026-02-26 12:01:00 UTC
 Current branch: `main`
 Tracking branch: `origin/main`
 
@@ -20,12 +20,13 @@ Mandatory updates to this file:
 
 ## Current State Snapshot
 Quality gate status (latest run):
-- `npm run verify`: PASS (`type-check`, `lint`, `test` 281/281, `build` 348.23 kB worker)
-- `npm run db:check-migrations`: PASS (18 files, next `0019`)
+- `npm run verify`: PASS (`type-check`, `lint`, `test` 328/328, `build` 379.01 kB worker)
+- `npm run test:e2e`: PASS (14 passed, 1 skipped gated Apple OAuth e2e)
+- `npm run db:check-migrations`: PASS (21 files, next `0022`)
 
 Repository state:
-- Working tree has uncommitted security + quality improvements (pending commit)
-- `main` synced with `origin/main`
+- Working tree has implementation + test updates pending commit
+- `main` synced with `origin/main` after latest pull
 
 ---
 
@@ -122,6 +123,11 @@ Functional status:
 ## Action Log
 Use this format for every significant action:
 - `YYYY-MM-DD HH:MM UTC` | `actor` | `action` | `ref` | `result`
+
+- `2026-02-26 12:01 UTC` | codex | pull | `origin/main -> main` | success (`Already up to date`)
+- `2026-02-26 12:01 UTC` | codex | action | operational-bootstrap-skill | created `SKILLS.md` with reusable pull/read/verify/commit/push operational skill
+- `2026-02-26 12:01 UTC` | codex | action | remaining-gap-implementation | implemented notification bell API-backed modal UX, added rider arrival endpoint (`POST /api/trips/:tripId/arrive`) with SSE + in-app notification + audit, upgraded Mapbox routing to return turn-by-turn steps and fixed polyline6 decoding/navigation progress polling, hardened driver earnings fallback calculation, added assetlinks production gate script, added staged Apple OAuth e2e spec, and tightened CI staging deploy dependency before ZAP baseline
+- `2026-02-26 12:01 UTC` | codex | action | quality-gates | ran targeted integration suites, `npm run verify` PASS (`type-check`, `lint`, `test` 328/328, `build` 379.01 kB), `npm run test:e2e` PASS (14 passed, 1 skipped), and `npm run db:check-migrations` PASS (21 files, next 0022)
 
 - `2026-02-20 18:45 UTC` | codex | action | phase2-lifecycle-reliability-tests | exercised every `/api/trips` offer/accept/reject/cancel path under KV failure, ensured DB-ledger idempotency responses surface `IDEMPOTENCY_REPLAY`, and verified the monitoring metrics audit test logs the injected `X-Request-ID`.
 - `2026-02-25 17:58 UTC` | codex | action | roadmap-p0-p3-implementation | implemented roadmap delivery across backend/frontend: cron matching + reminders, documents R2 upload proxy, disputes/promo/loyalty/organizations routes, ToS acceptance, points hooks, Apple Sign-In OAuth flow, MFA/settings wiring, driver docs + earnings + referral + organization screens, and integration contract coverage.

@@ -28,6 +28,9 @@ with the real certificate fingerprint in colon-separated uppercase hex format.
 ## 4. Deploy and validate file delivery
 
 ```bash
+npm run check:assetlinks
+
+# then deploy
 curl https://klubz-production.pages.dev/.well-known/assetlinks.json
 ```
 

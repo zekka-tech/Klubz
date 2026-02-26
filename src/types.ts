@@ -334,11 +334,20 @@ export interface GeocodingResult {
   confidence: number;
 }
 
+export interface RouteStep {
+  instruction: string;
+  distance: number;
+  duration: number;
+  location?: { lat: number; lng: number };
+  name?: string;
+}
+
 export interface RouteResult {
   distanceKm: number;
   durationMinutes: number;
   polyline: string;         // encoded polyline
   waypoints: Array<{ lat: number; lng: number }>;
+  steps?: RouteStep[];
 }
 
 // ---------------------------------------------------------------------------

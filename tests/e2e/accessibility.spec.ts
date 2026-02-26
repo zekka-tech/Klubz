@@ -43,6 +43,28 @@ async function installApiMocks(page: Page) {
     }
 
     if (path === '/api/users/trips' && method === 'GET') {
+      const status = url.searchParams.get('status');
+      if (status === 'completed') {
+        return fulfillJson(route, {
+          trips: [
+            {
+              id: 22,
+              driverName: 'Driver One',
+              driverRating: 4.8,
+              pickup: 'A',
+              dropoff: 'B',
+              scheduledTime: new Date().toISOString(),
+              availableSeats: 1,
+              carbonSaved: 1.2,
+              status: 'completed',
+              participantRole: 'rider',
+              price: 35,
+              rating: null,
+            },
+          ],
+        });
+      }
+
       return fulfillJson(route, {
         trips: [
           {
@@ -163,6 +185,30 @@ test.describe('Accessibility - Authenticated Screens', () => {
     await page.goto('/#settings');
     await expect(page.locator('#settings-back-btn')).toBeVisible();
     await assertNoCriticalOrSeriousViolations(page, 'settings');
+  });
+
+  test('icon-only buttons include accessible labels across key screens', async ({ page }) => {
+    await page.goto('/#settings');
+    await expect(page.locator('button.icon-btn')).toHaveAttribute('aria-label', /.+/);
+
+    await page.goto('/#profile');
+    await page.locator('#profile-docs-item').click();
+    await expect(page.locator('button.icon-btn')).toHaveAttribute('aria-label', /.+/);
+
+    await page.goto('/#profile');
+    await page.locator('#profile-earnings-item').click();
+    await expect(page.locator('button.icon-btn')).toHaveAttribute('aria-label', /.+/);
+  });
+
+  test('rating dialog exposes accessible radiogroup semantics', async ({ page }) => {
+    await page.goto('/#my-trips');
+    await page.locator('#trips-tabs .tab[data-tab=\"completed\"]').click();
+    await page.locator('.trip-rate-btn').click();
+
+    const group = page.locator('#rating-stars[role=\"radiogroup\"]');
+    await expect(group).toHaveAttribute('aria-labelledby', 'rating-stars-label');
+    await expect(group).toHaveAttribute('aria-describedby', 'rating-stars-hint');
+    await expect(page.locator('.rating-star-btn[role=\"radio\"]')).toHaveCount(5);
   });
 });
 

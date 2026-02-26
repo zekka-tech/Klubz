@@ -234,4 +234,34 @@ describe('User route hardening contracts', () => {
     expect(body.error?.code).toBe('INTERNAL_ERROR');
     expect(body.error?.message).toBe('Failed to create trip');
   });
+
+  test('driver earnings falls back to legacy fare fields when fare_rate_per_km is null', async () => {
+    const token = await authToken(15, 'user');
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('FROM trips t') && kind === 'all') {
+        expect(params).toEqual([15]);
+        return [
+          { month: '2026-02', trip_count: 2, estimated_earnings: 102.5 },
+        ];
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/users/earnings',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      months: Array<{ month: string; trip_count: number; estimated_earnings: number }>;
+      summary: { totalEarnings: number; totalTrips: number; avgPerTrip: number };
+    };
+    expect(body.months).toHaveLength(1);
+    expect(body.months[0]?.estimated_earnings).toBe(102.5);
+    expect(body.summary.totalEarnings).toBe(102.5);
+    expect(body.summary.totalTrips).toBe(2);
+    expect(body.summary.avgPerTrip).toBe(51.25);
+  });
 });

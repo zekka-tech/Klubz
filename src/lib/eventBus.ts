@@ -11,6 +11,7 @@ export type EventType =
   | 'trip:updated'
   | 'trip:cancelled'
   | 'trip:completed'
+  | 'trip:arrived'
   | 'booking:requested'
   | 'booking:accepted'
   | 'booking:cancelled'

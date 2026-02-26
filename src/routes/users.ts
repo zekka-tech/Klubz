@@ -672,14 +672,24 @@ userRoutes.get('/earnings', async (c) => {
   const rows = await db.prepare(`
     SELECT
       strftime('%Y-%m', t.departure_time / 1000, 'unixepoch') AS month,
-      COUNT(*) AS trip_count,
-      SUM(tp.fare_rate_per_km * COALESCE(t.route_distance_km, 0)) AS estimated_earnings
-    FROM trip_participants tp
-    JOIN trips t ON tp.trip_id = t.id
-    WHERE tp.user_id = ?
-      AND tp.role = 'driver'
-      AND tp.status = 'accepted'
+      COUNT(DISTINCT t.id) AS trip_count,
+      ROUND(SUM(
+        CASE
+          WHEN tp.amount_paid IS NOT NULL AND tp.amount_paid > 0
+            THEN tp.amount_paid * 0.85
+          WHEN tp.fare_rate_per_km IS NOT NULL AND t.route_distance_km IS NOT NULL
+            THEN tp.fare_rate_per_km * t.route_distance_km * 0.85
+          WHEN t.price_per_seat IS NOT NULL
+            THEN t.price_per_seat * COALESCE(tp.passenger_count, 1) * 0.85
+          ELSE 0
+        END
+      ), 2) AS estimated_earnings
+    FROM trips t
+    JOIN trip_participants tp ON tp.trip_id = t.id
+    WHERE t.driver_id = ?
       AND t.status = 'completed'
+      AND tp.role = 'rider'
+      AND tp.status = 'completed'
     GROUP BY month
     ORDER BY month DESC
     LIMIT 24

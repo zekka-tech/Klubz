@@ -99,6 +99,7 @@
     get(endpoint, opts) { return this.request('GET', endpoint, null, opts); },
     post(endpoint, body, opts) { return this.request('POST', endpoint, body, opts); },
     put(endpoint, body, opts) { return this.request('PUT', endpoint, body, opts); },
+    patch(endpoint, body, opts) { return this.request('PATCH', endpoint, body, opts); },
     del(endpoint, opts) { return this.request('DELETE', endpoint, null, opts); },
 
     async refreshToken() {
@@ -482,7 +483,9 @@
         <p style="color:var(--text-secondary);margin:0 0 var(--space-sm)">
           Rate your completed trip with ${escapeHtml(driverName || 'your driver')}.
         </p>
-        <div id="rating-stars" role="radiogroup" aria-label="Trip rating" style="display:flex;gap:6px;margin-bottom:var(--space-sm)">
+        <p id="rating-stars-label" style="font-size:0.8125rem;color:var(--text-secondary);margin:0 0 6px">Select a star rating</p>
+        <p id="rating-stars-hint" style="font-size:0.75rem;color:var(--text-muted);margin:0 0 var(--space-xs)">Use left and right arrow keys to adjust rating.</p>
+        <div id="rating-stars" role="radiogroup" aria-labelledby="rating-stars-label" aria-describedby="rating-stars-hint" style="display:flex;gap:6px;margin-bottom:var(--space-sm)">
           ${[1, 2, 3, 4, 5].map((score) => `
             <button
               type="button"
@@ -491,6 +494,7 @@
               role="radio"
               aria-checked="${score === 5 ? 'true' : 'false'}"
               aria-label="${score} star${score > 1 ? 's' : ''}"
+              tabindex="${score === 5 ? '0' : '-1'}"
             >
               ${Icons.star}
             </button>
@@ -526,6 +530,7 @@
           const score = Number(star.dataset.score || '0');
           const isActive = score <= selectedScore;
           star.setAttribute('aria-checked', score === selectedScore ? 'true' : 'false');
+          star.setAttribute('tabindex', score === selectedScore ? '0' : '-1');
           star.style.background = isActive ? 'var(--warning)' : '';
           star.style.color = isActive ? '#111827' : '';
           star.style.borderColor = isActive ? 'var(--warning)' : '';
@@ -543,10 +548,35 @@
 
       const cleanupTrap = trapFocus(dialogEl, () => close(null));
 
+      const selectScore = (score) => {
+        const nextScore = Math.max(1, Math.min(5, Number(score || 5)));
+        selectedScore = nextScore;
+        updateStars();
+        const selected = stars.find((star) => Number(star.dataset.score || '0') === nextScore);
+        selected?.focus();
+      };
+
       stars.forEach((star) => {
         star.addEventListener('click', () => {
-          selectedScore = Number(star.dataset.score || '0');
-          updateStars();
+          selectScore(Number(star.dataset.score || '0'));
+        });
+        star.addEventListener('keydown', (e) => {
+          if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            selectScore(selectedScore + 1);
+          } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            selectScore(selectedScore - 1);
+          } else if (e.key === 'Home') {
+            e.preventDefault();
+            selectScore(1);
+          } else if (e.key === 'End') {
+            e.preventDefault();
+            selectScore(5);
+          } else if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            selectScore(Number(star.dataset.score || '0'));
+          }
         });
       });
 
@@ -628,7 +658,8 @@
   }
 
   // ═══ Polyline Decoder ═══
-  function decodePolyline(encoded) {
+  function decodePolyline(encoded, precision) {
+    const factor = Math.pow(10, Number.isFinite(precision) ? precision : 5);
     var points = [];
     var index = 0, lat = 0, lng = 0;
     while (index < encoded.length) {
@@ -638,7 +669,7 @@
       shift = 0; result = 0;
       do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
       lng += (result & 1) ? ~(result >> 1) : result >> 1;
-      points.push([lat / 1e5, lng / 1e5]);
+      points.push([lat / factor, lng / factor]);
     }
     return points;
   }
@@ -699,19 +730,167 @@
   // ═══ Notification Badge ═══
   const NotificationBadge = {
     _count: parseInt(localStorage.getItem('klubz_notif_count') || '0', 10),
-    increment() {
-      this._count++;
+    set(count) {
+      this._count = Math.max(0, Number(count) || 0);
       localStorage.setItem('klubz_notif_count', String(this._count));
       const badge = document.querySelector('.header-btn__badge');
       if (badge) badge.textContent = String(this._count);
     },
+    increment() {
+      this.set(this._count + 1);
+    },
     reset() {
-      this._count = 0;
-      localStorage.setItem('klubz_notif_count', '0');
-      const badge = document.querySelector('.header-btn__badge');
-      if (badge) badge.textContent = '0';
+      this.set(0);
     },
   };
+
+  function formatNotificationTime(value) {
+    if (!value) return 'Now';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Now';
+    return date.toLocaleString('en-ZA', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function renderNotificationRows(rows) {
+    if (!rows.length) {
+      return `
+        <div style="padding:var(--space-md);text-align:center;color:var(--text-muted)">
+          No notifications yet.
+        </div>
+      `;
+    }
+
+    return rows.map((item) => {
+      const isRead = item.status === 'read';
+      const createdAt = item.createdAt || item.sentAt || item.deliveredAt || item.readAt;
+      return `
+        <article
+          class="notification-item"
+          data-notification-id="${item.id}"
+          style="padding:var(--space-sm) 0;border-bottom:1px solid var(--border);opacity:${isRead ? '0.7' : '1'}"
+        >
+          <div style="display:flex;justify-content:space-between;gap:var(--space-sm);align-items:flex-start">
+            <div style="min-width:0">
+              <div style="font-size:0.875rem;font-weight:${isRead ? '500' : '700'};line-height:1.35">
+                ${escapeHtml(item.subject || 'Notification')}
+              </div>
+              <div style="font-size:0.8125rem;color:var(--text-secondary);margin-top:2px;line-height:1.4">
+                ${escapeHtml(item.message || '')}
+              </div>
+              <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                ${escapeHtml(formatNotificationTime(createdAt))}
+              </div>
+            </div>
+            ${!isRead ? `<button type="button" class="btn btn--secondary btn--sm notif-read-btn" data-id="${item.id}">Mark read</button>` : ''}
+          </div>
+        </article>
+      `;
+    }).join('');
+  }
+
+  async function openNotificationsPanel() {
+    const returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const overlay = createDialogScaffold(
+      'Notifications',
+      `
+        <div id="notifications-panel-status" style="display:none;font-size:0.8125rem;color:var(--danger);margin-bottom:var(--space-xs)"></div>
+        <div id="notifications-panel-list" style="max-height:50vh;overflow:auto;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:0 var(--space-xs)">
+          <div class="skeleton" style="height:120px;margin:var(--space-sm) 0"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:var(--space-md);gap:var(--space-sm)">
+          <button type="button" class="btn btn--secondary" id="notifications-read-all-btn">Mark all as read</button>
+          <button type="button" class="btn btn--primary" id="notifications-close-btn">Close</button>
+        </div>
+      `,
+    );
+
+    document.body.appendChild(overlay);
+    const dialogEl = overlay.querySelector('[role="dialog"]');
+    const listEl = overlay.querySelector('#notifications-panel-list');
+    const statusEl = overlay.querySelector('#notifications-panel-status');
+    const closeBtn = overlay.querySelector('#notifications-close-btn');
+    const readAllBtn = overlay.querySelector('#notifications-read-all-btn');
+    let closed = false;
+
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      cleanupTrap();
+      overlay.remove();
+      if (returnFocusEl) returnFocusEl.focus();
+    };
+    const cleanupTrap = trapFocus(dialogEl, close);
+
+    const syncBadgeWithRows = (rows) => {
+      const unread = rows.filter((item) => item.status !== 'read').length;
+      NotificationBadge.set(unread);
+    };
+
+    const renderRows = (rows) => {
+      if (!listEl) return;
+      listEl.innerHTML = renderNotificationRows(rows);
+    };
+
+    const fetchNotifications = async () => {
+      try {
+        const data = await API.get('/notifications?limit=25&offset=0');
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        Store.setState({ notifications: rows });
+        syncBadgeWithRows(rows);
+        renderRows(rows);
+      } catch (err) {
+        if (statusEl) {
+          statusEl.textContent = err.message || 'Unable to load notifications.';
+          statusEl.style.display = '';
+        }
+        if (listEl) {
+          listEl.innerHTML = '<div style="padding:var(--space-md);color:var(--text-muted)">Unable to load notifications.</div>';
+        }
+      }
+    };
+
+    closeBtn?.addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    readAllBtn?.addEventListener('click', async () => {
+      try {
+        await API.post('/notifications/read-all', {});
+        const current = Array.isArray(Store.state.notifications) ? Store.state.notifications : [];
+        const rows = current.map((item) => ({ ...item, status: 'read', readAt: item.readAt || new Date().toISOString() }));
+        Store.setState({ notifications: rows });
+        syncBadgeWithRows(rows);
+        renderRows(rows);
+      } catch (err) {
+        if (statusEl) {
+          statusEl.textContent = err.message || 'Unable to mark notifications as read.';
+          statusEl.style.display = '';
+        }
+      }
+    });
+
+    listEl?.addEventListener('click', async (e) => {
+      const target = e.target instanceof HTMLElement ? e.target.closest('.notif-read-btn') : null;
+      if (!target) return;
+      const id = Number(target.getAttribute('data-id'));
+      if (!Number.isFinite(id) || id <= 0) return;
+      target.setAttribute('disabled', 'true');
+      try {
+        await API.patch(`/notifications/${id}/read`, {});
+        const current = Array.isArray(Store.state.notifications) ? Store.state.notifications : [];
+        const rows = current.map((item) => (Number(item.id) === id
+          ? { ...item, status: 'read', readAt: item.readAt || new Date().toISOString() }
+          : item));
+        Store.setState({ notifications: rows });
+        syncBadgeWithRows(rows);
+        renderRows(rows);
+      } catch {
+        target.removeAttribute('disabled');
+      }
+    });
+
+    await fetchNotifications();
+    (closeBtn || dialogEl)?.focus();
+  }
 
   // ═══ SSE Client ═══
   const SSEClient = {
@@ -755,6 +934,10 @@
         case 'trip:cancelled':
           Toast.show('A trip was cancelled', 'error');
           if (Store.state.currentScreen === 'my-trips') loadTrips('upcoming');
+          break;
+        case 'trip:arrived':
+          Toast.show('A rider has arrived at the pickup point.', 'info');
+          NotificationBadge.increment();
           break;
         case 'match:confirmed':
           Toast.show('Match confirmed!', 'success');
@@ -812,6 +995,7 @@
   // ═══ Location Sharing ═══
   let locationWatcher = null;
   let activeTripLocationPoll = null;
+  let navigationProgressPoll = null;
 
   async function loadActiveTripLocation(tripId) {
     if (!tripId) return;
@@ -837,6 +1021,58 @@
     if (activeTripLocationPoll !== null) {
       clearInterval(activeTripLocationPoll);
       activeTripLocationPoll = null;
+    }
+  }
+
+  function updateNavigationProgressFromLocation(lat, lng) {
+    const steps = Store.state.navSteps;
+    if (!Array.isArray(steps) || !steps.length) return;
+    const currentIdx = Math.max(0, Number(Store.state.navStepIndex || 0));
+    let bestIdx = currentIdx;
+    let bestDistanceKm = Number.POSITIVE_INFINITY;
+
+    for (let i = currentIdx; i < steps.length; i++) {
+      const loc = steps[i]?.location;
+      if (!loc || typeof loc.lat !== 'number' || typeof loc.lng !== 'number') continue;
+      const distanceKm = clientHaversineKm(lat, lng, loc.lat, loc.lng);
+      if (distanceKm < bestDistanceKm) {
+        bestDistanceKm = distanceKm;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx > currentIdx && bestDistanceKm <= 0.25) {
+      Store.setState({ navStepIndex: bestIdx });
+      updateNavDisplay();
+    }
+  }
+
+  async function refreshNavigationLocation(tripId) {
+    if (!tripId) return;
+    try {
+      const data = await API.get(`/trips/${tripId}/location`);
+      const location = data?.location;
+      if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number') return;
+      MapManager.setMarker('nav-map', 'driver', [location.lat, location.lng], { icon: 'car' });
+      updateNavigationProgressFromLocation(location.lat, location.lng);
+    } catch {
+      // best-effort
+    }
+  }
+
+  function startNavigationProgressPolling(tripId) {
+    stopNavigationProgressPolling();
+    if (!tripId) return;
+    refreshNavigationLocation(tripId);
+    navigationProgressPoll = setInterval(() => {
+      refreshNavigationLocation(tripId);
+    }, 10000);
+  }
+
+  function stopNavigationProgressPolling() {
+    if (navigationProgressPoll !== null) {
+      clearInterval(navigationProgressPoll);
+      navigationProgressPoll = null;
     }
   }
 
@@ -2048,6 +2284,7 @@
         MapManager.destroy('nav-map');
         stopLocationSharing();
         stopActiveTripLocationPolling();
+        stopNavigationProgressPolling();
       }
       Store.setState({ prevScreen: currentScreen });
 
@@ -2341,6 +2578,7 @@
             } finally {
               stopLocationSharing();
               stopActiveTripLocationPolling();
+              stopNavigationProgressPolling();
               Store.setState({ activeTrip: null, activeChatTripId: null });
               Router.navigate('my-trips');
             }
@@ -2353,8 +2591,20 @@
             }
             Router.navigate('chat');
           });
-          on('trip-arrived-btn', 'click', () => {
-            Toast.show('Arrival noted. Rate your ride after the trip ends.', 'info');
+          on('trip-arrived-btn', 'click', async () => {
+            const tripId = Store.state.activeTrip?.id;
+            if (!tripId) return;
+            try {
+              await API.post(`/trips/${tripId}/arrive`, {});
+              const btn = document.getElementById('trip-arrived-btn');
+              if (btn) {
+                btn.textContent = 'Arrival Noted';
+                btn.setAttribute('disabled', 'true');
+              }
+              Toast.show('Arrival noted. Your driver has been notified.', 'success');
+            } catch (err) {
+              Toast.show(err.message || 'Unable to mark your arrival.', 'error');
+            }
           });
           on('trip-share-eta-btn', 'click', async () => {
             const trip = Store.state.activeTrip;
@@ -2392,7 +2642,7 @@
               try {
                 const routeData = await API.get(`/trips/${tripId}/route`);
                 if (routeData.polyline) {
-                  const pts = decodePolyline(routeData.polyline);
+                  const pts = decodePolyline(routeData.polyline, 6);
                   MapManager.setRoute('nav-map', pts);
                   MapManager.fitRoute('nav-map');
                 }
@@ -2400,12 +2650,14 @@
                   Store.setState({ navSteps: routeData.steps, navStepIndex: 0 });
                   updateNavDisplay();
                 }
+                startNavigationProgressPolling(tripId);
               } catch { /* best-effort */ }
             }
           }, 100);
           on('nav-end-btn', 'click', () => {
             stopLocationSharing();
             stopActiveTripLocationPolling();
+            stopNavigationProgressPolling();
             Store.setState({ activeTrip: null, activeChatTripId: null, navSteps: null, navStepIndex: 0 });
             Router.navigate('my-trips');
           });
@@ -2678,8 +2930,13 @@
     const stepText = document.getElementById('nav-step-text');
     const stepDist = document.getElementById('nav-step-distance');
     const eta = document.getElementById('nav-eta');
-    if (stepText) stepText.textContent = step.instruction || 'Continue';
-    if (stepDist) stepDist.textContent = step.distance ? `${Math.round(step.distance)} m` : '';
+    if (stepText) stepText.textContent = step.instruction || step.name || 'Continue';
+    if (stepDist) {
+      const meters = Number(step.distance || 0);
+      stepDist.textContent = meters >= 1000
+        ? `${(meters / 1000).toFixed(1)} km`
+        : (meters > 0 ? `${Math.round(meters)} m` : '');
+    }
     if (eta) {
       const remaining = steps.slice(idx).reduce((s, st) => s + (st.duration || 0), 0);
       eta.textContent = `ETA: ${Math.round(remaining / 60)} min`;
@@ -4274,9 +4531,9 @@
         <div class="app-header__actions">
           <button class="header-btn" aria-label="Notifications" id="notifications-btn">
             ${Icons.bell}
-            <span class="header-btn__badge">3</span>
+            <span class="header-btn__badge">0</span>
           </button>
-          <div class="avatar-sm" id="profile-avatar-btn" style="cursor:pointer" role="button" aria-label="Profile">
+          <div class="avatar-sm" id="profile-avatar-btn" style="cursor:pointer" role="button" tabindex="0" aria-label="Profile">
             ${getInitials(Store.state.user?.name || Store.state.user?.email || 'U')}
           </div>
         </div>
@@ -4349,13 +4606,18 @@
     });
 
     // Notifications button in header
-    document.getElementById('notifications-btn')?.addEventListener('click', () => {
-      Toast.show('Notifications coming soon!', 'info');
-    });
+    document.getElementById('notifications-btn')?.addEventListener('click', openNotificationsPanel);
 
     // Profile avatar in header
-    document.getElementById('profile-avatar-btn')?.addEventListener('click', () => {
+    const avatarBtn = document.getElementById('profile-avatar-btn');
+    avatarBtn?.addEventListener('click', () => {
       Router.navigate('profile');
+    });
+    avatarBtn?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        Router.navigate('profile');
+      }
     });
   }
 
@@ -4379,8 +4641,7 @@
     }
 
     // Restore notification badge count
-    const badge = document.querySelector('.header-btn__badge');
-    if (badge) badge.textContent = String(NotificationBadge._count);
+    NotificationBadge.set(NotificationBadge._count);
 
     // Handle redirects with URL query parameters (email verification, OAuth callbacks)
     const params = new URLSearchParams(window.location.search);

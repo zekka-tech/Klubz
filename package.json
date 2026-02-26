@@ -14,7 +14,7 @@
     "build:prod": "NODE_ENV=production vite build",
     "preview": "wrangler pages dev dist",
     "deploy": "npm run build && wrangler pages deploy dist",
-    "deploy:prod": "npm run build:prod && wrangler pages deploy dist --project-name klubz-production",
+    "deploy:prod": "npm run build:prod && npm run check:assetlinks && wrangler pages deploy dist --project-name klubz-production",
     "deploy:staging": "npm run build && wrangler pages deploy dist --project-name klubz-staging",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
     "lint": "eslint src --ext .ts,.tsx",
@@ -44,7 +44,8 @@
     "db:smoke": "bash scripts/db-smoke.sh klubz-db-prod",
     "db:seed": "wrangler d1 execute klubz-db-prod --file=./migrations/0002_sample_data.sql",
     "db:reset": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed",
-    "generate:pwa-icons": "node scripts/generate-pwa-icons.js"
+    "generate:pwa-icons": "node scripts/generate-pwa-icons.js",
+    "check:assetlinks": "node scripts/check-assetlinks-fingerprint.js"
   },
   "dependencies": {
     "@openai/codex": "^0.101.0",

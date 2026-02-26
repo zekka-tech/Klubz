@@ -4,7 +4,7 @@
  * Workers-compatible HTTP-based geocoding, reverse geocoding, and route calculation.
  */
 
-import type { Bindings, GeocodingResult, RouteResult } from '../types';
+import type { Bindings, GeocodingResult, RouteResult, RouteStep } from '../types';
 
 export class GeoService {
   private accessToken: string;
@@ -101,7 +101,7 @@ export class GeoService {
       access_token: this.accessToken,
       geometries: 'polyline6',
       overview: 'full',
-      steps: 'false',
+      steps: 'true',
     });
 
     const url = `${this.baseUrl}/directions/v5/mapbox/driving/${coords}?${params}`;
@@ -115,7 +115,10 @@ export class GeoService {
         geometry: string;
         legs: Array<{
           steps: Array<{
-            maneuver: { location: [number, number] };
+            distance: number;
+            duration: number;
+            name: string;
+            maneuver: { instruction?: string; location: [number, number] };
           }>;
         }>;
       }>;
@@ -133,11 +136,25 @@ export class GeoService {
       }))
     );
 
+    const steps: RouteStep[] = route.legs.flatMap((leg) =>
+      leg.steps.map((step) => ({
+        instruction: step.maneuver.instruction ?? 'Continue',
+        distance: step.distance,
+        duration: step.duration,
+        name: step.name,
+        location: {
+          lat: step.maneuver.location[1],
+          lng: step.maneuver.location[0],
+        },
+      }))
+    );
+
     return {
       distanceKm: Math.round((route.distance / 1000) * 100) / 100,
       durationMinutes: Math.round((route.duration / 60) * 10) / 10,
       polyline: route.geometry,
       waypoints: routeWaypoints,
+      steps,
     };
   }
 

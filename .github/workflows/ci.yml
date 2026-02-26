@@ -71,8 +71,47 @@ jobs:
       - name: Build
         run: npm run build
 
-  security-baseline:
+  deploy-staging:
     needs: quality-gates
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy to staging
+        run: npm run deploy:staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Wait for staging health
+        run: |
+          for i in {1..10}; do
+            if curl -fsS https://klubz-staging.pages.dev/health >/dev/null; then
+              echo "Staging is healthy"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Staging health check failed"
+          exit 1
+
+  security-baseline:
+    needs:
+      - quality-gates
+      - deploy-staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

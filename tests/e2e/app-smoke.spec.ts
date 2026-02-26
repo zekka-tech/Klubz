@@ -100,6 +100,29 @@ async function installApiMocks(page: Page) {
       });
     }
 
+    if (path === '/api/notifications' && method === 'GET') {
+      return fulfillJson(route, {
+        data: [
+          {
+            id: 901,
+            subject: 'Booking accepted',
+            message: 'Your driver accepted your booking.',
+            status: 'sent',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        pagination: { limit: 25, offset: 0, total: 1, hasMore: false },
+      });
+    }
+
+    if (path === '/api/notifications/read-all' && method === 'POST') {
+      return fulfillJson(route, { updated: 1, message: 'ok' });
+    }
+
+    if (/^\/api\/notifications\/\d+\/read$/.test(path) && method === 'PATCH') {
+      return fulfillJson(route, { message: 'ok' });
+    }
+
     if (path === '/api/users/referral' && method === 'GET') {
       return fulfillJson(route, { code: 'REF12345', usesCount: 0 });
     }
@@ -209,7 +232,8 @@ test.describe('Authenticated App Shell Flows', () => {
     await expect(page).toHaveURL(/#home$/);
 
     await page.locator('#notifications-btn').click();
-    await expect(page.locator('#toast-container .toast')).toHaveCount(1);
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    await expect(page.locator('.notification-item')).toHaveCount(1);
   });
 
   test('profile links, settings and back buttons are wired', async ({ page }) => {
