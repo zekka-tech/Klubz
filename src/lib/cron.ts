@@ -126,9 +126,38 @@ export async function batchMatchSubscriptionDays(env: Bindings): Promise<void> {
       await repository.saveMatchResult(crypto.randomUUID(), topMatch);
       await repository.updateRiderRequestStatus(riderRequest.id, 'matched', topMatch.driverTripId);
 
+      let matchedTripId: number | null = null;
+      try {
+        const tripRow = await db
+          .prepare(
+            `SELECT t.id
+             FROM driver_trips dt
+             JOIN trips t ON t.driver_id = dt.driver_id
+             WHERE dt.id = ?
+               AND ABS(strftime('%s', t.scheduled_time) - (dt.departure_time / 1000)) < 300
+               AND t.status NOT IN ('cancelled', 'completed')
+             LIMIT 1`,
+          )
+          .bind(topMatch.driverTripId)
+          .first<{ id: number }>();
+        matchedTripId = tripRow?.id ?? null;
+        if (matchedTripId === null) {
+          logger.warn('batchMatchSubscriptionDays: matched trip correlation not found', {
+            dayId: day.id,
+            driverTripId: topMatch.driverTripId,
+          });
+        }
+      } catch (err) {
+        logger.warn('batchMatchSubscriptionDays: matched trip correlation failed', {
+          dayId: day.id,
+          driverTripId: topMatch.driverTripId,
+          error: String(err),
+        });
+      }
+
       await db
-        .prepare(`UPDATE monthly_scheduled_days SET status = 'matched', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-        .bind(day.id)
+        .prepare(`UPDATE monthly_scheduled_days SET status = 'matched', trip_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .bind(matchedTripId, day.id)
         .run();
     } catch (err) {
       logger.warn('batchMatchSubscriptionDays: update failed', { dayId: day.id, error: String(err) });

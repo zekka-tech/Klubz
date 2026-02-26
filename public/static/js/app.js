@@ -198,7 +198,12 @@
 
       const profile = await API.get('/users/profile');
       if (!profile?.tosVersionAccepted) {
-        const accepted = window.confirm('Please accept the Klubz Terms of Service to continue.');
+        const accepted = await showConfirmDialog({
+          title: 'Terms of Service',
+          message: 'Please accept the Klubz Terms of Service to continue.',
+          confirmText: 'Accept and Continue',
+          cancelText: 'Sign Out',
+        });
         if (!accepted) {
           Auth.logout();
           return false;
@@ -290,6 +295,184 @@
 
   function getInitials(name) {
     return (name || 'U').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+  }
+
+  function trapFocus(containerEl, onClose) {
+    const focusableSelector = [
+      'a[href]',
+      'button:not([disabled])',
+      'textarea:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+
+    const getFocusable = () =>
+      Array.from(containerEl.querySelectorAll(focusableSelector)).filter((el) =>
+        el instanceof HTMLElement && !el.hasAttribute('hidden') && el.offsetParent !== null
+      );
+
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+
+      const focusable = getFocusable();
+      if (!focusable.length) {
+        e.preventDefault();
+        containerEl.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    containerEl.addEventListener('keydown', onKeyDown);
+    return () => containerEl.removeEventListener('keydown', onKeyDown);
+  }
+
+  function createDialogScaffold(title, bodyMarkup) {
+    const titleId = `dialog-title-${Math.random().toString(36).slice(2, 8)}`;
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:4000;padding:var(--space-lg)';
+    overlay.innerHTML = `
+      <div role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1" style="width:min(460px,100%);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:0 18px 60px rgba(0,0,0,.35)">
+        <h3 id="${titleId}" style="font-size:1rem;font-weight:700;margin:0 0 var(--space-sm)">${escapeHtml(title)}</h3>
+        ${bodyMarkup}
+      </div>
+    `;
+    return overlay;
+  }
+
+  function showConfirmDialog({
+    title,
+    message,
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+    danger = false,
+  }) {
+    return new Promise((resolve) => {
+      const returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const overlay = createDialogScaffold(
+        title,
+        `<p style="color:var(--text-secondary);margin:0 0 var(--space-lg)">${escapeHtml(message)}</p>
+         <div style="display:flex;justify-content:flex-end;gap:var(--space-sm)">
+           <button type="button" class="btn btn--secondary" data-dialog-cancel>${escapeHtml(cancelText)}</button>
+           <button type="button" class="btn ${danger ? 'btn--danger' : 'btn--primary'}" data-dialog-confirm>${escapeHtml(confirmText)}</button>
+         </div>`,
+      );
+
+      document.body.appendChild(overlay);
+      const dialogEl = overlay.querySelector('[role="dialog"]');
+      const cancelBtn = overlay.querySelector('[data-dialog-cancel]');
+      const confirmBtn = overlay.querySelector('[data-dialog-confirm]');
+      let closed = false;
+
+      const close = (result) => {
+        if (closed) return;
+        closed = true;
+        cleanupTrap();
+        overlay.remove();
+        if (returnFocusEl) returnFocusEl.focus();
+        resolve(result);
+      };
+
+      const cleanupTrap = trapFocus(dialogEl, () => close(false));
+      cancelBtn?.addEventListener('click', () => close(false));
+      confirmBtn?.addEventListener('click', () => close(true));
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close(false);
+      });
+      (confirmBtn || dialogEl).focus();
+    });
+  }
+
+  function showPromptDialog({
+    title,
+    message,
+    placeholder = '',
+    confirmText = 'Submit',
+    cancelText = 'Cancel',
+    type = 'text',
+    minLength = 0,
+    multiline = false,
+    trim = true,
+  }) {
+    return new Promise((resolve) => {
+      const returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const fieldMarkup = multiline
+        ? `<textarea id="dialog-input" class="form-input" rows="4" placeholder="${escapeHtml(placeholder)}" style="resize:vertical"></textarea>`
+        : `<input id="dialog-input" class="form-input" type="${escapeHtml(type)}" placeholder="${escapeHtml(placeholder)}">`;
+
+      const overlay = createDialogScaffold(
+        title,
+        `<p style="color:var(--text-secondary);margin:0 0 var(--space-sm)">${escapeHtml(message)}</p>
+         <div style="margin-bottom:var(--space-xs)">${fieldMarkup}</div>
+         <p id="dialog-error" style="display:none;color:var(--danger);font-size:0.8125rem;margin:0 0 var(--space-md)"></p>
+         <div style="display:flex;justify-content:flex-end;gap:var(--space-sm)">
+           <button type="button" class="btn btn--secondary" data-dialog-cancel>${escapeHtml(cancelText)}</button>
+           <button type="button" class="btn btn--primary" data-dialog-confirm>${escapeHtml(confirmText)}</button>
+         </div>`,
+      );
+
+      document.body.appendChild(overlay);
+      const dialogEl = overlay.querySelector('[role="dialog"]');
+      const inputEl = overlay.querySelector('#dialog-input');
+      const errorEl = overlay.querySelector('#dialog-error');
+      const cancelBtn = overlay.querySelector('[data-dialog-cancel]');
+      const confirmBtn = overlay.querySelector('[data-dialog-confirm]');
+      let closed = false;
+
+      const close = (result) => {
+        if (closed) return;
+        closed = true;
+        cleanupTrap();
+        overlay.remove();
+        if (returnFocusEl) returnFocusEl.focus();
+        resolve(result);
+      };
+
+      const cleanupTrap = trapFocus(dialogEl, () => close(null));
+
+      const submit = () => {
+        const rawValue = String(inputEl?.value || '');
+        const value = trim ? rawValue.trim() : rawValue;
+        if (minLength > 0 && value.length < minLength) {
+          if (errorEl) {
+            errorEl.textContent = `Please enter at least ${minLength} characters.`;
+            errorEl.style.display = '';
+          }
+          inputEl?.setAttribute('aria-invalid', 'true');
+          inputEl?.focus();
+          return;
+        }
+        close(value || null);
+      };
+
+      cancelBtn?.addEventListener('click', () => close(null));
+      confirmBtn?.addEventListener('click', submit);
+      inputEl?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !multiline) {
+          e.preventDefault();
+          submit();
+        }
+      });
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close(null);
+      });
+      (inputEl || dialogEl).focus();
+    });
   }
 
   // ═══ SVG Icons ═══
@@ -615,9 +798,9 @@
           </div>
           <div class="form-group">
             <label class="form-label">I want to</label>
-            <div class="tabs" id="role-tabs">
-              <button type="button" class="tab active" data-role="passenger">Ride</button>
-              <button type="button" class="tab" data-role="driver">Drive</button>
+            <div class="tabs" id="role-tabs" role="tablist" aria-label="Account role">
+              <button type="button" class="tab active" data-role="passenger" role="tab" aria-selected="true" tabindex="0">Ride</button>
+              <button type="button" class="tab" data-role="driver" role="tab" aria-selected="false" tabindex="-1">Drive</button>
             </div>
           </div>
           <div class="form-group" style="margin-top:var(--space-sm)">
@@ -717,11 +900,11 @@
         <p class="section-subtitle">Smart matching finds the best carpool for your route</p>
 
         <div class="trip-type-selector" style="display:flex;gap:var(--space-sm);margin-bottom:var(--space-md)">
-          <button type="button" class="trip-type-btn active" data-type="daily" id="find-daily-btn" style="flex:1;padding:var(--space-sm);border-radius:var(--radius);border:2px solid var(--primary);background:var(--primary-bg);cursor:pointer;font-size:0.875rem;font-weight:600">
-            Daily <span class="rate-badge" style="font-size:0.75rem;font-weight:400;opacity:0.8">R2.85/km</span>
+          <button type="button" class="trip-type-btn active" data-type="daily" id="find-daily-btn" style="flex:1;padding:var(--space-sm);border-radius:var(--radius);border:2px solid var(--primary);background:var(--primary-bg);color:var(--text-primary);cursor:pointer;font-size:0.875rem;font-weight:600">
+            Daily <span class="rate-badge" style="font-size:0.75rem;font-weight:400;color:var(--text-secondary)">R2.85/km</span>
           </button>
           <button type="button" class="trip-type-btn" data-type="monthly" id="find-monthly-btn" style="flex:1;padding:var(--space-sm);border-radius:var(--radius);border:2px solid var(--border);background:transparent;cursor:pointer;font-size:0.875rem;font-weight:600;color:var(--text-primary)">
-            Monthly <span class="rate-badge" style="font-size:0.75rem;font-weight:400;opacity:0.8">R2.15/km</span>
+            Monthly <span class="rate-badge" style="font-size:0.75rem;font-weight:400;color:var(--text-secondary)">R2.15/km</span>
           </button>
         </div>
 
@@ -739,11 +922,11 @@
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-sm);margin-bottom:var(--space-md)">
             <div class="form-group" style="margin:0">
-              <label class="form-label">Date</label>
+              <label class="form-label" for="fr-date">Date</label>
               <input class="form-input" type="date" id="fr-date" required>
             </div>
             <div class="form-group" style="margin:0">
-              <label class="form-label">Time</label>
+              <label class="form-label" for="fr-time">Time</label>
               <input class="form-input" type="time" id="fr-time" required>
             </div>
           </div>
@@ -795,18 +978,18 @@
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-sm);margin-bottom:var(--space-md)">
             <div class="form-group" style="margin:0">
-              <label class="form-label">Date</label>
+              <label class="form-label" for="or-date">Date</label>
               <input class="form-input" type="date" id="or-date" required>
             </div>
             <div class="form-group" style="margin:0">
-              <label class="form-label">Departure Time</label>
+              <label class="form-label" for="or-time">Departure Time</label>
               <input class="form-input" type="time" id="or-time" required>
             </div>
           </div>
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-sm);margin-bottom:var(--space-md)">
             <div class="form-group" style="margin:0">
-              <label class="form-label">Available Seats</label>
+              <label class="form-label" for="or-seats">Available Seats</label>
               <select class="form-input" id="or-seats">
                 ${[1,2,3,4,5,6].map(n => `<option value="${n}"${n===3?' selected':''}>${n} seat${n>1?'s':''}</option>`).join('')}
               </select>
@@ -992,7 +1175,7 @@
               <div class="list-item__title">Theme</div>
               <div class="list-item__subtitle">${Store.state.theme === 'dark' ? 'Dark' : 'Light'} mode</div>
             </div>
-            <div class="list-item__action" style="font-size:0.8125rem;color:var(--primary)">Toggle</div>
+            <div class="list-item__action" style="font-size:0.8125rem;color:var(--primary-light)">Toggle</div>
           </div>
         </div>
 
@@ -1424,7 +1607,7 @@
           <button type="submit" class="btn btn--primary btn--full btn--lg">Verify</button>
         </form>
         <p style="text-align:center;margin-top:var(--space-md);font-size:0.875rem;color:var(--text-secondary)">
-          Lost access? <a href="#" id="mfa-backup-link" style="color:var(--primary);font-weight:600">Use a backup code</a>
+          Lost access? <a href="#" id="mfa-backup-link" style="color:var(--primary-light);font-weight:600">Use a backup code</a>
         </p>
         <p style="text-align:center;margin-top:var(--space-sm);font-size:0.8125rem">
           <a href="#" id="mfa-cancel-link" style="color:var(--text-muted)">Cancel and go back</a>
@@ -1716,8 +1899,26 @@
           on('register-form', 'submit', handleRegister);
           on('link-to-login', 'click', (e) => { e.preventDefault(); Router.navigate('login'); });
           onAll('#role-tabs .tab', 'click', (e) => {
-            document.querySelectorAll('#role-tabs .tab').forEach(t => t.classList.remove('active'));
+            const tabs = Array.from(document.querySelectorAll('#role-tabs .tab'));
+            tabs.forEach((t) => {
+              t.classList.remove('active');
+              t.setAttribute('aria-selected', 'false');
+              t.setAttribute('tabindex', '-1');
+            });
             e.currentTarget.classList.add('active');
+            e.currentTarget.setAttribute('aria-selected', 'true');
+            e.currentTarget.setAttribute('tabindex', '0');
+          });
+          onAll('#role-tabs .tab', 'keydown', (e) => {
+            if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+            e.preventDefault();
+            const tabs = Array.from(document.querySelectorAll('#role-tabs .tab'));
+            const currentIndex = tabs.indexOf(e.currentTarget);
+            const nextIndex = e.key === 'ArrowRight'
+              ? (currentIndex + 1) % tabs.length
+              : (currentIndex - 1 + tabs.length) % tabs.length;
+            tabs[nextIndex]?.click();
+            tabs[nextIndex]?.focus();
           });
           break;
         case 'find-ride': {
@@ -1742,6 +1943,7 @@
               dailyBtn.classList.add('active');
               dailyBtn.style.borderColor = 'var(--primary)';
               dailyBtn.style.background = 'var(--primary-bg)';
+              dailyBtn.style.color = 'var(--text-primary)';
             }
           });
           on('find-monthly-btn', 'click', () => {
@@ -1861,9 +2063,15 @@
         }
         case 'mfa-verify':
           on('mfa-verify-form', 'submit', handleMfaVerify);
-          on('mfa-backup-link', 'click', (e) => {
+          on('mfa-backup-link', 'click', async (e) => {
             e.preventDefault();
-            const code = prompt('Enter your backup code:');
+            const code = await showPromptDialog({
+              title: 'Use Backup Code',
+              message: 'Enter one of your backup codes to complete sign-in.',
+              placeholder: 'Backup code',
+              confirmText: 'Verify',
+              minLength: 6,
+            });
             if (code) handleMfaVerifyWithBackup(code);
           });
           on('mfa-cancel-link', 'click', (e) => {
@@ -2096,9 +2304,22 @@
   }
 
   async function handleMfaDisable() {
-    const password = prompt('Enter your password to disable MFA:');
+    const password = await showPromptDialog({
+      title: 'Disable Two-Factor Authentication',
+      message: 'Enter your password to continue.',
+      placeholder: 'Password',
+      confirmText: 'Continue',
+      type: 'password',
+      trim: false,
+    });
     if (!password) return;
-    const code = prompt('Enter your current 6-digit authenticator code:');
+    const code = await showPromptDialog({
+      title: 'Disable Two-Factor Authentication',
+      message: 'Enter your current 6-digit authenticator code.',
+      placeholder: '000000',
+      confirmText: 'Disable MFA',
+      minLength: 6,
+    });
     if (!code) return;
 
     try {
@@ -2118,7 +2339,13 @@
   // ─── SOS Handler ───
 
   async function handleSOS() {
-    const confirmed = window.confirm('Send emergency SOS alert? This will notify your emergency contacts and Klubz safety team.');
+    const confirmed = await showConfirmDialog({
+      title: 'Emergency SOS',
+      message: 'Send emergency SOS alert? This notifies your emergency contacts and Klubz safety team.',
+      confirmText: 'Send SOS',
+      cancelText: 'Cancel',
+      danger: true,
+    });
     if (!confirmed) return;
     try {
       const tripId = Store.state.activeTrip?.id;
@@ -2979,7 +3206,7 @@
       } else {
         section.innerHTML = `
           <h3 class="section-title" style="font-size:1rem;margin-bottom:var(--space-md)">Monthly Subscription</h3>
-          <p style="color:var(--text-muted);font-size:0.875rem">No active subscription. <a href="#" id="sub-cta-link" style="color:var(--primary);text-decoration:none;font-weight:600">Subscribe to save 25% &#8594;</a></p>
+          <p style="color:var(--text-muted);font-size:0.875rem">No active subscription. <a href="#" id="sub-cta-link" style="color:var(--primary-light);text-decoration:none;font-weight:600">Subscribe to save 25% &#8594;</a></p>
         `;
         const ctaLink = document.getElementById('sub-cta-link');
         if (ctaLink) ctaLink.addEventListener('click', (e) => { e.preventDefault(); Router.navigate('subscription'); });
@@ -3099,12 +3326,15 @@
   }
 
   async function handleReportIssue(tripId) {
-    const reason = prompt('Describe the issue (at least 10 characters):');
+    const reason = await showPromptDialog({
+      title: 'Report Issue',
+      message: 'Describe the issue with this trip.',
+      placeholder: 'Provide details',
+      confirmText: 'Submit Report',
+      minLength: 10,
+      multiline: true,
+    });
     if (!reason) return;
-    if (reason.trim().length < 10) {
-      Toast.show('Please provide more detail in your report.', 'warning');
-      return;
-    }
     try {
       await API.post('/disputes', { tripId, reason: reason.trim() });
       Toast.show('Your report has been submitted.', 'success');

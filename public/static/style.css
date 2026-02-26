@@ -5,14 +5,14 @@
 /* ═══ CSS Custom Properties ═══ */
 :root {
   /* Brand Colors */
-  --primary: #3B82F6;
-  --primary-dark: #2563EB;
-  --primary-light: #60A5FA;
-  --primary-bg: rgba(59,130,246,0.08);
-  --accent: #10B981;
-  --accent-dark: #059669;
+  --primary: #2563EB;
+  --primary-dark: #1D4ED8;
+  --primary-light: #93C5FD;
+  --primary-bg: rgba(37,99,235,0.14);
+  --accent: #047857;
+  --accent-dark: #065F46;
   --warning: #F59E0B;
-  --danger: #EF4444;
+  --danger: #DC2626;
   --danger-light: rgba(239,68,68,0.08);
 
   /* Dark theme (default) */
@@ -23,7 +23,7 @@
   --bg-input: #334155;
   --text-primary: #F8FAFC;
   --text-secondary: #94A3B8;
-  --text-muted: #64748B;
+  --text-muted: #A6B4C7;
   --border: rgba(148,163,184,0.12);
   --border-focus: var(--primary);
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
@@ -70,7 +70,7 @@
   --bg-input: #F1F5F9;
   --text-primary: #0F172A;
   --text-secondary: #475569;
-  --text-muted: #94A3B8;
+  --text-muted: #64748B;
   --border: rgba(15,23,42,0.08);
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
@@ -102,7 +102,7 @@ body {
   padding-bottom: calc(var(--nav-height) + var(--safe-bottom) + 8px);
 }
 
-a { color: var(--primary); text-decoration: none; }
+a { color: var(--primary-light); text-decoration: none; }
 img { max-width: 100%; height: auto; display: block; }
 button, input, select, textarea { font-family: inherit; font-size: inherit; }
 
@@ -269,14 +269,14 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   user-select: none;
 }
 
-.nav-item.active { color: var(--primary); }
+.nav-item.active { color: var(--primary-light); }
 .nav-item.active::before {
   content: '';
   position: absolute;
   top: 0;
   width: 32px;
   height: 2px;
-  background: var(--primary);
+  background: var(--primary-light);
   border-radius: 0 0 2px 2px;
 }
 
@@ -502,7 +502,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
 
 .btn--ghost {
   background: transparent;
-  color: var(--primary);
+  color: var(--primary-light);
 }
 
 .btn--full { width: 100%; }
@@ -672,11 +672,11 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   letter-spacing: 0.04em;
 }
 
-.chip--active { background: rgba(16,185,129,0.12); color: var(--accent); }
+.chip--active { background: rgba(6,95,70,0.35); color: #D1FAE5; }
 .chip--pending { background: rgba(245,158,11,0.12); color: var(--warning); }
 .chip--completed { background: rgba(59,130,246,0.12); color: var(--primary); }
 .chip--cancelled { background: rgba(239,68,68,0.08); color: var(--danger); }
-.chip--live { background: rgba(16,185,129,0.12); color: var(--accent); }
+.chip--live { background: rgba(6,95,70,0.35); color: #D1FAE5; }
 .chip--live::before {
   content: '';
   width: 6px;
