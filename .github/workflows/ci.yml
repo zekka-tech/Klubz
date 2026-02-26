@@ -47,6 +47,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Dependency vulnerability audit (high+)
+        run: npm audit --audit-level=high
+
+      - name: Dependency audit-ci gate (high+)
+        run: npx audit-ci --high
+
       - name: Type check
         run: npm run type-check
 
@@ -56,5 +62,23 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Load & performance tests
+        run: npm run test:load
+
+      - name: Security audit suite
+        run: npm run test:security
+
       - name: Build
         run: npm run build
+
+  security-baseline:
+    needs: quality-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: OWASP ZAP baseline scan (staging)
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: 'https://klubz-staging.pages.dev'
+          rules_file_name: '.zap/rules.tsv'
+          fail_action: true

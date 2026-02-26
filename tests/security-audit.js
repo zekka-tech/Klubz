@@ -128,6 +128,7 @@ async function testSecurityContracts() {
 
   const files = [
     'tests/integration/security-hardening.test.ts',
+    'tests/integration/route-authz-contracts.test.ts',
     'tests/integration/csp-security-contracts.test.ts',
     'tests/integration/cors-security-contracts.test.ts',
     'tests/integration/rate-limiter-contracts.test.ts',

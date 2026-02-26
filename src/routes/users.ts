@@ -20,9 +20,6 @@ import { parseQueryInteger } from '../lib/validation';
 
 export const userRoutes = new Hono<AppEnv>();
 
-// All user routes require auth
-userRoutes.use('*', authMiddleware());
-
 interface UserProfileRow {
   id: number;
   email: string;
@@ -100,6 +97,11 @@ interface CountRow {
   count: number;
 }
 
+interface UserRatingAggregateRow {
+  review_count: number;
+  avg_rating: number | null;
+}
+
 const userTripStatusFilters = new Set(['scheduled', 'active', 'completed', 'cancelled']);
 
 const createTripSchema = z.object({
@@ -124,6 +126,47 @@ const tosAcceptSchema = z.object({
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
 }
+
+// ---------------------------------------------------------------------------
+// GET /:userId/rating (public)
+// ---------------------------------------------------------------------------
+
+userRoutes.get('/:userId/rating', async (c) => {
+  const userId = Number.parseInt(c.req.param('userId'), 10);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid user id' } }, 400);
+  }
+
+  const db = getDB(c);
+  try {
+    const row = await db.prepare(`
+      SELECT COUNT(*) AS review_count, AVG(rating) AS avg_rating
+      FROM trip_participants
+      WHERE user_id = ?
+        AND rating IS NOT NULL
+    `).bind(userId).first<UserRatingAggregateRow>();
+
+    const reviewCount = Number(row?.review_count ?? 0);
+    const averageRating = row?.avg_rating != null
+      ? Number(Number(row.avg_rating).toFixed(1))
+      : 0;
+
+    return c.json({
+      averageRating,
+      reviewCount,
+    });
+  } catch (err: unknown) {
+    const parsed = parseError(err);
+    logger.error('Public user rating lookup failed', err instanceof Error ? err : undefined, {
+      userId,
+      error: parsed.message,
+    });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load rating' } }, 500);
+  }
+});
+
+// All remaining user routes require auth
+userRoutes.use('*', authMiddleware());
 
 // ---------------------------------------------------------------------------
 // GET /profile

@@ -16,6 +16,7 @@ import { getCacheService } from '../lib/cache';
 import { parseQueryInteger } from '../lib/validation';
 import { withRequestContext } from '../lib/observability';
 import { AppError } from '../lib/errors';
+import { runDailyTasks, runHourlyTasks } from '../lib/cron';
 
 export const adminRoutes = new Hono<AppEnv>();
 
@@ -677,6 +678,10 @@ const promoCodeSchema = z.object({
   expiresAt: z.string().optional(),
 }).strict();
 
+const cronRunSchema = z.object({
+  task: z.enum(['daily', 'hourly', 'all']),
+}).strict();
+
 // POST /api/admin/promo-codes
 adminRoutes.post('/promo-codes', async (c) => {
   let body: unknown;
@@ -782,6 +787,52 @@ adminRoutes.put('/disputes/:id', async (c) => {
     .bind(resolution, hasRefund ? 1 : 0, hasRefund ? refundAmountCents : null, admin.id, id)
     .run();
   return c.json({ success: true, disputeId: id });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/cron/run - manual cron trigger for ops/testing
+// ---------------------------------------------------------------------------
+
+adminRoutes.post('/cron/run', async (c) => {
+  const adminUser = c.get('user') as AuthUser;
+  if (adminUser.role !== 'super_admin') {
+    return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Super admin role required' } }, 403);
+  }
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
+  }
+
+  const parsed = cronRunSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'task must be one of: daily, hourly, all' } }, 400);
+  }
+
+  const { task } = parsed.data;
+  try {
+    if (task === 'daily') {
+      await runDailyTasks(c.env);
+    } else if (task === 'hourly') {
+      await runHourlyTasks(c.env);
+    } else {
+      await runDailyTasks(c.env);
+      await runHourlyTasks(c.env);
+    }
+
+    await writeAdminAudit(c, 'CRON_MANUAL_TRIGGER', 'system', null);
+    return c.json({
+      triggered: task,
+      completedAt: new Date().toISOString(),
+    });
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    logger.error('Manual cron trigger failed', err instanceof Error ? err : undefined, {
+      error: parsedError.message,
+      task,
+    });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Cron trigger failed' } }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------

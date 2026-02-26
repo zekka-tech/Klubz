@@ -32,6 +32,7 @@
       isOnline: navigator.onLine,
       matchConfig: null,
       matchResults: [],
+      activeChatTripId: null,
     },
     _listeners: [],
 
@@ -475,6 +476,104 @@
     });
   }
 
+  function renderRatingModal(tripId, driverName) {
+    return `
+      <form id="rating-form" data-trip-id="${tripId}">
+        <p style="color:var(--text-secondary);margin:0 0 var(--space-sm)">
+          Rate your completed trip with ${escapeHtml(driverName || 'your driver')}.
+        </p>
+        <div id="rating-stars" role="radiogroup" aria-label="Trip rating" style="display:flex;gap:6px;margin-bottom:var(--space-sm)">
+          ${[1, 2, 3, 4, 5].map((score) => `
+            <button
+              type="button"
+              class="btn btn--secondary btn--sm rating-star-btn"
+              data-score="${score}"
+              role="radio"
+              aria-checked="${score === 5 ? 'true' : 'false'}"
+              aria-label="${score} star${score > 1 ? 's' : ''}"
+            >
+              ${Icons.star}
+            </button>
+          `).join('')}
+        </div>
+        <textarea id="rating-comment" class="form-input" rows="3" maxlength="500" placeholder="Optional feedback"></textarea>
+        <p id="rating-error" style="display:none;color:var(--danger);font-size:0.8125rem;margin:var(--space-xs) 0 0"></p>
+        <div style="display:flex;justify-content:flex-end;gap:var(--space-sm);margin-top:var(--space-md)">
+          <button type="button" class="btn btn--secondary" data-rating-cancel>Cancel</button>
+          <button type="submit" class="btn btn--primary">Submit Rating</button>
+        </div>
+      </form>
+    `;
+  }
+
+  function showRatingDialog(tripId, driverName) {
+    return new Promise((resolve) => {
+      const returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const overlay = createDialogScaffold('Rate Trip', renderRatingModal(tripId, driverName));
+      document.body.appendChild(overlay);
+
+      const dialogEl = overlay.querySelector('[role="dialog"]');
+      const formEl = overlay.querySelector('#rating-form');
+      const stars = Array.from(overlay.querySelectorAll('.rating-star-btn'));
+      const cancelBtn = overlay.querySelector('[data-rating-cancel]');
+      const commentEl = overlay.querySelector('#rating-comment');
+      const errorEl = overlay.querySelector('#rating-error');
+      let selectedScore = 5;
+      let closed = false;
+
+      const updateStars = () => {
+        stars.forEach((star) => {
+          const score = Number(star.dataset.score || '0');
+          const isActive = score <= selectedScore;
+          star.setAttribute('aria-checked', score === selectedScore ? 'true' : 'false');
+          star.style.background = isActive ? 'var(--warning)' : '';
+          star.style.color = isActive ? '#111827' : '';
+          star.style.borderColor = isActive ? 'var(--warning)' : '';
+        });
+      };
+
+      const close = (result) => {
+        if (closed) return;
+        closed = true;
+        cleanupTrap();
+        overlay.remove();
+        if (returnFocusEl) returnFocusEl.focus();
+        resolve(result);
+      };
+
+      const cleanupTrap = trapFocus(dialogEl, () => close(null));
+
+      stars.forEach((star) => {
+        star.addEventListener('click', () => {
+          selectedScore = Number(star.dataset.score || '0');
+          updateStars();
+        });
+      });
+
+      cancelBtn?.addEventListener('click', () => close(null));
+      formEl?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (selectedScore < 1 || selectedScore > 5) {
+          if (errorEl) {
+            errorEl.textContent = 'Please select a rating between 1 and 5 stars.';
+            errorEl.style.display = '';
+          }
+          return;
+        }
+        close({
+          rating: selectedScore,
+          comment: String(commentEl?.value || '').trim(),
+        });
+      });
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close(null);
+      });
+
+      updateStars();
+      (stars[stars.length - 1] || dialogEl).focus();
+    });
+  }
+
   // ═══ SVG Icons ═══
   const Icons = {
     home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>',
@@ -649,6 +748,10 @@
         case 'booking:rejected':
           Toast.show('A booking was rejected', 'warning');
           break;
+        case 'booking:cancelled':
+          Toast.show('A booking was cancelled', 'info');
+          if (Store.state.currentScreen === 'my-trips') loadTrips('upcoming');
+          break;
         case 'trip:cancelled':
           Toast.show('A trip was cancelled', 'error');
           if (Store.state.currentScreen === 'my-trips') loadTrips('upcoming');
@@ -663,6 +766,17 @@
           break;
         case 'payment:succeeded':
           Toast.show('Payment successful!', 'success');
+          break;
+        case 'new_message':
+          if (Store.state.currentScreen === 'chat' && Number(Store.state.activeChatTripId) === Number(event.data?.tripId)) {
+            loadChatMessages();
+          } else {
+            Toast.show('New trip message received', 'info');
+          }
+          break;
+        case 'waitlist:promoted':
+          Toast.show('Good news: you have been promoted from the waitlist!', 'success');
+          if (Store.state.currentScreen === 'my-trips') loadTrips('upcoming');
           break;
       }
     },
@@ -695,6 +809,35 @@
 
   // ═══ Location Sharing ═══
   let locationWatcher = null;
+  let activeTripLocationPoll = null;
+
+  async function loadActiveTripLocation(tripId) {
+    if (!tripId) return;
+    try {
+      const data = await API.get(`/trips/${tripId}/location`);
+      const location = data?.location;
+      if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number') return;
+      MapManager.setMarker('trip-map', 'driver', [location.lat, location.lng], { icon: 'car' });
+    } catch {
+      // best-effort only; SSE and retries will eventually catch up
+    }
+  }
+
+  function startActiveTripLocationPolling(tripId) {
+    stopActiveTripLocationPolling();
+    if (!tripId) return;
+    activeTripLocationPoll = setInterval(() => {
+      loadActiveTripLocation(tripId);
+    }, 10000);
+  }
+
+  function stopActiveTripLocationPolling() {
+    if (activeTripLocationPoll !== null) {
+      clearInterval(activeTripLocationPoll);
+      activeTripLocationPoll = null;
+    }
+  }
+
   function startLocationSharing(tripId) {
     if (!navigator.geolocation || locationWatcher !== null) return;
     locationWatcher = navigator.geolocation.watchPosition(
@@ -1153,6 +1296,14 @@
             </div>
             <div class="list-item__action">&rsaquo;</div>
           </div>
+          <div class="list-item" id="profile-payouts-item" style="cursor:pointer">
+            <div class="list-item__icon" style="background:rgba(59,130,246,0.12);color:var(--primary)">${Icons.settings}</div>
+            <div class="list-item__content">
+              <div class="list-item__title">Payouts</div>
+              <div class="list-item__subtitle">Stripe Connect onboarding and status</div>
+            </div>
+            <div class="list-item__action">&rsaquo;</div>
+          </div>
           <div class="list-item" id="profile-referral-item" style="cursor:pointer">
             <div class="list-item__icon" style="background:rgba(245,158,11,0.12);color:var(--warning)">${Icons.plus}</div>
             <div class="list-item__content">
@@ -1482,7 +1633,7 @@
             <div class="trip-card__driver-info">
               <h4>${escapeHtml(trip.driverName || 'Driver')}</h4>
               <div class="trip-card__driver-rating">
-                ${Icons.star} ${trip.driverRating || '4.5'}
+                ${Icons.star} ${trip.driverRating != null ? trip.driverRating : 'New'}
               </div>
             </div>
           </div>
@@ -1667,6 +1818,7 @@
             </div>
           </div>
           ${isDriver ? `<button id="nav-start-btn" class="btn btn--primary btn--full" style="margin-bottom:var(--space-sm)">Start Navigation</button>` : ''}
+          <button id="trip-chat-btn" class="btn btn--secondary btn--full" style="margin-bottom:var(--space-sm)">Open Chat</button>
           <button id="trip-end-btn" class="btn btn--danger btn--full" style="margin-bottom:var(--space-sm)">End Trip</button>
         </div>
         <button id="sos-btn" aria-label="Emergency SOS" style="position:fixed;bottom:90px;right:var(--space-lg);width:56px;height:56px;border-radius:50%;background:#EF4444;color:#fff;font-weight:700;font-size:0.875rem;border:none;box-shadow:0 4px 12px rgba(239,68,68,.5);cursor:pointer;z-index:1000">SOS</button>
@@ -1801,6 +1953,50 @@
     `;
   }
 
+  function renderChatScreen() {
+    const trip = Store.state.activeTrip || {};
+    return `
+      <div class="screen fade-in">
+        <div style="display:flex;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-lg)">
+          <button class="icon-btn" id="chat-back-btn" aria-label="Back">&#8592;</button>
+          <div>
+            <h2 class="section-title" style="margin:0;font-size:1.1rem">Trip Chat</h2>
+            <div style="font-size:0.75rem;color:var(--text-muted)">${escapeHtml(trip.title || 'Conversation')}</div>
+          </div>
+        </div>
+
+        <div id="chat-log" role="log" aria-live="polite" style="min-height:45vh;max-height:55vh;overflow:auto;padding:var(--space-sm);background:var(--surface-alt);border:1px solid var(--border);border-radius:8px;margin-bottom:var(--space-md)">
+          <div class="skeleton" style="height:140px"></div>
+        </div>
+
+        <form id="chat-form" style="display:flex;gap:var(--space-sm)">
+          <input class="form-input" id="chat-input" aria-label="Message input" placeholder="Type a message..." maxlength="2000" style="flex:1">
+          <button class="btn btn--primary" type="submit">Send</button>
+        </form>
+      </div>
+    `;
+  }
+
+  function renderPayoutsScreen() {
+    return `
+      <div class="screen fade-in">
+        <div style="display:flex;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-lg)">
+          <button class="icon-btn" id="payouts-back-btn" aria-label="Back">&#8592;</button>
+          <h2 class="section-title" style="margin:0;font-size:1.25rem">Driver Payouts</h2>
+        </div>
+
+        <div id="payouts-status-card" class="card" style="margin-bottom:var(--space-md)">
+          <div class="skeleton" style="height:120px"></div>
+        </div>
+
+        <div style="display:flex;gap:var(--space-sm)">
+          <button class="btn btn--primary" id="payouts-setup-btn">Set Up / Continue</button>
+          <button class="btn btn--secondary" id="payouts-dashboard-btn">Dashboard</button>
+        </div>
+      </div>
+    `;
+  }
+
   // ═══ Renderer ═══
   // AbortController for the current screen's event listeners.
   // Aborted and replaced on every render so old listeners are cleaned up.
@@ -1825,6 +2021,7 @@
         MapManager.destroy('trip-map');
         MapManager.destroy('nav-map');
         stopLocationSharing();
+        stopActiveTripLocationPolling();
       }
       Store.setState({ prevScreen: currentScreen });
 
@@ -1865,6 +2062,8 @@
         case 'driver-earnings': content.innerHTML = renderDriverEarningsScreen(); break;
         case 'referral': content.innerHTML = renderReferralScreen(); break;
         case 'organization': content.innerHTML = renderOrganizationScreen(); break;
+        case 'chat': content.innerHTML = renderChatScreen(); break;
+        case 'payouts': content.innerHTML = renderPayoutsScreen(); break;
         default: content.innerHTML = renderHomeScreen(); break;
       }
 
@@ -1980,6 +2179,7 @@
           on('profile-security-item', 'click', () => Router.navigate('settings'));
           on('profile-docs-item', 'click', () => Router.navigate('driver-docs'));
           on('profile-earnings-item', 'click', () => Router.navigate('driver-earnings'));
+          on('profile-payouts-item', 'click', () => Router.navigate('payouts'));
           on('profile-referral-item', 'click', () => Router.navigate('referral'));
           on('profile-org-item', 'click', () => Router.navigate('organization'));
           on('logout-btn', 'click', () => Auth.logout());
@@ -2090,14 +2290,18 @@
             setTimeout(() => {
               MapManager.init('trip-map', null, 14);
               if (Store.state.activeTrip?.role === 'driver') startLocationSharing(activeTripId);
+              loadActiveTripLocation(activeTripId);
+              if (Store.state.activeTrip?.role !== 'driver') startActiveTripLocationPolling(activeTripId);
             }, 100);
           }
           on('nav-start-btn', 'click', () => Router.navigate('navigation'));
           on('trip-end-btn', 'click', () => {
             stopLocationSharing();
-            Store.setState({ activeTrip: null });
+            stopActiveTripLocationPolling();
+            Store.setState({ activeTrip: null, activeChatTripId: null });
             Router.navigate('my-trips');
           });
+          on('trip-chat-btn', 'click', () => Router.navigate('chat'));
           on('sos-btn', 'click', handleSOS);
           break;
         }
@@ -2122,7 +2326,8 @@
           }, 100);
           on('nav-end-btn', 'click', () => {
             stopLocationSharing();
-            Store.setState({ activeTrip: null, navSteps: null, navStepIndex: 0 });
+            stopActiveTripLocationPolling();
+            Store.setState({ activeTrip: null, activeChatTripId: null, navSteps: null, navStepIndex: 0 });
             Router.navigate('my-trips');
           });
           break;
@@ -2178,6 +2383,18 @@
           on('org-join-form', 'submit', handleJoinOrganization);
           on('org-copy-code-btn', 'click', copyOrganizationInviteCode);
           break;
+        case 'chat':
+          if (!Store.state.activeChatTripId && Store.state.activeTrip?.id) {
+            Store.setState({ activeChatTripId: Store.state.activeTrip.id });
+          }
+          on('chat-back-btn', 'click', () => Router.navigate('my-trips'));
+          on('chat-form', 'submit', handleChatSubmit);
+          break;
+        case 'payouts':
+          on('payouts-back-btn', 'click', () => Router.navigate('profile'));
+          on('payouts-setup-btn', 'click', handlePayoutSetup);
+          on('payouts-dashboard-btn', 'click', handlePayoutDashboard);
+          break;
       }
     },
 
@@ -2211,6 +2428,12 @@
           break;
         case 'organization':
           loadOrganization();
+          break;
+        case 'chat':
+          loadChatMessages();
+          break;
+        case 'payouts':
+          loadPayoutStatus();
           break;
         case 'navigation':
         case 'trip-active':
@@ -3106,7 +3329,7 @@
     const user = Store.state.user;
     if (!user?.id) return;
     try {
-      const data = await API.get(`/users/${user.id}`);
+      const data = await API.get('/users/profile');
       const stats = data.stats || {};
       const totalTrips = stats.totalTrips ?? 0;
       const rating = stats.rating ? Number(stats.rating).toFixed(1) : '—';
@@ -3138,6 +3361,188 @@
     }
   }
 
+  async function loadChatMessages() {
+    const tripId = Store.state.activeChatTripId || Store.state.activeTrip?.id;
+    const logEl = document.getElementById('chat-log');
+    if (!tripId || !logEl) return;
+
+    try {
+      const data = await API.get(`/trips/${tripId}/messages?limit=50&page=1`);
+      const messages = data?.messages || [];
+      const currentUserId = Number(Store.state.user?.id);
+
+      if (!messages.length) {
+        logEl.innerHTML = '<div style=\"text-align:center;color:var(--text-muted);padding:var(--space-lg)\">No messages yet. Start the conversation.</div>';
+        return;
+      }
+
+      logEl.innerHTML = messages.map((msg) => {
+        const mine = Number(msg.senderId) === currentUserId;
+        return `
+          <div style="display:flex;justify-content:${mine ? 'flex-end' : 'flex-start'};margin-bottom:var(--space-sm)">
+            <div style="max-width:78%;padding:var(--space-sm);border-radius:10px;background:${mine ? 'var(--primary)' : 'var(--surface)'};color:${mine ? '#fff' : 'var(--text-primary)'};border:${mine ? 'none' : '1px solid var(--border)'}">
+              <div style="font-size:0.6875rem;opacity:${mine ? '0.8' : '0.65'};margin-bottom:2px">${escapeHtml(msg.senderName || 'User')}</div>
+              <div style="font-size:0.875rem;white-space:pre-wrap">${escapeHtml(msg.content || '')}</div>
+              <div style="font-size:0.625rem;opacity:${mine ? '0.75' : '0.6'};margin-top:4px">${timeAgo(msg.sentAt)}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      logEl.scrollTop = logEl.scrollHeight;
+    } catch (err) {
+      logEl.innerHTML = `<div style=\"text-align:center;color:var(--danger);padding:var(--space-lg)\">${escapeHtml(err.message || 'Failed to load messages')}</div>`;
+    }
+  }
+
+  async function handleChatSubmit(e) {
+    e.preventDefault();
+    const tripId = Store.state.activeChatTripId || Store.state.activeTrip?.id;
+    const input = document.getElementById('chat-input');
+    const content = input?.value?.trim();
+    if (!tripId || !content) return;
+
+    try {
+      await API.post(`/trips/${tripId}/messages`, { content });
+      input.value = '';
+      await loadChatMessages();
+    } catch (err) {
+      Toast.show(err.message || 'Failed to send message', 'error');
+    }
+  }
+
+  async function loadPayoutStatus() {
+    const card = document.getElementById('payouts-status-card');
+    if (!card) return;
+
+    try {
+      const status = await API.get('/payments/connect/status');
+      const connected = !!status.connected;
+      const ready = !!status.chargesEnabled && !!status.payoutsEnabled;
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-sm)">
+          <h3 style="font-size:1rem;font-weight:700;margin:0">Stripe Connect</h3>
+          <span class="chip chip--${ready ? 'active' : connected ? 'pending' : 'cancelled'}">${ready ? 'Payouts Ready' : connected ? 'Setup Incomplete' : 'Not Connected'}</span>
+        </div>
+        <div style="font-size:0.875rem;color:var(--text-muted)">
+          ${connected ? `Account: ${escapeHtml(status.accountId || 'created')}` : 'No connected payout account yet.'}
+        </div>
+        <div style="font-size:0.8125rem;color:var(--text-muted);margin-top:var(--space-xs)">
+          Charges: ${status.chargesEnabled ? 'Enabled' : 'Not enabled'} · Payouts: ${status.payoutsEnabled ? 'Enabled' : 'Not enabled'}
+        </div>
+      `;
+    } catch (err) {
+      card.innerHTML = `<div style=\"color:var(--danger)\">${escapeHtml(err.message || 'Unable to load payout status')}</div>`;
+    }
+  }
+
+  async function handlePayoutSetup() {
+    try {
+      const data = await API.post('/payments/connect/onboard', {});
+      if (data?.onboardingUrl) {
+        window.location.href = data.onboardingUrl;
+        return;
+      }
+      Toast.show('Onboarding URL unavailable.', 'warning');
+    } catch (err) {
+      Toast.show(err.message || 'Failed to start onboarding', 'error');
+    }
+  }
+
+  async function handlePayoutDashboard() {
+    try {
+      const data = await API.get('/payments/connect/dashboard');
+      if (data?.url) {
+        window.location.href = data.url;
+        return;
+      }
+      Toast.show('Dashboard link unavailable.', 'warning');
+    } catch (err) {
+      Toast.show(err.message || 'Failed to open dashboard', 'error');
+    }
+  }
+
+  function openTripTracking(trip) {
+    if (!trip?.id) return;
+    const pickup = trip.pickupLocation?.address || trip.pickupLocation || trip.origin || 'Pickup';
+    const dropoff = trip.dropoffLocation?.address || trip.dropoffLocation || trip.destination || 'Dropoff';
+    Store.setState({
+      activeTrip: {
+        id: trip.id,
+        role: trip.participantRole === 'driver' ? 'driver' : 'rider',
+        title: trip.title || `${pickup} → ${dropoff}`,
+        scheduledTime: trip.scheduledTime,
+      },
+    });
+    Router.navigate('trip-active');
+  }
+
+  function openTripChat(trip) {
+    if (!trip?.id) return;
+    const pickup = trip.pickupLocation?.address || trip.pickupLocation || trip.origin || 'Pickup';
+    const dropoff = trip.dropoffLocation?.address || trip.dropoffLocation || trip.destination || 'Dropoff';
+    Store.setState({
+      activeTrip: {
+        id: trip.id,
+        role: trip.participantRole === 'driver' ? 'driver' : 'rider',
+        title: trip.title || `${pickup} → ${dropoff}`,
+        scheduledTime: trip.scheduledTime,
+      },
+      activeChatTripId: trip.id,
+    });
+    Router.navigate('chat');
+  }
+
+  function getCancellationEstimate(trip) {
+    const departure = new Date(trip.scheduledTime || trip.departureTime || Date.now()).getTime();
+    const hoursUntil = Number.isFinite(departure)
+      ? (departure - Date.now()) / 3_600_000
+      : -1;
+    const refundPct = hoursUntil >= 24 ? 1 : hoursUntil >= 6 ? 0.5 : 0;
+    const seatPrice = Number(trip.price ?? trip.pricePerSeat ?? 0);
+    const passengers = Math.max(1, Number(trip.passengerCount ?? 1));
+    return {
+      refundPct,
+      refundAmount: Math.max(0, seatPrice * passengers * refundPct),
+    };
+  }
+
+  async function handleCancelBooking(trip) {
+    const estimate = getCancellationEstimate(trip);
+    const refundPctLabel = `${Math.round(estimate.refundPct * 100)}%`;
+    const confirmed = await showConfirmDialog({
+      title: 'Cancel Booking',
+      message: `You will receive a ${refundPctLabel} refund (${formatCurrency(estimate.refundAmount)}). Continue?`,
+      confirmText: 'Cancel Booking',
+      cancelText: 'Keep Booking',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    try {
+      const result = await API.del(`/trips/${trip.id}/book`);
+      const finalRefund = Number(result?.cancellation?.refundAmount ?? estimate.refundAmount);
+      Toast.show(`Booking cancelled. Refund: ${formatCurrency(finalRefund)}.`, 'success');
+      await loadTrips('upcoming');
+    } catch (err) {
+      Toast.show(err.message || 'Unable to cancel booking.', 'error');
+    }
+  }
+
+  async function handleRateTrip(trip, currentTab) {
+    const ratingPayload = await showRatingDialog(trip.id, trip.driver?.name || trip.driverName || 'driver');
+    if (!ratingPayload) return;
+    try {
+      await API.post(`/trips/${trip.id}/rate`, {
+        rating: ratingPayload.rating,
+        comment: ratingPayload.comment || undefined,
+      });
+      Toast.show('Thanks for your feedback.', 'success');
+      await loadTrips(currentTab);
+    } catch (err) {
+      Toast.show(err.message || 'Unable to submit your rating.', 'error');
+    }
+  }
+
   async function loadTrips(status) {
     const container = document.getElementById('trips-list');
     if (!container) return;
@@ -3148,16 +3553,88 @@
       const statusMap = { upcoming: 'scheduled', completed: 'completed', cancelled: 'cancelled' };
       const data = await API.get(`/users/trips?status=${statusMap[status] || ''}`);
       if (data.trips && data.trips.length > 0) {
+        const tripById = new Map((data.trips || []).map((trip) => [String(trip.id), trip]));
         container.innerHTML = data.trips.map((trip) => {
           const card = renderTripCard(trip);
+          const actions = [];
+
           if (status === 'completed' && trip.participantRole === 'rider') {
-            return `${card}
-              <button class="btn btn--ghost btn--sm report-issue-btn" data-trip-id="${trip.id}" style="margin-top:-6px;margin-bottom:var(--space-md)">
+            if (trip.rating == null) {
+              actions.push(`
+                <button class="btn btn--secondary btn--sm trip-rate-btn" data-trip-id="${trip.id}">
+                  Rate Trip
+                </button>
+              `);
+            } else {
+              const stars = '★'.repeat(Math.max(1, Math.min(5, Number(trip.rating))));
+              actions.push(`
+                <span class="chip chip--active" style="display:inline-flex">Rated ${stars}</span>
+              `);
+            }
+            actions.push(`
+              <button class="btn btn--ghost btn--sm report-issue-btn" data-trip-id="${trip.id}">
                 Report Issue
-              </button>`;
+              </button>
+            `);
+          }
+
+          if (status === 'upcoming' && trip.participantStatus === 'accepted') {
+            actions.push(`
+              <button class="btn btn--secondary btn--sm trip-track-btn" data-trip-id="${trip.id}">
+                Track Trip
+              </button>
+            `);
+            actions.push(`
+              <button class="btn btn--secondary btn--sm trip-chat-btn" data-trip-id="${trip.id}">
+                Chat
+              </button>
+            `);
+            if (trip.participantRole === 'rider') {
+              actions.push(`
+                <button class="btn btn--danger btn--sm trip-cancel-booking-btn" data-trip-id="${trip.id}">
+                  Cancel Booking
+                </button>
+              `);
+            }
+          }
+
+          if (actions.length) {
+            return `
+              <div style="margin-bottom:var(--space-md)">
+                ${card}
+                <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;margin-top:var(--space-sm)">
+                  ${actions.join('')}
+                </div>
+              </div>
+            `;
           }
           return card;
         }).join('');
+
+        container.querySelectorAll('.trip-track-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const trip = tripById.get(String(btn.dataset.tripId || ''));
+            if (trip) openTripTracking(trip);
+          });
+        });
+        container.querySelectorAll('.trip-cancel-booking-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const trip = tripById.get(String(btn.dataset.tripId || ''));
+            if (trip) handleCancelBooking(trip);
+          });
+        });
+        container.querySelectorAll('.trip-chat-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const trip = tripById.get(String(btn.dataset.tripId || ''));
+            if (trip) openTripChat(trip);
+          });
+        });
+        container.querySelectorAll('.trip-rate-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const trip = tripById.get(String(btn.dataset.tripId || ''));
+            if (trip) handleRateTrip(trip, status);
+          });
+        });
         container.querySelectorAll('.report-issue-btn').forEach((btn) => {
           btn.addEventListener('click', () => {
             const tripId = parseInt(btn.dataset.tripId || '0', 10);

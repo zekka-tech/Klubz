@@ -1417,12 +1417,14 @@ describe('Security hardening integration flows', () => {
   test('trip rating succeeds for completed participation', async () => {
     const token = await authToken(20, 'user');
     let ratingUpdated = false;
+    let updateParams: unknown[] | null = null;
     const db = new MockDB((query, _params, kind) => {
       if (query.includes('SELECT id, user_id, status FROM trip_participants') && kind === 'first') {
         return { id: 1, user_id: 20, status: 'completed' };
       }
       if (query.includes('UPDATE trip_participants SET rating') && kind === 'run') {
         ratingUpdated = true;
+        updateParams = _params;
         return { success: true };
       }
       return null;
@@ -1440,6 +1442,9 @@ describe('Security hardening integration flows', () => {
 
     expect(res.status).toBe(200);
     expect(ratingUpdated).toBe(true);
+    expect(updateParams).not.toBeNull();
+    expect(updateParams?.[1]).not.toBe('Solid ride');
+    expect(typeof updateParams?.[1]).toBe('string');
   });
 
   test('trip rating fails closed when trip DB is unavailable', async () => {

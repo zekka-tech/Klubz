@@ -596,4 +596,67 @@ describe('Admin route hardening contracts', () => {
       'ADMIN_LOGS_VIEWED',
     ]));
   });
+
+  test('manual cron trigger requires super admin role', async () => {
+    const token = await authToken(1, 'admin');
+    const res = await app.request(
+      '/api/admin/cron/run',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'hourly' }),
+      },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('manual cron trigger validates task field', async () => {
+    const token = await authToken(1, 'super_admin');
+    const res = await app.request(
+      '/api/admin/cron/run',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'weekly' }),
+      },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+  });
+
+  test('manual cron trigger runs and audits for super admin', async () => {
+    const token = await authToken(1, 'super_admin');
+    let cronAuditWrites = 0;
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('FROM trips t') && kind === 'all') return [];
+      if (query.includes('INSERT INTO audit_logs') && kind === 'run') {
+        if (String(params[1]) === 'CRON_MANUAL_TRIGGER') cronAuditWrites += 1;
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/admin/cron/run',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'hourly' }),
+      },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { triggered?: string; completedAt?: string };
+    expect(body.triggered).toBe('hourly');
+    expect(body.completedAt).toBeTruthy();
+    expect(cronAuditWrites).toBe(1);
+  });
 });

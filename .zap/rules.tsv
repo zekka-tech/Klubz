@@ -1,0 +1,4 @@
+# ZAP Baseline rules for Klubz staging scans.
+# Format: <pluginId>\t<ACTION>\t<optional note>
+# ACTION values: IGNORE | INFO | WARN | FAIL
+

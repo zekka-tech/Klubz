@@ -106,6 +106,39 @@ async function authToken(userId: number, role: 'user' | 'admin' | 'super_admin' 
 }
 
 describe('User route hardening contracts', () => {
+  test('public user rating endpoint returns aggregate data without auth', async () => {
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('FROM trip_participants') && kind === 'first') {
+        expect(params).toEqual([42]);
+        return { review_count: 3, avg_rating: 4.3333 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/users/42/rating',
+      { method: 'GET' },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { averageRating?: number; reviewCount?: number };
+    expect(body.averageRating).toBe(4.3);
+    expect(body.reviewCount).toBe(3);
+  });
+
+  test('public user rating endpoint validates user id', async () => {
+    const res = await app.request(
+      '/api/users/not-a-number/rating',
+      { method: 'GET' },
+      { ...baseEnv, DB: new MockDB(() => null), CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+  });
+
   test('user profile returns 500 when DB read fails', async () => {
     const token = await authToken(10, 'user');
     const db = new MockDB((query, _params, kind) => {

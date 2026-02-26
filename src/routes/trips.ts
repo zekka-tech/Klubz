@@ -18,12 +18,13 @@ import type { RiderRequest, DriverTrip } from '../lib/matching/types';
 import { ValidationError } from '../lib/errors';
 import { NotificationService } from '../integrations/notifications';
 import { StripeService } from '../integrations/stripe';
-import { safeDecryptPII } from '../lib/encryption';
+import { encryptPII, safeDecryptPII } from '../lib/encryption';
 import { getCacheService } from '../lib/cache';
 import { createNotification } from '../lib/notificationStore';
 import { getUserNotificationPreferences } from '../lib/userPreferences';
 import { calculateFareCents, estimateETAMinutes, haversineKm, estimatedRoadKm, TRIP_RATES } from '../lib/pricing';
 import { awardPoints } from '../lib/points';
+import { getIP, getUserAgent } from '../lib/http';
 
 export const tripRoutes = new Hono<AppEnv>();
 
@@ -52,6 +53,9 @@ interface DriverTripRow {
   driver_id: number;
   route_distance_km: number | null;
   trip_type: string | null;
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+  driver_avg_rating: number | null;
 }
 
 interface TripSeatRow {
@@ -70,6 +74,64 @@ interface TripParticipantOwnerRow {
   id: number;
   user_id: number;
   status: string;
+}
+
+interface RiderBookingCancelRow {
+  booking_id: number;
+  trip_id: number;
+  user_id: number;
+  passenger_count: number | null;
+  payment_status: string | null;
+  payment_intent_id: string | null;
+  amount_paid: number | null;
+  departure_time: string;
+  price_per_seat: number;
+  trip_status: string;
+}
+
+interface WaitlistJoinBody {
+  passengerCount?: number;
+}
+
+interface WaitlistTripRow {
+  id: number;
+  driver_id: number;
+  status: string;
+  available_seats: number;
+  title: string | null;
+  departure_time: string;
+}
+
+interface WaitlistPromoteRow {
+  id: number;
+  user_id: number;
+  passenger_count: number;
+  email: string;
+  first_name_encrypted: string | null;
+}
+
+interface WaitlistQueueRow {
+  id: number;
+  user_id: number;
+  passenger_count: number;
+  joined_at: string;
+  first_name_encrypted: string | null;
+  last_name_encrypted: string | null;
+}
+
+interface DriverPayoutAccountRow {
+  stripe_connect_account_id: string | null;
+  stripe_connect_enabled: number | null;
+}
+
+interface RiderPayoutRow {
+  id: number;
+  user_id: number;
+  passenger_count: number | null;
+  amount_paid: number | null;
+  payment_status: string | null;
+  payout_status: string | null;
+  price_per_seat: number | null;
 }
 
 interface RateRequestBody {
@@ -302,6 +364,115 @@ function parseBoundedInteger(value: string, label: string, min: number, max: num
   return parsed;
 }
 
+async function promoteNextWaitlistedRider(c: Context<AppEnv>, tripId: number): Promise<void> {
+  const db = getDBOptional(c);
+  if (!db) return;
+
+  const trip = await db
+    .prepare('SELECT id, driver_id, status, available_seats, title, departure_time FROM trips WHERE id = ?')
+    .bind(tripId)
+    .first<WaitlistTripRow>();
+
+  if (!trip || !['scheduled', 'active'].includes(trip.status) || trip.available_seats <= 0) {
+    return;
+  }
+
+  const candidate = await db
+    .prepare(`
+      SELECT w.id, w.user_id, w.passenger_count, u.email, u.first_name_encrypted
+      FROM trip_waitlist w
+      JOIN users u ON u.id = w.user_id
+      WHERE w.trip_id = ?
+        AND w.status = 'waiting'
+        AND w.passenger_count <= ?
+      ORDER BY w.joined_at ASC, w.id ASC
+      LIMIT 1
+    `)
+    .bind(tripId, trip.available_seats)
+    .first<WaitlistPromoteRow>();
+
+  if (!candidate) return;
+
+  const seatUpdate = await db
+    .prepare('UPDATE trips SET available_seats = available_seats - ? WHERE id = ? AND available_seats >= ?')
+    .bind(candidate.passenger_count, tripId, candidate.passenger_count)
+    .run();
+
+  const seatRows = getAffectedRows(seatUpdate);
+  if (seatRows === 0) return;
+
+  await db
+    .prepare(`
+      INSERT INTO trip_participants (
+        trip_id, user_id, role, status, requested_at, accepted_at, passenger_count, payment_status
+      )
+      VALUES (?, ?, 'rider', 'accepted', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 'unpaid')
+      ON CONFLICT(trip_id, user_id) DO UPDATE SET
+        status = 'accepted',
+        accepted_at = CURRENT_TIMESTAMP,
+        cancelled_at = NULL,
+        passenger_count = excluded.passenger_count
+    `)
+    .bind(tripId, candidate.user_id, candidate.passenger_count)
+    .run();
+
+  await db
+    .prepare(`
+      UPDATE trip_waitlist
+      SET status = 'promoted',
+          promoted_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `)
+    .bind(candidate.id)
+    .run();
+
+  eventBus.emit('waitlist:promoted', {
+    tripId,
+    waitlistId: candidate.id,
+    passengerCount: candidate.passenger_count,
+  }, candidate.user_id);
+
+  try {
+    await createNotification(db, {
+      userId: candidate.user_id,
+      tripId,
+      notificationType: 'waitlist_promoted',
+      channel: 'in_app',
+      status: 'sent',
+      subject: 'You were moved off the waitlist',
+      message: `A seat opened for ${trip.title || 'your trip'} and your booking is now accepted.`,
+      metadata: { tripId, waitlistId: candidate.id, passengerCount: candidate.passenger_count },
+    });
+  } catch (err) {
+    logger.warn('Failed to persist waitlist promoted notification', {
+      error: err instanceof Error ? err.message : String(err),
+      tripId,
+      userId: candidate.user_id,
+    });
+  }
+
+  try {
+    const preferences = await getUserNotificationPreferences(db, candidate.user_id);
+    if (preferences.tripUpdates) {
+      const notifications = new NotificationService(c.env);
+      if (notifications.emailAvailable) {
+        const firstName = await safeDecryptPII(candidate.first_name_encrypted, c.env?.ENCRYPTION_KEY, candidate.user_id) || 'there';
+        await notifications.sendEmail(
+          candidate.email,
+          'You have been promoted from the waitlist',
+          `<p>Hi ${firstName}, a seat opened and your booking is now accepted for ${trip.title || 'your trip'}.</p><p>Departure: ${new Date(trip.departure_time).toLocaleString()}</p>`,
+        );
+      }
+    }
+  } catch (err) {
+    logger.warn('Failed to send waitlist promotion notification', {
+      error: err instanceof Error ? err.message : String(err),
+      tripId,
+      userId: candidate.user_id,
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // GET /available - search for trips
 // ---------------------------------------------------------------------------
@@ -343,9 +514,16 @@ tripRoutes.get('/available', async (c) => {
       SELECT t.id, t.origin, t.destination, t.departure_time, t.available_seats,
              t.vehicle_type, t.price_per_seat, t.driver_id,
              t.route_distance_km, t.trip_type,
-             u.first_name_encrypted, u.last_name_encrypted
+             u.first_name_encrypted, u.last_name_encrypted,
+             ratings.avg_rating AS driver_avg_rating
       FROM trips t
       JOIN users u ON t.driver_id = u.id
+      LEFT JOIN (
+        SELECT user_id, AVG(rating) AS avg_rating
+        FROM trip_participants
+        WHERE rating IS NOT NULL
+        GROUP BY user_id
+      ) ratings ON ratings.user_id = t.driver_id
       WHERE t.status = 'scheduled'
         AND t.available_seats > 0
         AND t.departure_time >= ?
@@ -397,45 +575,51 @@ tripRoutes.get('/available', async (c) => {
     const driverById = new Map(drivers.map((d) => [d.id, d]));
     const dbTripById = new Map((driverTrips ?? []).map((t) => [String(t.id), t]));
 
-    const trips = matches.map(match => ({
-      id: match.driverTripId,
-      title: `Trip to ${(driverById.get(match.driverTripId)?.destination.lat ?? 0).toFixed(4)}, ${(driverById.get(match.driverTripId)?.destination.lng ?? 0).toFixed(4)}`,
-      driverName: `Driver ${match.driverId}`,
-      driverRating: 4.5,
-      pickupLocation: {
-        lat: driverById.get(match.driverTripId)?.departure.lat ?? 0,
-        lng: driverById.get(match.driverTripId)?.departure.lng ?? 0,
-      },
-      dropoffLocation: {
-        lat: driverById.get(match.driverTripId)?.destination.lat ?? 0,
-        lng: driverById.get(match.driverTripId)?.destination.lng ?? 0,
-      },
-      scheduledTime: new Date(driverById.get(match.driverTripId)?.departureTime ?? Date.now()).toISOString(),
-      availableSeats: driverById.get(match.driverTripId)?.availableSeats ?? 0,
-      vehicleType: driverById.get(match.driverTripId)?.vehicle?.make || 'sedan',
-      pricePerSeat: (() => {
-        const dbTrip = dbTripById.get(match.driverTripId);
-        return dbTrip?.price_per_seat != null ? Number(dbTrip.price_per_seat) : 35;
-      })(),
-      ...((() => {
-        const dbTrip = dbTripById.get(match.driverTripId);
-        const km = dbTrip?.route_distance_km;
-        if (km != null && km > 0) {
-          return {
-            fareDaily: calculateFareCents(km, 'daily') / 100,
-            fareMonthly: calculateFareCents(km, 'monthly') / 100,
-            etaMinutes: estimateETAMinutes(km),
-            routeDistanceKm: km,
-          };
-        }
-        return {};
-      })()),
-      // Matching scores
-      matchScore: match.score,
-      explanation: match.explanation,
-      detourMinutes: match.estimatedDetourMinutes || 0,
-      walkingDistanceKm: match.breakdown?.pickupDistanceKm || 0,
-      carbonSavedKg: match.carbonSavedKg || 0,
+    const encKey = c.env?.ENCRYPTION_KEY;
+    const trips = await Promise.all(matches.map(async (match) => {
+      const dbTrip = dbTripById.get(match.driverTripId);
+      const driverTrip = driverById.get(match.driverTripId);
+      const driverFirst = await safeDecryptPII(dbTrip?.first_name_encrypted ?? null, encKey, dbTrip?.driver_id ?? match.driverId);
+      const driverLast = await safeDecryptPII(dbTrip?.last_name_encrypted ?? null, encKey, dbTrip?.driver_id ?? match.driverId);
+      const driverName = [driverFirst, driverLast].filter(Boolean).join(' ').trim() || `Driver ${match.driverId}`;
+      const ratingValue = dbTrip?.driver_avg_rating != null ? Number(dbTrip.driver_avg_rating) : null;
+
+      return {
+        id: match.driverTripId,
+        title: `Trip to ${(driverTrip?.destination.lat ?? 0).toFixed(4)}, ${(driverTrip?.destination.lng ?? 0).toFixed(4)}`,
+        driverName,
+        driverRating: ratingValue != null ? Number(ratingValue.toFixed(1)) : null,
+        pickupLocation: {
+          lat: driverTrip?.departure.lat ?? 0,
+          lng: driverTrip?.departure.lng ?? 0,
+        },
+        dropoffLocation: {
+          lat: driverTrip?.destination.lat ?? 0,
+          lng: driverTrip?.destination.lng ?? 0,
+        },
+        scheduledTime: new Date(driverTrip?.departureTime ?? Date.now()).toISOString(),
+        availableSeats: driverTrip?.availableSeats ?? 0,
+        vehicleType: driverTrip?.vehicle?.make || 'sedan',
+        pricePerSeat: dbTrip?.price_per_seat != null ? Number(dbTrip.price_per_seat) : 35,
+        ...(() => {
+          const km = dbTrip?.route_distance_km;
+          if (km != null && km > 0) {
+            return {
+              fareDaily: calculateFareCents(km, 'daily') / 100,
+              fareMonthly: calculateFareCents(km, 'monthly') / 100,
+              etaMinutes: estimateETAMinutes(km),
+              routeDistanceKm: km,
+            };
+          }
+          return {};
+        })(),
+        // Matching scores
+        matchScore: match.score,
+        explanation: match.explanation,
+        detourMinutes: match.estimatedDetourMinutes || 0,
+        walkingDistanceKm: match.breakdown?.pickupDistanceKm || 0,
+        carbonSavedKg: match.carbonSavedKg || 0,
+      };
     }));
 
     logger.info('Trip search completed with matching engine', {
@@ -704,6 +888,330 @@ tripRoutes.post('/:tripId/book', async (c) => {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Already booked on this trip' } }, 409);
     }
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Booking request failed' } }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /:tripId/book - rider cancels accepted booking
+// ---------------------------------------------------------------------------
+
+tripRoutes.delete('/:tripId/book', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = c.req.param('tripId');
+  const db = getDBOptional(c);
+  if (!db) {
+    logger.error('Booking cancellation denied because DB is unavailable', undefined, {
+      environment: c.env?.ENVIRONMENT || 'unknown',
+    });
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+
+  try {
+    const booking = await db.prepare(`
+      SELECT tp.id AS booking_id, tp.trip_id, tp.user_id, tp.passenger_count, tp.payment_status,
+             tp.payment_intent_id, tp.amount_paid, t.departure_time, t.price_per_seat, t.status AS trip_status
+      FROM trip_participants tp
+      JOIN trips t ON t.id = tp.trip_id
+      WHERE tp.trip_id = ?
+        AND tp.user_id = ?
+        AND tp.role = 'rider'
+        AND tp.status = 'accepted'
+      LIMIT 1
+    `).bind(tripId, user.id).first<RiderBookingCancelRow>();
+
+    if (!booking) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Accepted booking not found' } }, 404);
+    }
+
+    if (booking.trip_status === 'completed') {
+      return c.json({ error: { code: 'CONFLICT', message: 'Completed trips cannot be cancelled' } }, 409);
+    }
+
+    const departureMs = new Date(booking.departure_time).getTime();
+    const hoursUntilDeparture = Number.isFinite(departureMs)
+      ? (departureMs - Date.now()) / (60 * 60 * 1000)
+      : -1;
+    const refundPct = hoursUntilDeparture >= 24 ? 1 : hoursUntilDeparture >= 6 ? 0.5 : 0;
+    const passengerCount = Math.max(1, Number(booking.passenger_count ?? 1));
+    const paidAmount = Number(booking.amount_paid ?? (booking.price_per_seat * passengerCount));
+    const refundAmount = booking.payment_status === 'paid'
+      ? Math.max(0, Math.round((paidAmount * refundPct) * 100) / 100)
+      : 0;
+    const refundCents = Math.max(0, Math.round(refundAmount * 100));
+
+    if (
+      booking.payment_status === 'paid'
+      && booking.payment_intent_id
+      && refundCents > 0
+      && c.env?.STRIPE_SECRET_KEY
+    ) {
+      const stripe = new StripeService(c.env.STRIPE_SECRET_KEY);
+      await stripe.createRefund(booking.payment_intent_id, refundCents);
+    }
+
+    await db.prepare(`
+      UPDATE trip_participants
+      SET status = 'cancelled',
+          cancelled_at = CURRENT_TIMESTAMP,
+          payment_status = CASE
+            WHEN ? = 'paid' AND ? > 0 THEN 'refunded'
+            WHEN ? = 'paid' AND ? = 0 THEN 'canceled'
+            ELSE payment_status
+          END,
+          amount_refunded = CASE
+            WHEN ? = 'paid' THEN ?
+            ELSE amount_refunded
+          END,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+        AND status = 'accepted'
+    `).bind(
+      booking.payment_status ?? '',
+      refundCents,
+      booking.payment_status ?? '',
+      refundCents,
+      booking.payment_status ?? '',
+      refundAmount,
+      booking.booking_id,
+    ).run();
+
+    await db.prepare(`
+      UPDATE trips
+      SET available_seats = available_seats + ?
+      WHERE id = ?
+    `).bind(passengerCount, tripId).run();
+
+    await promoteNextWaitlistedRider(c, Number.parseInt(tripId, 10));
+
+    try {
+      await db.prepare(`
+        INSERT INTO audit_logs (
+          user_id, action, entity_type, entity_id, new_values_encrypted, ip_address, user_agent, created_at
+        ) VALUES (?, 'BOOKING_CANCELLED', 'trip_participant', ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `).bind(
+        user.id,
+        booking.booking_id,
+        JSON.stringify({
+          tripId: Number(tripId),
+          refundPct,
+          refundAmount,
+          penaltyAmount: Math.max(0, Math.round((paidAmount - refundAmount) * 100) / 100),
+          hoursUntilDeparture,
+        }),
+        getIP(c),
+        getUserAgent(c),
+      ).run();
+    } catch (auditErr) {
+      logger.warn('Booking cancellation audit insert failed', {
+        error: auditErr instanceof Error ? auditErr.message : String(auditErr),
+        bookingId: booking.booking_id,
+      });
+    }
+
+    eventBus.emit('booking:cancelled', {
+      tripId: Number(tripId),
+      bookingId: booking.booking_id,
+      cancelledBy: user.id,
+      refundAmount,
+      refundPct,
+    }, user.id);
+
+    return c.json({
+      message: 'Booking cancelled successfully',
+      cancellation: {
+        tripId: Number(tripId),
+        bookingId: booking.booking_id,
+        refundPct,
+        refundAmount,
+        penaltyAmount: Math.max(0, Math.round((paidAmount - refundAmount) * 100) / 100),
+        cancelledAt: new Date().toISOString(),
+      },
+    });
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    logger.error('Cancel booking error', err instanceof Error ? err : undefined, { error: parsedError.message });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Booking cancellation failed' } }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /:tripId/waitlist - join waitlist when a trip is full
+// DELETE /:tripId/waitlist - leave waitlist
+// GET /:tripId/waitlist - driver queue view
+// ---------------------------------------------------------------------------
+
+tripRoutes.post('/:tripId/waitlist', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = Number.parseInt(c.req.param('tripId'), 10);
+  if (!Number.isFinite(tripId)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid trip ID' } }, 400);
+  }
+
+  const db = getDBOptional(c);
+  if (!db) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+
+  let body: WaitlistJoinBody = {};
+  try {
+    body = await c.req.json<WaitlistJoinBody>();
+  } catch {
+    body = {};
+  }
+  const passengerCount = Math.max(1, Math.min(4, Number(body.passengerCount ?? 1)));
+
+  try {
+    const trip = await db
+      .prepare('SELECT id, driver_id, status, available_seats, title, departure_time FROM trips WHERE id = ?')
+      .bind(tripId)
+      .first<WaitlistTripRow>();
+
+    if (!trip) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+    }
+    if (trip.driver_id === user.id) {
+      return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Drivers cannot join their own waitlist' } }, 403);
+    }
+    if (!['scheduled', 'active'].includes(trip.status)) {
+      return c.json({ error: { code: 'CONFLICT', message: 'Trip is not open for waitlist' } }, 409);
+    }
+    if (trip.available_seats > 0) {
+      return c.json({ error: { code: 'CONFLICT', message: 'Trip has seats available. Please book directly.' } }, 409);
+    }
+
+    const existingAccepted = await db
+      .prepare(`SELECT id FROM trip_participants WHERE trip_id = ? AND user_id = ? AND status IN ('requested', 'accepted', 'completed')`)
+      .bind(tripId, user.id)
+      .first<{ id: number }>();
+    if (existingAccepted) {
+      return c.json({ error: { code: 'CONFLICT', message: 'You already have a booking for this trip' } }, 409);
+    }
+
+    await db
+      .prepare(`INSERT INTO trip_waitlist (trip_id, user_id, passenger_count) VALUES (?, ?, ?)`)
+      .bind(tripId, user.id, passengerCount)
+      .run();
+
+    const positionRow = await db
+      .prepare(`
+        SELECT COUNT(*) AS position
+        FROM trip_waitlist
+        WHERE trip_id = ?
+          AND status = 'waiting'
+          AND joined_at <= (
+            SELECT joined_at FROM trip_waitlist WHERE trip_id = ? AND user_id = ?
+          )
+      `)
+      .bind(tripId, tripId, user.id)
+      .first<{ position: number }>();
+
+    return c.json({
+      success: true,
+      waitlist: {
+        tripId,
+        status: 'waiting',
+        passengerCount,
+        position: Number(positionRow?.position ?? 1),
+      },
+    }, 201);
+  } catch (err: unknown) {
+    const parsedError = parseError(err);
+    if (parsedError.message.toLowerCase().includes('unique')) {
+      return c.json({ error: { code: 'CONFLICT', message: 'You are already in this waitlist' } }, 409);
+    }
+    logger.error('Join waitlist error', err instanceof Error ? err : undefined, { tripId, userId: user.id });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to join waitlist' } }, 500);
+  }
+});
+
+tripRoutes.delete('/:tripId/waitlist', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = Number.parseInt(c.req.param('tripId'), 10);
+  if (!Number.isFinite(tripId)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid trip ID' } }, 400);
+  }
+
+  const db = getDBOptional(c);
+  if (!db) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+
+  try {
+    const result = await db
+      .prepare(`
+        UPDATE trip_waitlist
+        SET status = 'removed'
+        WHERE trip_id = ?
+          AND user_id = ?
+          AND status = 'waiting'
+      `)
+      .bind(tripId, user.id)
+      .run();
+
+    const changed = getAffectedRows(result);
+    if (!changed) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Waitlist entry not found' } }, 404);
+    }
+
+    return c.json({ success: true, removed: true });
+  } catch (err: unknown) {
+    logger.error('Leave waitlist error', err instanceof Error ? err : undefined, { tripId, userId: user.id });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to leave waitlist' } }, 500);
+  }
+});
+
+tripRoutes.get('/:tripId/waitlist', async (c) => {
+  const user = c.get('user') as AuthUser;
+  const tripId = Number.parseInt(c.req.param('tripId'), 10);
+  if (!Number.isFinite(tripId)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid trip ID' } }, 400);
+  }
+
+  const db = getDBOptional(c);
+  if (!db) {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Trip service unavailable' } }, 500);
+  }
+
+  const trip = await db
+    .prepare('SELECT id, driver_id, status, available_seats, title, departure_time FROM trips WHERE id = ?')
+    .bind(tripId)
+    .first<WaitlistTripRow>();
+  if (!trip) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Trip not found' } }, 404);
+  }
+  if (trip.driver_id !== user.id) {
+    return c.json({ error: { code: 'AUTHORIZATION_ERROR', message: 'Only the trip driver can view waitlist queue' } }, 403);
+  }
+
+  try {
+    const rows = await db
+      .prepare(`
+        SELECT w.id, w.user_id, w.passenger_count, w.joined_at, u.first_name_encrypted, u.last_name_encrypted
+        FROM trip_waitlist w
+        JOIN users u ON u.id = w.user_id
+        WHERE w.trip_id = ?
+          AND w.status = 'waiting'
+        ORDER BY w.joined_at ASC, w.id ASC
+      `)
+      .bind(tripId)
+      .all<WaitlistQueueRow>();
+
+    const entries = await Promise.all((rows.results ?? []).map(async (row, index) => ({
+      id: row.id,
+      userId: row.user_id,
+      name: [await safeDecryptPII(row.first_name_encrypted, c.env?.ENCRYPTION_KEY, row.user_id), await safeDecryptPII(row.last_name_encrypted, c.env?.ENCRYPTION_KEY, row.user_id)]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || `User ${row.user_id}`,
+      passengerCount: row.passenger_count,
+      joinedAt: row.joined_at,
+      position: index + 1,
+    })));
+
+    return c.json({ tripId, queue: entries });
+  } catch (err: unknown) {
+    logger.error('Load waitlist queue error', err instanceof Error ? err : undefined, { tripId, userId: user.id });
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to load waitlist queue' } }, 500);
   }
 });
 
@@ -1066,6 +1574,8 @@ tripRoutes.post('/:tripId/bookings/:bookingId/reject', async (c) => {
       // Emit real-time event
       eventBus.emit('booking:rejected', { bookingId, tripId, rejectedBy: user.id }, user.id);
 
+      await promoteNextWaitlistedRider(c, Number.parseInt(tripId, 10));
+
       // Send notification to rider about rejection
       const notifications = new NotificationService(c.env);
       try {
@@ -1424,6 +1934,81 @@ tripRoutes.post('/:tripId/complete', async (c) => {
     });
   }
 
+  try {
+    const driverAccount = await db
+      .prepare('SELECT stripe_connect_account_id, stripe_connect_enabled FROM users WHERE id = ?')
+      .bind(user.id)
+      .first<DriverPayoutAccountRow>();
+
+    if (
+      c.env?.STRIPE_SECRET_KEY
+      && driverAccount?.stripe_connect_account_id
+      && Number(driverAccount.stripe_connect_enabled ?? 0) === 1
+    ) {
+      const stripe = new StripeService(c.env.STRIPE_SECRET_KEY);
+      const payoutRows = await db
+        .prepare(`
+          SELECT tp.id, tp.user_id, tp.passenger_count, tp.amount_paid, tp.payment_status, tp.payout_status, t.price_per_seat
+          FROM trip_participants tp
+          JOIN trips t ON t.id = tp.trip_id
+          WHERE tp.trip_id = ?
+            AND tp.role = 'rider'
+            AND tp.status = 'completed'
+        `)
+        .bind(tripId)
+        .all<RiderPayoutRow>();
+
+      for (const payout of payoutRows.results ?? []) {
+        if (payout.payment_status !== 'paid') continue;
+        if (payout.payout_status === 'transferred') continue;
+
+        const passengerCount = Math.max(1, Number(payout.passenger_count ?? 1));
+        const amountPaid = Number(payout.amount_paid ?? ((payout.price_per_seat ?? 0) * passengerCount));
+        const transferAmountCents = Math.max(0, Math.round(amountPaid * 0.85 * 100));
+        if (transferAmountCents <= 0) {
+          continue;
+        }
+
+        try {
+          const transfer = await stripe.createTransfer(
+            transferAmountCents,
+            'zar',
+            driverAccount.stripe_connect_account_id,
+            {
+              tripId: String(tripId),
+              participantId: String(payout.id),
+            },
+          );
+          await db
+            .prepare(`
+              UPDATE trip_participants
+              SET payout_status = 'transferred',
+                  payout_transfer_id = ?,
+                  payout_transferred_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `)
+            .bind(transfer.id, payout.id)
+            .run();
+        } catch (transferErr) {
+          await db
+            .prepare(`UPDATE trip_participants SET payout_status = 'failed' WHERE id = ?`)
+            .bind(payout.id)
+            .run();
+          logger.warn('Trip payout transfer failed (non-critical)', {
+            tripId,
+            participantId: payout.id,
+            error: transferErr instanceof Error ? transferErr.message : String(transferErr),
+          });
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn('Trip payout orchestration failed (non-critical)', {
+      tripId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   eventBus.emit('trip:completed', { tripId, completedBy: user.id }, user.id);
 
   return c.json({ message: 'Trip completed successfully', trip: { id: tripId, status: 'completed', completedAt: new Date().toISOString() } });
@@ -1468,9 +2053,22 @@ tripRoutes.post('/:tripId/rate', async (c) => {
         return c.json({ error: { code: 'VALIDATION_ERROR', message: 'You can only rate completed trips' } }, 400);
       }
 
+      let encryptedComment: string | null = null;
+      if (comment && comment.trim()) {
+        if (c.env?.ENCRYPTION_KEY) {
+          encryptedComment = await encryptPII(comment.trim(), c.env.ENCRYPTION_KEY, user.id);
+        } else {
+          logger.warn('Trip rating comment stored unencrypted because ENCRYPTION_KEY is unavailable', {
+            tripId,
+            userId: user.id,
+          });
+          encryptedComment = comment.trim();
+        }
+      }
+
       await db
         .prepare('UPDATE trip_participants SET rating = ?, review_encrypted = ? WHERE trip_id = ? AND user_id = ?')
-        .bind(rating, comment || null, tripId, user.id)
+        .bind(rating, encryptedComment, tripId, user.id)
         .run();
   } catch (err: unknown) {
     const parsedError = parseError(err);

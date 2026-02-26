@@ -66,17 +66,23 @@ async function testEventLoopLatency() {
   }
   const cpuDuration = performance.now() - cpuStart;
 
-  const postStart = performance.now();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const postDelay = performance.now() - postStart;
+  const postSamples = [];
+  for (let i = 0; i < 80; i += 1) {
+    const postStart = performance.now();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    postSamples.push(performance.now() - postStart);
+  }
+  const sorted = [...postSamples].sort((a, b) => a - b);
+  const p99Index = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99));
+  const postP99 = sorted[p99Index];
 
   log(`Baseline setTimeout(0) delay: ${baselineDelay.toFixed(2)}ms`, 'blue');
   log(`CPU burst duration: ${cpuDuration.toFixed(2)}ms`, 'blue');
-  log(`Post-burst setTimeout(0) delay: ${postDelay.toFixed(2)}ms`, 'blue');
+  log(`Post-burst setTimeout(0) p99 delay: ${postP99.toFixed(2)}ms`, 'blue');
 
   const checks = [
     check(cpuDuration < 2000, 'CPU burst stayed under 2s', 'CPU burst exceeded 2s'),
-    check(postDelay < 50, 'Post-burst loop delay stayed under 50ms', 'Post-burst loop delay exceeded 50ms'),
+    check(postP99 < 50, 'Post-burst loop p99 stayed under 50ms', 'Post-burst loop p99 exceeded 50ms'),
     check(checksum !== 0, 'Checksum guard validated workload execution', 'Checksum guard failed'),
   ];
 
@@ -103,7 +109,7 @@ async function testConcurrentThroughput() {
 
   const checks = [
     check(duration < 2500, 'Async batch completed under 2.5s', 'Async batch exceeded 2.5s'),
-    check(throughput > 400, 'Throughput above 400 tasks/sec', 'Throughput below 400 tasks/sec'),
+    check(throughput > 500, 'Throughput above 500 tasks/sec', 'Throughput below 500 tasks/sec'),
   ];
 
   return checks.every(Boolean);

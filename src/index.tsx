@@ -15,6 +15,7 @@ import { disputeRoutes } from './routes/disputes'
 import { promoRoutes } from './routes/promo'
 import { loyaltyRoutes } from './routes/loyalty'
 import { organizationRoutes } from './routes/organizations'
+import { messageRoutes } from './routes/messages'
 import { eventBus, isEventVisibleToUser } from './lib/eventBus'
 import { runDailyTasks, runHourlyTasks } from './lib/cron'
 import { logger } from './lib/logger'
@@ -410,6 +411,7 @@ app.route('/api', loyaltyRoutes)
 
 // Organization self-serve routes: /api/organizations/*
 app.route('/api/organizations', organizationRoutes)
+app.route('/api', messageRoutes)
 
 // ═══ Real-Time Events (SSE) ═══
 // Supports both Authorization: Bearer header AND ?token= query param
@@ -511,8 +513,8 @@ app.get('/', (c) => {
   <link rel="manifest" href="/manifest.json">
 
   <!-- Icons -->
-  <link rel="icon" type="image/svg+xml" href="/static/icons/icon-192x192.svg">
-  <link rel="apple-touch-icon" href="/static/icons/icon-192x192.svg">
+  <link rel="icon" type="image/png" href="/static/icons/icon-192x192.png">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192x192.png">
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">

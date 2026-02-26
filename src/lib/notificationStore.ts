@@ -4,6 +4,7 @@ export type NotificationType =
   | 'booking_request'
   | 'booking_accepted'
   | 'booking_rejected'
+  | 'waitlist_promoted'
   | 'trip_cancelled'
   | 'payment_succeeded'
   | 'payment_failed'

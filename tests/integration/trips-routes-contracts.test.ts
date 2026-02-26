@@ -98,6 +98,11 @@ describe('Trips routes contract tests', () => {
     expect(res.status).toBe(401);
   });
 
+  test('DELETE /trips/:id/book returns 401 without token', async () => {
+    const res = await app.request('/api/trips/1/book', { method: 'DELETE' }, { ...baseEnv, CACHE: new MockKV() });
+    expect(res.status).toBe(401);
+  });
+
   // ── DB unavailability (fails closed) ──────────────────────────────────────
 
   test('POST /trips/offer fails closed when DB is unavailable', async () => {
@@ -311,6 +316,172 @@ describe('Trips routes contract tests', () => {
       },
       { ...baseEnv, DB: db, CACHE: new MockKV() },
     );
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error?: { code?: string } };
+    expect(body.error?.code).toBe('AUTHORIZATION_ERROR');
+  });
+
+  test('DELETE /trips/:id/book applies 100% refund when cancelled >=24h before departure', async () => {
+    const token = await authToken(5);
+    const departure = new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString();
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM trip_participants tp') && kind === 'first') {
+        return {
+          booking_id: 51,
+          trip_id: 1,
+          user_id: 5,
+          passenger_count: 1,
+          payment_status: 'paid',
+          payment_intent_id: 'pi_test',
+          amount_paid: null,
+          departure_time: departure,
+          price_per_seat: 120,
+          trip_status: 'scheduled',
+        };
+      }
+      if (kind === 'run') return { changes: 1 };
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/book',
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, STRIPE_SECRET_KEY: '', DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { cancellation?: { refundPct?: number; refundAmount?: number } };
+    expect(body.cancellation?.refundPct).toBe(1);
+    expect(body.cancellation?.refundAmount).toBe(120);
+  });
+
+  test('DELETE /trips/:id/book applies 50% refund when cancelled between 6h and 24h', async () => {
+    const token = await authToken(5);
+    const departure = new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString();
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM trip_participants tp') && kind === 'first') {
+        return {
+          booking_id: 52,
+          trip_id: 1,
+          user_id: 5,
+          passenger_count: 1,
+          payment_status: 'paid',
+          payment_intent_id: 'pi_test',
+          amount_paid: null,
+          departure_time: departure,
+          price_per_seat: 100,
+          trip_status: 'scheduled',
+        };
+      }
+      if (kind === 'run') return { changes: 1 };
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/book',
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, STRIPE_SECRET_KEY: '', DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { cancellation?: { refundPct?: number; refundAmount?: number } };
+    expect(body.cancellation?.refundPct).toBe(0.5);
+    expect(body.cancellation?.refundAmount).toBe(50);
+  });
+
+  test('DELETE /trips/:id/book applies 0% refund when cancelled <6h before departure', async () => {
+    const token = await authToken(5);
+    const departure = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM trip_participants tp') && kind === 'first') {
+        return {
+          booking_id: 53,
+          trip_id: 1,
+          user_id: 5,
+          passenger_count: 1,
+          payment_status: 'paid',
+          payment_intent_id: 'pi_test',
+          amount_paid: null,
+          departure_time: departure,
+          price_per_seat: 90,
+          trip_status: 'scheduled',
+        };
+      }
+      if (kind === 'run') return { changes: 1 };
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/book',
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, STRIPE_SECRET_KEY: '', DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { cancellation?: { refundPct?: number; refundAmount?: number } };
+    expect(body.cancellation?.refundPct).toBe(0);
+    expect(body.cancellation?.refundAmount).toBe(0);
+  });
+
+  test('POST /trips/:id/waitlist returns conflict when trip still has seats', async () => {
+    const token = await authToken(7);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status, available_seats') && kind === 'first') {
+        return { id: 1, driver_id: 9, status: 'scheduled', available_seats: 2, title: 'Trip', departure_time: new Date().toISOString() };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/waitlist',
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ passengerCount: 1 }) },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error?: { code?: string } };
+    expect(body.error?.code).toBe('CONFLICT');
+  });
+
+  test('POST /trips/:id/waitlist succeeds when trip is full', async () => {
+    const token = await authToken(7);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status, available_seats') && kind === 'first') {
+        return { id: 1, driver_id: 9, status: 'scheduled', available_seats: 0, title: 'Trip', departure_time: new Date().toISOString() };
+      }
+      if (query.includes('FROM trip_participants') && kind === 'first') return null;
+      if (query.includes('INSERT INTO trip_waitlist') && kind === 'run') return { changes: 1, last_row_id: 1 };
+      if (query.includes('SELECT COUNT(*) AS position') && kind === 'first') return { position: 1 };
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/waitlist',
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ passengerCount: 1 }) },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as { waitlist?: { status?: string; position?: number } };
+    expect(body.waitlist?.status).toBe('waiting');
+    expect(body.waitlist?.position).toBe(1);
+  });
+
+  test('GET /trips/:id/waitlist rejects non-driver users', async () => {
+    const token = await authToken(7);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, driver_id, status, available_seats') && kind === 'first') {
+        return { id: 1, driver_id: 99, status: 'scheduled', available_seats: 0, title: 'Trip', departure_time: new Date().toISOString() };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/trips/1/waitlist',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
     expect(res.status).toBe(403);
     const body = await res.json() as { error?: { code?: string } };
     expect(body.error?.code).toBe('AUTHORIZATION_ERROR');

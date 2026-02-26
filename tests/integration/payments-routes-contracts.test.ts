@@ -106,6 +106,93 @@ describe('Payments routes contract tests', () => {
     expect(res.status).toBe(401);
   });
 
+  test('POST /payments/connect/onboard returns 401 without token', async () => {
+    const res = await app.request(
+      '/api/payments/connect/onboard',
+      { method: 'POST' },
+      { ...baseEnv, CACHE: new MockKV() },
+    );
+    expect(res.status).toBe(401);
+  });
+
+  test('POST /payments/connect/onboard returns onboarding url for authenticated user', async () => {
+    const token = await authToken(9);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, email, stripe_connect_account_id') && kind === 'first') {
+        return { id: 9, email: 'driver@example.com', stripe_connect_account_id: null, stripe_connect_enabled: 0 };
+      }
+      if (query.includes('UPDATE users SET stripe_connect_account_id') && kind === 'run') {
+        return { changes: 1 };
+      }
+      return null;
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/v1/accounts') && !url.includes('/login_links')) {
+        return new Response(JSON.stringify({ id: 'acct_123', charges_enabled: false, payouts_enabled: false }), { status: 200 });
+      }
+      if (url.includes('/v1/account_links')) {
+        return new Response(JSON.stringify({ url: 'https://connect.stripe.test/onboard' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: { message: 'unexpected url' } }), { status: 400 });
+    }) as typeof fetch;
+
+    try {
+      const res = await app.request(
+        '/api/payments/connect/onboard',
+        { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+        { ...baseEnv, DB: db, CACHE: new MockKV() },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as { onboardingUrl?: string; accountId?: string };
+      expect(body.accountId).toBe('acct_123');
+      expect(body.onboardingUrl).toContain('connect.stripe.test');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('GET /payments/connect/status returns setupRequired when no account exists', async () => {
+    const token = await authToken(5);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, email, stripe_connect_account_id') && kind === 'first') {
+        return { id: 5, email: 'user5@example.com', stripe_connect_account_id: null, stripe_connect_enabled: 0 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/connect/status',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { connected?: boolean; setupRequired?: boolean };
+    expect(body.connected).toBe(false);
+    expect(body.setupRequired).toBe(true);
+  });
+
+  test('GET /payments/connect/dashboard returns 404 when user has no connect account', async () => {
+    const token = await authToken(6);
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('SELECT id, email, stripe_connect_account_id') && kind === 'first') {
+        return { id: 6, email: 'user6@example.com', stripe_connect_account_id: null, stripe_connect_enabled: 0 };
+      }
+      return null;
+    });
+
+    const res = await app.request(
+      '/api/payments/connect/dashboard',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { ...baseEnv, DB: db, CACHE: new MockKV() },
+    );
+
+    expect(res.status).toBe(404);
+  });
+
   // ── Webhook: DB unavailability ────────────────────────────────────────────
 
   test('POST /payments/webhook fails closed when DB is unavailable', async () => {

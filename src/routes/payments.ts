@@ -74,6 +74,13 @@ interface PaymentIntentResponse {
   replay?: boolean;
 }
 
+interface ConnectUserRow {
+  id: number;
+  email: string;
+  stripe_connect_account_id: string | null;
+  stripe_connect_enabled: number | null;
+}
+
 function parseError(err: unknown): { message: string } {
   return { message: err instanceof Error ? err.message : String(err) };
 }
@@ -952,6 +959,149 @@ paymentRoutes.post('/:intentId/refund', authMiddleware(['admin', 'super_admin'])
   } catch (err) {
     logger.error('Refund API call failed', err instanceof Error ? err : undefined, { intentId });
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Refund failed' } }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Stripe Connect (driver payouts)
+// ---------------------------------------------------------------------------
+
+paymentRoutes.post('/connect/onboard', authMiddleware(), async (c) => {
+  const user = c.get('user') as AuthUser;
+  const stripe = getStripe(c);
+  if (!stripe) {
+    return c.json({ error: { code: 'PAYMENT_UNAVAILABLE', message: 'Stripe is not configured' } }, 503);
+  }
+
+  let db;
+  try {
+    db = getDB(c);
+  } catch {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Payment database unavailable' } }, 500);
+  }
+
+  const userRow = await db
+    .prepare('SELECT id, email, stripe_connect_account_id, stripe_connect_enabled FROM users WHERE id = ?')
+    .bind(user.id)
+    .first<ConnectUserRow>();
+
+  if (!userRow) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'User not found' } }, 404);
+  }
+
+  try {
+    let accountId = userRow.stripe_connect_account_id;
+    if (!accountId) {
+      const created = await stripe.createConnectAccount(userRow.email);
+      accountId = created.id;
+      await db
+        .prepare('UPDATE users SET stripe_connect_account_id = ?, stripe_connect_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .bind(accountId, user.id)
+        .run();
+    }
+
+    const appUrl = c.env?.APP_URL || new URL(c.req.url).origin;
+    const returnUrl = `${appUrl}/#profile`;
+    const refreshUrl = `${appUrl}/#profile`;
+    const link = await stripe.createAccountLink(accountId, returnUrl, refreshUrl);
+
+    return c.json({ success: true, accountId, onboardingUrl: link.url });
+  } catch (err: unknown) {
+    logger.error('Stripe Connect onboarding failed', {
+      ...withRequestContext(c),
+      userId: user.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return c.json({ error: { code: 'PAYMENT_ERROR', message: 'Failed to create onboarding session' } }, 500);
+  }
+});
+
+paymentRoutes.get('/connect/status', authMiddleware(), async (c) => {
+  const user = c.get('user') as AuthUser;
+  const stripe = getStripe(c);
+  if (!stripe) {
+    return c.json({ error: { code: 'PAYMENT_UNAVAILABLE', message: 'Stripe is not configured' } }, 503);
+  }
+
+  let db;
+  try {
+    db = getDB(c);
+  } catch {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Payment database unavailable' } }, 500);
+  }
+
+  const userRow = await db
+    .prepare('SELECT id, email, stripe_connect_account_id, stripe_connect_enabled FROM users WHERE id = ?')
+    .bind(user.id)
+    .first<ConnectUserRow>();
+
+  if (!userRow?.stripe_connect_account_id) {
+    return c.json({
+      connected: false,
+      setupRequired: true,
+      chargesEnabled: false,
+      payoutsEnabled: false,
+    });
+  }
+
+  try {
+    const account = await stripe.getAccount(userRow.stripe_connect_account_id);
+    const connectEnabled = account.chargesEnabled && account.payoutsEnabled ? 1 : 0;
+    await db
+      .prepare('UPDATE users SET stripe_connect_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .bind(connectEnabled, user.id)
+      .run();
+
+    return c.json({
+      connected: true,
+      setupRequired: !connectEnabled,
+      accountId: userRow.stripe_connect_account_id,
+      chargesEnabled: account.chargesEnabled,
+      payoutsEnabled: account.payoutsEnabled,
+    });
+  } catch (err: unknown) {
+    logger.error('Stripe Connect status lookup failed', {
+      ...withRequestContext(c),
+      userId: user.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return c.json({ error: { code: 'PAYMENT_ERROR', message: 'Failed to load Stripe Connect status' } }, 500);
+  }
+});
+
+paymentRoutes.get('/connect/dashboard', authMiddleware(), async (c) => {
+  const user = c.get('user') as AuthUser;
+  const stripe = getStripe(c);
+  if (!stripe) {
+    return c.json({ error: { code: 'PAYMENT_UNAVAILABLE', message: 'Stripe is not configured' } }, 503);
+  }
+
+  let db;
+  try {
+    db = getDB(c);
+  } catch {
+    return c.json({ error: { code: 'CONFIGURATION_ERROR', message: 'Payment database unavailable' } }, 500);
+  }
+
+  const userRow = await db
+    .prepare('SELECT id, email, stripe_connect_account_id, stripe_connect_enabled FROM users WHERE id = ?')
+    .bind(user.id)
+    .first<ConnectUserRow>();
+
+  if (!userRow?.stripe_connect_account_id) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Stripe Connect account not found. Complete onboarding first.' } }, 404);
+  }
+
+  try {
+    const link = await stripe.createDashboardLoginLink(userRow.stripe_connect_account_id);
+    return c.json({ url: link.url });
+  } catch (err: unknown) {
+    logger.error('Stripe dashboard login link failed', {
+      ...withRequestContext(c),
+      userId: user.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return c.json({ error: { code: 'PAYMENT_ERROR', message: 'Failed to create dashboard link' } }, 500);
   }
 });
 

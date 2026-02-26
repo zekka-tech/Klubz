@@ -24,6 +24,27 @@ interface StripeRefund {
   payment_intent: string;
 }
 
+interface StripeConnectAccount {
+  id: string;
+  charges_enabled: boolean;
+  payouts_enabled: boolean;
+}
+
+interface StripeAccountLink {
+  url: string;
+}
+
+interface StripeTransfer {
+  id: string;
+  amount: number;
+  currency: string;
+  destination: string;
+}
+
+interface StripeLoginLink {
+  url: string;
+}
+
 export class StripeService {
   private baseUrl = 'https://api.stripe.com/v1';
   private secretKey: string;
@@ -119,6 +140,56 @@ export class StripeService {
     }
 
     return this.request<StripeRefund>('POST', '/refunds', body);
+  }
+
+  async createConnectAccount(email: string): Promise<{ id: string }> {
+    const body: Record<string, string> = {
+      type: 'express',
+      email,
+      'capabilities[card_payments][requested]': 'true',
+      'capabilities[transfers][requested]': 'true',
+      'metadata[platform]': 'klubz',
+    };
+    const account = await this.request<StripeConnectAccount>('POST', '/accounts', body);
+    return { id: account.id };
+  }
+
+  async createAccountLink(accountId: string, returnUrl: string, refreshUrl: string): Promise<{ url: string }> {
+    const body: Record<string, string> = {
+      account: accountId,
+      type: 'account_onboarding',
+      return_url: returnUrl,
+      refresh_url: refreshUrl,
+    };
+    const link = await this.request<StripeAccountLink>('POST', '/account_links', body);
+    return { url: link.url };
+  }
+
+  async getAccount(accountId: string): Promise<{ chargesEnabled: boolean; payoutsEnabled: boolean }> {
+    const account = await this.request<StripeConnectAccount>('GET', `/accounts/${accountId}`);
+    return {
+      chargesEnabled: Boolean(account.charges_enabled),
+      payoutsEnabled: Boolean(account.payouts_enabled),
+    };
+  }
+
+  async createTransfer(amount: number, currency: string, destination: string, metadata: Record<string, string>): Promise<{ id: string }> {
+    const body: Record<string, string> = {
+      amount: String(amount),
+      currency: currency.toLowerCase(),
+      destination,
+    };
+    for (const [key, value] of Object.entries(metadata)) {
+      body[`metadata[${key}]`] = value;
+    }
+
+    const transfer = await this.request<StripeTransfer>('POST', '/transfers', body);
+    return { id: transfer.id };
+  }
+
+  async createDashboardLoginLink(accountId: string): Promise<{ url: string }> {
+    const link = await this.request<StripeLoginLink>('POST', `/accounts/${accountId}/login_links`);
+    return { url: link.url };
   }
 
   /**
