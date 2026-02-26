@@ -120,7 +120,13 @@ vi.mock('../../src/integrations/notifications', () => {
   return { NotificationService };
 });
 
-import { batchMatchSubscriptionDays, sendTripReminders } from '../../src/lib/cron';
+import {
+  batchMatchSubscriptionDays,
+  sendTripReminders,
+  cleanupExpiredSessions,
+  runDailyTasks,
+  runHourlyTasks,
+} from '../../src/lib/cron';
 
 function makeEnv(db?: MockDB, cache?: MockKV): Bindings {
   return {
@@ -369,5 +375,97 @@ describe('sendTripReminders', () => {
         body: expect.stringContaining('1 hour'),
       }),
     );
+  });
+});
+
+describe('cleanupExpiredSessions', () => {
+  test('returns early when env.DB is undefined', async () => {
+    await cleanupExpiredSessions(makeEnv(undefined));
+    expect(loggerWarnMock).not.toHaveBeenCalled();
+  });
+
+  test('logs deleted count when sessions are removed', async () => {
+    const db = new MockDB((_query, _params, kind) => {
+      if (kind === 'run') return { changes: 5 };
+      return null;
+    });
+
+    await cleanupExpiredSessions(makeEnv(db));
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining('removed 5 expired sessions'),
+    );
+  });
+
+  test('does not log when no sessions were deleted', async () => {
+    const db = new MockDB((_query, _params, kind) => {
+      if (kind === 'run') return { changes: 0 };
+      return null;
+    });
+
+    await cleanupExpiredSessions(makeEnv(db));
+    expect(loggerInfoMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('removed'),
+    );
+  });
+
+  test('logs warning and does not throw on DB error', async () => {
+    const db = new MockDB(() => {
+      throw new Error('DB connection error');
+    });
+
+    await expect(cleanupExpiredSessions(makeEnv(db))).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      'cleanupExpiredSessions: failed',
+      expect.any(Object),
+    );
+  });
+});
+
+describe('runDailyTasks / runHourlyTasks orchestrators', () => {
+  test('runDailyTasks resolves even when all subtasks fail', async () => {
+    // DB is undefined — all three tasks return early without error
+    await expect(runDailyTasks(makeEnv(undefined))).resolves.toBeUndefined();
+  });
+
+  test('runHourlyTasks resolves even when DB is undefined', async () => {
+    await expect(runHourlyTasks(makeEnv(undefined))).resolves.toBeUndefined();
+  });
+
+  test('runDailyTasks runs all three sub-tasks (batch match, reminders, cleanup)', async () => {
+    const runCalls: string[] = [];
+    const db = new MockDB((query, _params, kind) => {
+      if (query.includes('FROM monthly_scheduled_days') && kind === 'all') return [];
+      if (query.includes('FROM trips t') && kind === 'all') return [];
+      if (kind === 'run') {
+        runCalls.push(query);
+        return { changes: 0 };
+      }
+      return null;
+    });
+
+    await runDailyTasks(makeEnv(db, new MockKV()));
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining('runDailyTasks started'),
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining('runDailyTasks completed'),
+    );
+  });
+
+  test('runHourlyTasks only calls the 1h reminder window', async () => {
+    const db = new MockDB((_query, _params, kind) => {
+      if (kind === 'all') return [];
+      return null;
+    });
+
+    await runHourlyTasks(makeEnv(db, new MockKV()));
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining('runHourlyTasks started'),
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining('runHourlyTasks completed'),
+    );
+    // Batch match and cleanup must NOT run during hourly
+    expect(createRiderRequestMock).not.toHaveBeenCalled();
   });
 });

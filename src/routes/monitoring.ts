@@ -341,4 +341,67 @@ monitoringRoutes.get('/alerts', authMiddleware(), async (c) => {
   return c.json({ active: [], recent: [] });
 });
 
+// ---------------------------------------------------------------------------
+// GET /providers - Admin (provider configuration status)
+// ---------------------------------------------------------------------------
+
+monitoringRoutes.get('/providers', authMiddleware(['admin', 'super_admin']), async (c) => {
+  const env = c.env;
+  const isConfigured = (...values: (string | undefined)[]) =>
+    values.every((v) => typeof v === 'string' && v.length > 0);
+
+  const providers = {
+    core: {
+      jwtSecret:     { configured: isConfigured(env.JWT_SECRET),     required: true  },
+      encryptionKey: { configured: isConfigured(env.ENCRYPTION_KEY), required: true  },
+      appUrl:        { configured: isConfigured(env.APP_URL),         required: true  },
+    },
+    stripe: {
+      secretKey:     { configured: isConfigured(env.STRIPE_SECRET_KEY),    required: false },
+      webhookSecret: { configured: isConfigured(env.STRIPE_WEBHOOK_SECRET), required: false },
+    },
+    sendgrid: {
+      apiKey: { configured: isConfigured(env.SENDGRID_API_KEY), required: false },
+    },
+    twilio: {
+      accountSid:  { configured: isConfigured(env.TWILIO_ACCOUNT_SID),   required: false },
+      authToken:   { configured: isConfigured(env.TWILIO_AUTH_TOKEN),     required: false },
+      phoneNumber: { configured: isConfigured(env.TWILIO_PHONE_NUMBER),   required: false },
+    },
+    mapbox: {
+      accessToken: { configured: isConfigured(env.MAPBOX_ACCESS_TOKEN), required: false },
+    },
+    google: {
+      clientId:     { configured: isConfigured(env.GOOGLE_CLIENT_ID),     required: false },
+      clientSecret: { configured: isConfigured(env.GOOGLE_CLIENT_SECRET), required: false },
+    },
+    push: {
+      vapidPublicKey:  { configured: isConfigured(env.VAPID_PUBLIC_KEY),  required: false },
+      vapidPrivateKey: { configured: isConfigured(env.VAPID_PRIVATE_KEY), required: false },
+    },
+    apple: {
+      clientId:   { configured: isConfigured(env.APPLE_CLIENT_ID),   required: false },
+      teamId:     { configured: isConfigured(env.APPLE_TEAM_ID),      required: false },
+      keyId:      { configured: isConfigured(env.APPLE_KEY_ID),       required: false },
+      privateKey: { configured: isConfigured(env.APPLE_PRIVATE_KEY),  required: false },
+    },
+  };
+
+  const requiredFields = [
+    providers.core.jwtSecret,
+    providers.core.encryptionKey,
+    providers.core.appUrl,
+  ];
+  const missingRequired = requiredFields.filter((p) => !p.configured).length;
+
+  await writeMonitoringAudit(c, 'ADMIN_MONITORING_PROVIDERS_VIEWED');
+
+  return c.json({
+    ready: missingRequired === 0,
+    missingRequired,
+    providers,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 export default monitoringRoutes;

@@ -72,8 +72,21 @@ async function installApiMocks(page: Page) {
 async function assertNoCriticalOrSeriousViolations(page: Page, screen: string) {
   const results = await new AxeBuilder({ page }).withTags(axeTags).analyze();
   const blocking = results.violations.filter((v) => v.impact === 'critical' || v.impact === 'serious');
-  const summary = blocking.map((v) => `${v.id} (${v.impact})`).join(', ');
-  expect(blocking, `${screen} has blocking accessibility violations: ${summary}`).toHaveLength(0);
+
+  const detail = blocking
+    .map((v) => {
+      const targets = v.nodes
+        .flatMap((n) => n.target)
+        .slice(0, 3)
+        .join(', ');
+      return `[${v.impact}] ${v.id}: ${v.description} — targets: ${targets}`;
+    })
+    .join('\n  ');
+
+  expect(
+    blocking,
+    `${screen} has ${blocking.length} blocking violation(s):\n  ${detail}`,
+  ).toHaveLength(0);
 }
 
 test.describe('Accessibility - Public Screens', () => {
@@ -150,5 +163,24 @@ test.describe('Accessibility - Authenticated Screens', () => {
     await page.goto('/#settings');
     await expect(page.locator('#settings-back-btn')).toBeVisible();
     await assertNoCriticalOrSeriousViolations(page, 'settings');
+  });
+});
+
+test.describe('Accessibility - Public Screens (extended)', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+  });
+
+  test('forgot-password screen has no critical/serious axe violations', async ({ page }) => {
+    await page.goto('/#forgot-password');
+    // Wait for the screen to stabilise — accept either a form or the back button
+    await page.waitForFunction(
+      () =>
+        document.querySelector('#forgot-password-form') !== null ||
+        document.querySelector('button[data-nav="login"]') !== null ||
+        document.querySelector('input[type="email"]') !== null,
+      { timeout: 10_000 },
+    );
+    await assertNoCriticalOrSeriousViolations(page, 'forgot-password');
   });
 });
