@@ -37,11 +37,5 @@
 			"database_name": "klubz-db-prod",
 			"database_id": "4bc82a64-6197-42cb-b378-f7dbadcf6266"
 		}
-	],
-	"triggers": {
-		"crons": [
-			"0 3 * * *",
-			"50 * * * *"
-		]
-	}
+	]
 }
