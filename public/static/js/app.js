@@ -772,10 +772,12 @@
             loadChatMessages();
           } else {
             Toast.show('New trip message received', 'info');
+            incrementChatUnread(event.data?.tripId);
           }
           break;
         case 'waitlist:promoted':
           Toast.show('Good news: you have been promoted from the waitlist!', 'success');
+          clearWaitlistEntry(event.data?.tripId);
           if (Store.state.currentScreen === 'my-trips') loadTrips('upcoming');
           break;
       }
@@ -1689,6 +1691,30 @@
       ? `<button class="btn btn--secondary btn--sm" id="match-subscribe-link" style="margin-top:var(--space-xs);font-size:0.75rem">Subscribe for R2.15/km &#8594;</button>`
       : '';
 
+    const seatsRaw = match.availableSeats ?? match.driverTrip?.availableSeats;
+    const availableSeats = Number.isFinite(Number(seatsRaw)) ? Number(seatsRaw) : 1;
+    const requestedPassengers = Math.max(1, Number(Store.state.requestedPassengerCount || 1));
+    const waitlistTripId = String(
+      match.tripId
+      ?? match.trip_id
+      ?? match.id
+      ?? match.driverTrip?.tripId
+      ?? match.driverTrip?.trip_id
+      ?? match.driverTripId
+      ?? '',
+    );
+    const ctaHtml = availableSeats === 0
+      ? (waitlistTripId
+        ? `<button class="btn btn--secondary btn--full join-waitlist-btn" style="margin-top:var(--space-md)" data-trip-id="${escapeHtml(waitlistTripId)}" data-passengers="${requestedPassengers}">
+             Join Waitlist
+           </button>`
+        : `<button class="btn btn--secondary btn--full" style="margin-top:var(--space-md)" disabled>
+             Trip Full
+           </button>`)
+      : `<button class="btn btn--primary btn--full confirm-match-btn" style="margin-top:var(--space-md)" data-match-id="${escapeHtml(match.matchId || '')}" data-driver-trip-id="${escapeHtml(match.driverTripId)}" data-rider-request-id="${escapeHtml(match.riderRequestId)}">
+           Request This Ride
+         </button>`;
+
     return `
       <div class="trip-card" style="border-left:3px solid var(--${scoreClass === 'excellent' ? 'accent' : scoreClass === 'good' ? 'primary' : 'warning'})">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-sm)">
@@ -1719,15 +1745,13 @@
 
         <div class="trip-card__meta">
           <div class="trip-card__meta-item">${Icons.clock} ${(match.breakdown?.timeDiffMinutes || 0).toFixed(0)} min diff</div>
-          <div class="trip-card__meta-item">${Icons.users} ${match.driverTrip?.availableSeats || 0} seats</div>
+          <div class="trip-card__meta-item">${Icons.users} ${availableSeats} seats</div>
           <div class="trip-card__meta-item">${Icons.leaf} ${(match.carbonSavedKg || 0).toFixed(1)} kg saved</div>
         </div>
 
         ${match.explanation ? `<p style="font-size:0.75rem;color:var(--text-muted);margin-top:var(--space-sm);font-style:italic">"${escapeHtml(match.explanation)}"</p>` : ''}
 
-        <button class="btn btn--primary btn--full confirm-match-btn" style="margin-top:var(--space-md)" data-match-id="${escapeHtml(match.matchId || '')}" data-driver-trip-id="${escapeHtml(match.driverTripId)}" data-rider-request-id="${escapeHtml(match.riderRequestId)}">
-          Request This Ride
-        </button>
+        ${ctaHtml}
       </div>
     `;
   }
@@ -1819,7 +1843,9 @@
           </div>
           ${isDriver ? `<button id="nav-start-btn" class="btn btn--primary btn--full" style="margin-bottom:var(--space-sm)">Start Navigation</button>` : ''}
           <button id="trip-chat-btn" class="btn btn--secondary btn--full" style="margin-bottom:var(--space-sm)">Open Chat</button>
-          <button id="trip-end-btn" class="btn btn--danger btn--full" style="margin-bottom:var(--space-sm)">End Trip</button>
+          ${!isDriver ? '<button id="trip-arrived-btn" class="btn btn--secondary btn--full" style="margin-bottom:var(--space-sm)">I\'ve Arrived</button>' : ''}
+          ${!isDriver ? '<button id="trip-share-eta-btn" class="btn btn--ghost btn--sm" style="margin-bottom:var(--space-sm)">Share ETA</button>' : ''}
+          ${isDriver ? '<button id="trip-end-btn" class="btn btn--danger btn--full" style="margin-bottom:var(--space-sm)">End Trip</button>' : ''}
         </div>
         <button id="sos-btn" aria-label="Emergency SOS" style="position:fixed;bottom:90px;right:var(--space-lg);width:56px;height:56px;border-radius:50%;background:#EF4444;color:#fff;font-weight:700;font-size:0.875rem;border:none;box-shadow:0 4px 12px rgba(239,68,68,.5);cursor:pointer;z-index:1000">SOS</button>
       </div>
@@ -2295,13 +2321,66 @@
             }, 100);
           }
           on('nav-start-btn', 'click', () => Router.navigate('navigation'));
-          on('trip-end-btn', 'click', () => {
-            stopLocationSharing();
-            stopActiveTripLocationPolling();
-            Store.setState({ activeTrip: null, activeChatTripId: null });
-            Router.navigate('my-trips');
+          updateTripChatBadge();
+          on('trip-end-btn', 'click', async () => {
+            const confirmed = await showConfirmDialog({
+              title: 'End Trip',
+              message: 'Mark this trip as completed?',
+              confirmText: 'End Trip',
+              cancelText: 'Continue',
+              danger: false,
+            });
+            if (!confirmed) return;
+
+            const tripId = Store.state.activeTrip?.id;
+            try {
+              if (tripId) await API.post(`/trips/${tripId}/complete`, {});
+              Toast.show('Trip completed.', 'success');
+            } catch (err) {
+              Toast.show(err.message || 'Unable to complete trip.', 'error');
+            } finally {
+              stopLocationSharing();
+              stopActiveTripLocationPolling();
+              Store.setState({ activeTrip: null, activeChatTripId: null });
+              Router.navigate('my-trips');
+            }
           });
-          on('trip-chat-btn', 'click', () => Router.navigate('chat'));
+          on('trip-chat-btn', 'click', () => {
+            const tripId = Store.state.activeTrip?.id;
+            if (tripId) {
+              clearChatUnread(tripId);
+              Store.setState({ activeChatTripId: tripId });
+            }
+            Router.navigate('chat');
+          });
+          on('trip-arrived-btn', 'click', () => {
+            Toast.show('Arrival noted. Rate your ride after the trip ends.', 'info');
+          });
+          on('trip-share-eta-btn', 'click', async () => {
+            const trip = Store.state.activeTrip;
+            const tripId = trip?.id;
+            const destination = trip?.title || '';
+            try {
+              const loc = tripId ? await API.get(`/trips/${tripId}/location`) : null;
+              const lat = loc?.location?.lat;
+              const lng = loc?.location?.lng;
+              const mapsUrl = Number.isFinite(lat) && Number.isFinite(lng)
+                ? `https://maps.google.com/maps?q=${lat},${lng}`
+                : `https://maps.google.com/maps?q=${encodeURIComponent(destination)}`;
+              if (navigator.share) {
+                await navigator.share({
+                  title: 'My Ride ETA',
+                  text: `Tracking my Klubz ride: ${destination}`,
+                  url: mapsUrl,
+                });
+              } else {
+                await navigator.clipboard.writeText(mapsUrl);
+                Toast.show('Map link copied to clipboard.', 'success');
+              }
+            } catch {
+              Toast.show('Unable to share ETA.', 'error');
+            }
+          });
           on('sos-btn', 'click', handleSOS);
           break;
         }
@@ -2618,6 +2697,8 @@
   var mfaSetupData = null;
   var currentReferralCode = '';
   var currentOrganizationInviteCode = '';
+  var waitlistByTripId = {};
+  var chatUnreadByTripId = {};
 
   // ═══ Subscription Helpers ═══
 
@@ -3023,6 +3104,7 @@
     const date = document.getElementById('fr-date')?.value;
     const time = document.getElementById('fr-time')?.value;
     const seats = parseInt(document.querySelector('.seat-btn.active')?.dataset?.seats || '1');
+    Store.setState({ requestedPassengerCount: seats });
 
     if (!pickup || !dropoff) {
       Toast.show('Please enter pickup and dropoff locations', 'warning');
@@ -3077,6 +3159,13 @@
           `;
           resultsContainer.querySelectorAll('.confirm-match-btn').forEach(btn => {
             btn.addEventListener('click', () => handleConfirmMatch(btn.dataset.matchId, btn.dataset.driverTripId, btn.dataset.riderRequestId));
+          });
+          resultsContainer.querySelectorAll('.join-waitlist-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              const tripId = btn.dataset.tripId || '';
+              const passengerCount = Number.parseInt(btn.dataset.passengers || `${seats}`, 10);
+              handleJoinWaitlist(tripId, passengerCount);
+            });
           });
           const matchSubLink = document.getElementById('match-subscribe-link');
           if (matchSubLink) {
@@ -3190,6 +3279,46 @@
       Router.navigate('my-trips');
     } catch (err) {
       Toast.show(err.message || 'Failed to confirm ride. Please try again.', 'error');
+    }
+  }
+
+  async function handleJoinWaitlist(tripId, passengerCount) {
+    if (!tripId) {
+      Toast.show('Unable to join waitlist for this ride.', 'error');
+      return;
+    }
+    try {
+      const data = await API.post(`/trips/${tripId}/waitlist`, { passengerCount: Math.max(1, Number(passengerCount || 1)) });
+      waitlistByTripId[String(tripId)] = {
+        tripId,
+        position: Number(data?.waitlist?.position ?? 0),
+        passengerCount: Math.max(1, Number(passengerCount || 1)),
+      };
+      Toast.show(`You're #${data?.waitlist?.position ?? '?'} on the waitlist.`, 'success');
+      Store.setState({ matchResults: [] });
+      Router.navigate('my-trips');
+    } catch (err) {
+      Toast.show(err.message || 'Unable to join waitlist.', 'error');
+    }
+  }
+
+  async function handleLeaveWaitlist(tripId) {
+    const confirmed = await showConfirmDialog({
+      title: 'Leave Waitlist',
+      message: 'Remove yourself from this waitlist?',
+      confirmText: 'Leave',
+      cancelText: 'Keep',
+      danger: false,
+    });
+    if (!confirmed) return;
+
+    try {
+      await API.del(`/trips/${tripId}/waitlist`);
+      clearWaitlistEntry(tripId);
+      Toast.show('Removed from waitlist.', 'success');
+      await loadTrips('upcoming');
+    } catch (err) {
+      Toast.show(err.message || 'Unable to leave waitlist.', 'error');
     }
   }
 
@@ -3365,6 +3494,7 @@
     const tripId = Store.state.activeChatTripId || Store.state.activeTrip?.id;
     const logEl = document.getElementById('chat-log');
     if (!tripId || !logEl) return;
+    clearChatUnread(tripId);
 
     try {
       const data = await API.get(`/trips/${tripId}/messages?limit=50&page=1`);
@@ -3378,17 +3508,30 @@
 
       logEl.innerHTML = messages.map((msg) => {
         const mine = Number(msg.senderId) === currentUserId;
+        const readIndicator = msg.readAt ? '✓✓' : '✓';
         return `
           <div style="display:flex;justify-content:${mine ? 'flex-end' : 'flex-start'};margin-bottom:var(--space-sm)">
             <div style="max-width:78%;padding:var(--space-sm);border-radius:10px;background:${mine ? 'var(--primary)' : 'var(--surface)'};color:${mine ? '#fff' : 'var(--text-primary)'};border:${mine ? 'none' : '1px solid var(--border)'}">
               <div style="font-size:0.6875rem;opacity:${mine ? '0.8' : '0.65'};margin-bottom:2px">${escapeHtml(msg.senderName || 'User')}</div>
               <div style="font-size:0.875rem;white-space:pre-wrap">${escapeHtml(msg.content || '')}</div>
-              <div style="font-size:0.625rem;opacity:${mine ? '0.75' : '0.6'};margin-top:4px">${timeAgo(msg.sentAt)}</div>
+              <div style="font-size:0.625rem;opacity:${mine ? '0.75' : '0.6'};margin-top:4px;display:flex;justify-content:flex-end;gap:4px">
+                <span>${timeAgo(msg.sentAt)}</span>
+                <span aria-label="${msg.readAt ? 'Read' : 'Sent'}">${readIndicator}</span>
+              </div>
             </div>
           </div>
         `;
       }).join('');
       logEl.scrollTop = logEl.scrollHeight;
+
+      const unreadIds = messages
+        .filter((msg) => Number(msg.senderId) !== currentUserId && !msg.readAt)
+        .map((msg) => msg.id);
+      if (unreadIds.length) {
+        Promise.all(
+          unreadIds.map((id) => API.put(`/trips/${tripId}/messages/${id}/read`, {}).catch(() => null)),
+        );
+      }
     } catch (err) {
       logEl.innerHTML = `<div style=\"text-align:center;color:var(--danger);padding:var(--space-lg)\">${escapeHtml(err.message || 'Failed to load messages')}</div>`;
     }
@@ -3480,6 +3623,7 @@
     if (!trip?.id) return;
     const pickup = trip.pickupLocation?.address || trip.pickupLocation || trip.origin || 'Pickup';
     const dropoff = trip.dropoffLocation?.address || trip.dropoffLocation || trip.destination || 'Dropoff';
+    clearChatUnread(trip.id);
     Store.setState({
       activeTrip: {
         id: trip.id,
@@ -3490,6 +3634,37 @@
       activeChatTripId: trip.id,
     });
     Router.navigate('chat');
+  }
+
+  function clearWaitlistEntry(tripId) {
+    if (!tripId && tripId !== 0) return;
+    delete waitlistByTripId[String(tripId)];
+  }
+
+  function incrementChatUnread(tripId) {
+    const id = Number.parseInt(String(tripId || ''), 10);
+    if (!Number.isFinite(id) || id <= 0) return;
+    chatUnreadByTripId[String(id)] = Number(chatUnreadByTripId[String(id)] || 0) + 1;
+    updateTripChatBadge();
+  }
+
+  function clearChatUnread(tripId) {
+    const id = Number.parseInt(String(tripId || ''), 10);
+    if (!Number.isFinite(id) || id <= 0) return;
+    delete chatUnreadByTripId[String(id)];
+    updateTripChatBadge();
+  }
+
+  function updateTripChatBadge() {
+    const btn = document.getElementById('trip-chat-btn');
+    if (!btn) return;
+    const tripId = Number.parseInt(String(Store.state.activeTrip?.id || ''), 10);
+    const unreadCount = Number.isFinite(tripId) ? Number(chatUnreadByTripId[String(tripId)] || 0) : 0;
+    btn.textContent = unreadCount > 0 ? `Open Chat (${unreadCount})` : 'Open Chat';
+    btn.setAttribute(
+      'aria-label',
+      unreadCount > 0 ? `Open Chat, ${unreadCount} unread messages` : 'Open Chat',
+    );
   }
 
   function getCancellationEstimate(trip) {
@@ -3555,6 +3730,19 @@
       if (data.trips && data.trips.length > 0) {
         const tripById = new Map((data.trips || []).map((trip) => [String(trip.id), trip]));
         container.innerHTML = data.trips.map((trip) => {
+          const isWaitlisted = status === 'upcoming'
+            && (trip.waitlistStatus === 'waiting' || trip.participantStatus === 'waitlisted');
+
+          if (isWaitlisted) {
+            waitlistByTripId[String(trip.id)] = {
+              tripId: Number(trip.id),
+              position: Number(trip.waitlistPosition || 0),
+              passengerCount: Math.max(1, Number(trip.passengerCount || 1)),
+            };
+          } else if (status === 'upcoming' && trip.participantStatus === 'accepted') {
+            clearWaitlistEntry(trip.id);
+          }
+
           const card = renderTripCard(trip);
           const actions = [];
 
@@ -3598,6 +3786,16 @@
             }
           }
 
+          if (isWaitlisted) {
+            const position = Number(trip.waitlistPosition || waitlistByTripId[String(trip.id)]?.position || 0);
+            actions.push(`<span class="chip chip--pending">Waitlisted${position > 0 ? ` · #${position}` : ''}</span>`);
+            actions.push(`
+              <button class="btn btn--secondary btn--sm trip-leave-waitlist-btn" data-trip-id="${trip.id}">
+                Leave Waitlist
+              </button>
+            `);
+          }
+
           if (actions.length) {
             return `
               <div style="margin-bottom:var(--space-md)">
@@ -3610,6 +3808,31 @@
           }
           return card;
         }).join('');
+
+        if (status === 'upcoming') {
+          const fallbackWaitlistCards = Object.values(waitlistByTripId)
+            .filter((entry) => !tripById.has(String(entry.tripId)))
+            .map((entry) => `
+              <div style="margin-bottom:var(--space-md)">
+                <div class="card">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-sm)">
+                    <h4 style="font-size:0.9375rem;font-weight:700;margin:0">Trip #${entry.tripId}</h4>
+                    <span class="chip chip--pending">Waitlisted${entry.position > 0 ? ` · #${entry.position}` : ''}</span>
+                  </div>
+                  <p style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:var(--space-sm)">
+                    You're on the waitlist and will be notified when a seat opens.
+                  </p>
+                  <button class="btn btn--secondary btn--sm trip-leave-waitlist-btn" data-trip-id="${entry.tripId}">
+                    Leave Waitlist
+                  </button>
+                </div>
+              </div>
+            `)
+            .join('');
+          if (fallbackWaitlistCards) {
+            container.insertAdjacentHTML('beforeend', fallbackWaitlistCards);
+          }
+        }
 
         container.querySelectorAll('.trip-track-btn').forEach((btn) => {
           btn.addEventListener('click', () => {
@@ -3629,6 +3852,12 @@
             if (trip) openTripChat(trip);
           });
         });
+        container.querySelectorAll('.trip-leave-waitlist-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const tripId = Number.parseInt(btn.dataset.tripId || '0', 10);
+            if (tripId > 0) handleLeaveWaitlist(tripId);
+          });
+        });
         container.querySelectorAll('.trip-rate-btn').forEach((btn) => {
           btn.addEventListener('click', () => {
             const trip = tripById.get(String(btn.dataset.tripId || ''));
@@ -3642,13 +3871,38 @@
           });
         });
       } else {
-        container.innerHTML = `
+        const waitlistCards = status === 'upcoming'
+          ? Object.values(waitlistByTripId).map((entry) => `
+              <div style="margin-bottom:var(--space-md)">
+                <div class="card">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-sm)">
+                    <h4 style="font-size:0.9375rem;font-weight:700;margin:0">Trip #${entry.tripId}</h4>
+                    <span class="chip chip--pending">Waitlisted${entry.position > 0 ? ` · #${entry.position}` : ''}</span>
+                  </div>
+                  <p style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:var(--space-sm)">
+                    You're on the waitlist and will be notified when a seat opens.
+                  </p>
+                  <button class="btn btn--secondary btn--sm trip-leave-waitlist-btn" data-trip-id="${entry.tripId}">
+                    Leave Waitlist
+                  </button>
+                </div>
+              </div>
+            `).join('')
+          : '';
+
+        container.innerHTML = waitlistCards + `
           <div class="empty-state">
             <div class="empty-state__icon">${status === 'completed' ? '&#9989;' : status === 'cancelled' ? '&#10060;' : '&#128652;'}</div>
             <div class="empty-state__title">No ${status} trips</div>
             <div class="empty-state__desc">${status === 'upcoming' ? 'Find a ride or offer one to get started' : `You don't have any ${status} trips yet`}</div>
           </div>
         `;
+        container.querySelectorAll('.trip-leave-waitlist-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const tripId = Number.parseInt(btn.dataset.tripId || '0', 10);
+            if (tripId > 0) handleLeaveWaitlist(tripId);
+          });
+        });
       }
     } catch {
       container.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:var(--space-xl)">Unable to load trips</p>';

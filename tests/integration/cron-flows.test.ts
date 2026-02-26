@@ -65,6 +65,7 @@ const {
   matchRiderToDriversMock,
   sendPushNotificationMock,
   sendEmailMock,
+  createTransferMock,
   loggerInfoMock,
   loggerWarnMock,
 } = vi.hoisted(() => ({
@@ -75,6 +76,7 @@ const {
   matchRiderToDriversMock: vi.fn(),
   sendPushNotificationMock: vi.fn(),
   sendEmailMock: vi.fn(),
+  createTransferMock: vi.fn(),
   loggerInfoMock: vi.fn(),
   loggerWarnMock: vi.fn(),
 }));
@@ -120,18 +122,32 @@ vi.mock('../../src/integrations/notifications', () => {
   return { NotificationService };
 });
 
+vi.mock('../../src/integrations/stripe', () => {
+  class StripeService {
+    constructor(_secretKey: string) {}
+
+    async createTransfer(...args: unknown[]) {
+      return createTransferMock(...args);
+    }
+  }
+
+  return { StripeService };
+});
+
 import {
   batchMatchSubscriptionDays,
   sendTripReminders,
   cleanupExpiredSessions,
+  retryFailedPayouts,
   runDailyTasks,
   runHourlyTasks,
 } from '../../src/lib/cron';
 
-function makeEnv(db?: MockDB, cache?: MockKV): Bindings {
+function makeEnv(db?: MockDB, cache?: MockKV, stripeSecret = 'sk_test_123'): Bindings {
   return {
     DB: db,
     CACHE: cache,
+    STRIPE_SECRET_KEY: stripeSecret,
   } as unknown as Bindings;
 }
 
@@ -164,6 +180,7 @@ beforeEach(() => {
   matchRiderToDriversMock.mockReturnValue({
     matches: [{ driverTripId: 'driver-trip-1', riderRequestId: 'subday:9' }],
   });
+  createTransferMock.mockResolvedValue({ id: 'tr_default' });
 });
 
 describe('batchMatchSubscriptionDays', () => {
@@ -421,6 +438,72 @@ describe('cleanupExpiredSessions', () => {
   });
 });
 
+describe('retryFailedPayouts', () => {
+  test('marks failed payouts as transferred when Stripe transfer succeeds', async () => {
+    const runCalls: Array<{ query: string; params: unknown[] }> = [];
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('FROM trip_participants tp') && kind === 'all') {
+        return [{
+          id: 91,
+          trip_id: 15,
+          user_id: 7,
+          passenger_count: 2,
+          amount_paid: 120,
+          payment_status: 'paid',
+          price_per_seat: 60,
+          stripe_connect_account_id: 'acct_123',
+        }];
+      }
+      if (kind === 'run') {
+        runCalls.push({ query, params: [...params] });
+      }
+      return null;
+    });
+
+    createTransferMock.mockResolvedValueOnce({ id: 'tr_retry_1' });
+
+    await retryFailedPayouts(makeEnv(db, new MockKV()));
+
+    expect(createTransferMock).toHaveBeenCalledWith(
+      10200,
+      'zar',
+      'acct_123',
+      expect.objectContaining({ tripId: '15', participantId: '91', retry: 'true' }),
+    );
+    const updateWrite = runCalls.find((call) => call.query.includes("SET payout_status = 'transferred'"));
+    expect(updateWrite?.params).toEqual(['tr_retry_1', 91]);
+  });
+
+  test('handles Stripe transfer failure gracefully without throwing', async () => {
+    const runCalls: Array<{ query: string; params: unknown[] }> = [];
+    const db = new MockDB((query, params, kind) => {
+      if (query.includes('FROM trip_participants tp') && kind === 'all') {
+        return [{
+          id: 55,
+          trip_id: 22,
+          user_id: 8,
+          passenger_count: 1,
+          amount_paid: 80,
+          payment_status: 'paid',
+          price_per_seat: 80,
+          stripe_connect_account_id: 'acct_456',
+        }];
+      }
+      if (kind === 'run') runCalls.push({ query, params: [...params] });
+      return null;
+    });
+
+    createTransferMock.mockRejectedValueOnce(new Error('transfer failed'));
+
+    await expect(retryFailedPayouts(makeEnv(db, new MockKV()))).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      'Payout retry failed again',
+      expect.objectContaining({ participantId: 55 }),
+    );
+    expect(runCalls.some((call) => call.query.includes("SET payout_status = 'transferred'"))).toBe(false);
+  });
+});
+
 describe('runDailyTasks / runHourlyTasks orchestrators', () => {
   test('runDailyTasks resolves even when all subtasks fail', async () => {
     // DB is undefined — all three tasks return early without error
@@ -431,7 +514,7 @@ describe('runDailyTasks / runHourlyTasks orchestrators', () => {
     await expect(runHourlyTasks(makeEnv(undefined))).resolves.toBeUndefined();
   });
 
-  test('runDailyTasks runs all three sub-tasks (batch match, reminders, cleanup)', async () => {
+  test('runDailyTasks runs all daily sub-tasks', async () => {
     const runCalls: string[] = [];
     const db = new MockDB((query, _params, kind) => {
       if (query.includes('FROM monthly_scheduled_days') && kind === 'all') return [];

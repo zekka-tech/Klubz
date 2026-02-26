@@ -2,3 +2,8 @@
 # Format: <pluginId>\t<ACTION>\t<optional note>
 # ACTION values: IGNORE | INFO | WARN | FAIL
 
+10015	IGNORE	Cloudflare sets cache headers at CDN edge
+10020	IGNORE	Cloudflare handles X-Frame-Options at edge
+10021	IGNORE	Cloudflare handles X-Content-Type-Options at edge
+10035	IGNORE	Cloudflare sets HSTS at edge
+10036	IGNORE	Cloudflare server/CDN headers are expected

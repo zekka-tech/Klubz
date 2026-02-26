@@ -273,8 +273,52 @@ wrangler pages secret put VAPID_PRIVATE_KEY \
 2. Accept the notification permission prompt
 3. Check audit_logs: `action = 'PUSH_SUBSCRIBED'`
 4. Trigger a trip reminder (or use the cron endpoint):
-   `POST /api/admin/cron/trigger` (super_admin token required)
+   `POST /api/admin/cron/run` with body `{ "task": "hourly" }` (super_admin token required)
 5. **Expected:** Push notification received on the device
+
+---
+
+## 7.5 Stripe Connect (Driver Payouts)
+
+Prerequisites: `STRIPE_SECRET_KEY` must be set (Section 2).
+
+1. Register a test driver account and log in.
+2. Navigate to **Profile → Payouts → Set Up / Continue**.
+3. Verify redirect to Stripe Connect Express onboarding URL.
+4. Complete onboarding with Stripe test data.
+5. Navigate back to **Profile → Payouts** and confirm status shows **Payouts Ready**.
+6. Create and complete a trip with a rider payment.
+7. Call `GET /api/payments/connect/status` using the same driver token and verify:
+   `chargesEnabled: true`, `payoutsEnabled: true`.
+8. Verify transfer appears in Stripe Dashboard → **Payments → Transfers**.
+
+Validation command (driver token required):
+
+```bash
+curl -H "Authorization: Bearer $DRIVER_TOKEN" \
+  https://klubz-staging.pages.dev/api/payments/connect/status
+```
+
+Expected:
+
+```json
+{ "connected": true, "chargesEnabled": true, "payoutsEnabled": true }
+```
+
+---
+
+## 7.6 Web Push Notifications
+
+1. Set `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` (generate with `npx web-push generate-vapid-keys`).
+2. Open the app in Chrome/Edge and accept notification permission.
+3. Confirm push subscription registration (`POST /api/push/subscribe` in Network tab).
+4. Trigger reminders via `POST /api/admin/cron/run` with `{ "task": "hourly" }`.
+5. Verify a push notification appears on the test device.
+
+```bash
+wrangler pages secret put VAPID_PUBLIC_KEY --project-name=klubz-staging
+wrangler pages secret put VAPID_PRIVATE_KEY --project-name=klubz-staging
+```
 
 ---
 

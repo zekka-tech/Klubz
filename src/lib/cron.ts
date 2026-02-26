@@ -15,6 +15,7 @@ import { logger } from './logger';
 import { MatchingRepository, matchRiderToDrivers, DEFAULT_MATCH_CONFIG } from './matching';
 import { sendPushNotification } from './push';
 import { NotificationService } from '../integrations/notifications';
+import { StripeService } from '../integrations/stripe';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,6 +40,17 @@ interface TripReminderRow {
   rider_id: number;
   rider_email: string;
   departure_time: string;
+}
+
+interface FailedPayoutRow {
+  id: number;
+  trip_id: number;
+  user_id: number;
+  passenger_count: number | null;
+  amount_paid: number | null;
+  payment_status: string;
+  price_per_seat: number | null;
+  stripe_connect_account_id: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +277,84 @@ export async function cleanupExpiredSessions(env: Bindings): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// 4. Retry failed Stripe Connect payouts
+// ---------------------------------------------------------------------------
+
+export async function retryFailedPayouts(env: Bindings): Promise<void> {
+  const db = env.DB;
+  if (!db || !env.STRIPE_SECRET_KEY) return;
+
+  let failedRows: FailedPayoutRow[] = [];
+  try {
+    const result = await db
+      .prepare(`
+        SELECT tp.id, tp.trip_id, tp.user_id, tp.passenger_count,
+               tp.amount_paid, tp.payment_status, t.price_per_seat,
+               u.stripe_connect_account_id
+        FROM trip_participants tp
+        JOIN trips t ON t.id = tp.trip_id
+        JOIN users u ON u.id = t.driver_id
+        WHERE tp.payout_status = 'failed'
+          AND tp.payment_status = 'paid'
+          AND tp.role = 'rider'
+          AND tp.status = 'completed'
+          AND u.stripe_connect_enabled = 1
+          AND u.stripe_connect_account_id IS NOT NULL
+        LIMIT 50
+      `)
+      .all<FailedPayoutRow>();
+    failedRows = result.results ?? [];
+  } catch (err) {
+    logger.warn('retryFailedPayouts: query failed', { error: String(err) });
+    return;
+  }
+
+  if (failedRows.length === 0) return;
+
+  const stripe = new StripeService(env.STRIPE_SECRET_KEY);
+  for (const payout of failedRows) {
+    const passengers = Math.max(1, Number(payout.passenger_count ?? 1));
+    const amount = Number(payout.amount_paid ?? ((payout.price_per_seat ?? 0) * passengers));
+    const cents = Math.max(0, Math.round(amount * 0.85 * 100));
+    if (cents <= 0) continue;
+
+    try {
+      const transfer = await stripe.createTransfer(
+        cents,
+        'zar',
+        payout.stripe_connect_account_id,
+        {
+          tripId: String(payout.trip_id),
+          participantId: String(payout.id),
+          retry: 'true',
+        },
+      );
+
+      await db
+        .prepare(`
+          UPDATE trip_participants
+          SET payout_status = 'transferred',
+              payout_transfer_id = ?,
+              payout_transferred_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `)
+        .bind(transfer.id, payout.id)
+        .run();
+
+      logger.info('Payout retry succeeded', {
+        participantId: payout.id,
+        transferId: transfer.id,
+      });
+    } catch (err) {
+      logger.warn('Payout retry failed again', {
+        participantId: payout.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Top-level daily task runner (called from scheduled() in index.tsx)
 // ---------------------------------------------------------------------------
 
@@ -274,6 +364,7 @@ export async function runDailyTasks(env: Bindings): Promise<void> {
     batchMatchSubscriptionDays(env),
     sendTripReminders(env, '24h'),
     cleanupExpiredSessions(env),
+    retryFailedPayouts(env),
   ]);
   logger.info('Cron: runDailyTasks completed');
 }

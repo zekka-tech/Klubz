@@ -1,5 +1,6 @@
 [
   {
+    "_note": "Replace sha256_cert_fingerprints before TWA release. See docs/TWA_RELEASE.md.",
     "relation": [
       "delegate_permission/common.handle_all_urls"
     ],

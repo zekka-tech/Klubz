@@ -203,6 +203,16 @@ else
       check_warn "${PROVIDER} not configured (optional — set when enabling this integration)"
     fi
   done
+
+  ((TOTAL_CHECKS++)) || true
+  STRIPE_CONNECT_STATUS=$(http_status \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    "${STAGING_URL}/api/payments/connect/status" 2>/dev/null || echo "000")
+  if [ "$STRIPE_CONNECT_STATUS" = "200" ] || [ "$STRIPE_CONNECT_STATUS" = "404" ]; then
+    check_pass "Stripe Connect status endpoint reachable (/api/payments/connect/status → ${STRIPE_CONNECT_STATUS})"
+  else
+    check_fail "Stripe Connect status endpoint failed (expected 200/404, got ${STRIPE_CONNECT_STATUS})"
+  fi
 fi
 
 # ── 6. Rate limiting ──────────────────────────────────────────────────────────
