@@ -176,6 +176,27 @@ test.describe('Public Auth Navigation', () => {
     await page.locator('#link-forgot-to-login').click();
     await expect(page).toHaveURL(/#login$/);
   });
+
+  test('register requires matching passwords before submit', async ({ page }) => {
+    let registerRequestCount = 0;
+    await page.route('**/api/auth/register', async (route) => {
+      registerRequestCount += 1;
+      await fulfillJson(route, { message: 'ok' });
+    });
+
+    await page.goto('/#register');
+    await expect(page.locator('#register-form')).toBeVisible();
+
+    await page.locator('#reg-name').fill('Test User');
+    await page.locator('#reg-email').fill('test.user@example.com');
+    await page.locator('#reg-password').fill('StrongPass123!');
+    await page.locator('#reg-password-match').fill('MismatchPass123!');
+    await page.locator('#reg-tos').check();
+    await page.locator('#register-btn').click();
+
+    await expect(page.locator('.toast__message').last()).toContainText('Passwords do not match');
+    await expect.poll(() => registerRequestCount).toBe(0);
+  });
 });
 
 test.describe('Authenticated App Shell Flows', () => {

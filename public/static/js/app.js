@@ -1178,6 +1178,10 @@
             <input class="form-input" id="reg-password" type="password" placeholder="Min 8 characters" required autocomplete="new-password" minlength="8">
           </div>
           <div class="form-group">
+            <label class="form-label" for="reg-password-match">Match Password</label>
+            <input class="form-input" id="reg-password-match" type="password" placeholder="Same as above" required autocomplete="new-password" minlength="8">
+          </div>
+          <div class="form-group">
             <label class="form-label">I want to</label>
             <div class="tabs" id="role-tabs" role="tablist" aria-label="Account role">
               <button type="button" class="tab active" data-role="passenger" role="tab" aria-selected="true" tabindex="0">Ride</button>
@@ -2360,6 +2364,17 @@
         case 'register':
           on('register-form', 'submit', handleRegister);
           on('link-to-login', 'click', (e) => { e.preventDefault(); Router.navigate('login'); });
+          {
+            const passwordInput = document.getElementById('reg-password');
+            const matchInput = document.getElementById('reg-password-match');
+            const syncPasswordMatchValidity = () => {
+              if (!passwordInput || !matchInput) return;
+              const hasMismatch = Boolean(matchInput.value) && passwordInput.value !== matchInput.value;
+              matchInput.setCustomValidity(hasMismatch ? 'Passwords do not match' : '');
+            };
+            passwordInput?.addEventListener('input', syncPasswordMatchValidity, { signal });
+            matchInput?.addEventListener('input', syncPasswordMatchValidity, { signal });
+          }
           onAll('#role-tabs .tab', 'click', (e) => {
             const tabs = Array.from(document.querySelectorAll('#role-tabs .tab'));
             tabs.forEach((t) => {
@@ -3302,10 +3317,12 @@
     const email = document.getElementById('reg-email')?.value?.trim();
     const phone = document.getElementById('reg-phone')?.value?.trim();
     const password = document.getElementById('reg-password')?.value;
+    const passwordMatchInput = document.getElementById('reg-password-match');
+    const passwordMatch = passwordMatchInput?.value;
     const role = document.querySelector('#role-tabs .tab.active')?.dataset?.role || 'passenger';
     const tosAccepted = document.getElementById('reg-tos')?.checked;
 
-    if (!name || !email || !password) {
+    if (!name || !email || !password || !passwordMatch) {
       Toast.show('Please fill in required fields', 'warning');
       return;
     }
@@ -3313,6 +3330,13 @@
       Toast.show('Password must be at least 8 characters', 'warning');
       return;
     }
+    if (password !== passwordMatch) {
+      passwordMatchInput?.setCustomValidity('Passwords do not match');
+      passwordMatchInput?.reportValidity();
+      Toast.show('Passwords do not match', 'warning');
+      return;
+    }
+    passwordMatchInput?.setCustomValidity('');
     if (!tosAccepted) {
       Toast.show('You must accept the Terms of Service to register.', 'warning');
       return;
