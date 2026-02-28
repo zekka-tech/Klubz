@@ -269,7 +269,7 @@ describe('Admin route hardening contracts', () => {
     expect(levelRes.status).toBe(400);
     const levelBody = (await levelRes.json()) as { error?: { code?: string; message?: string } };
     expect(levelBody.error?.code).toBe('VALIDATION_ERROR');
-    expect(levelBody.error?.message).toBe('Invalid level filter');
+    expect(levelBody.error?.message).toContain('Invalid level filter');
   });
 
   test('admin organizations list rejects invalid pagination query params', async () => {

@@ -925,9 +925,13 @@ paymentRoutes.post('/:intentId/refund', authMiddleware(['admin', 'super_admin'])
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON' } }, 400);
   }
 
+  const ALLOWED_REFUND_REASONS = new Set(['duplicate', 'fraudulent', 'requested_by_customer']);
   const { amountCents, reason } = (body as { amountCents?: number; reason?: string }) || {};
   if (typeof amountCents !== 'number' || amountCents <= 0) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'amountCents must be a positive integer' } }, 400);
+  }
+  if (reason !== undefined && !ALLOWED_REFUND_REASONS.has(reason)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'reason must be one of: duplicate, fraudulent, requested_by_customer' } }, 400);
   }
 
   const stripeKey = c.env?.STRIPE_SECRET_KEY;
@@ -945,7 +949,7 @@ paymentRoutes.post('/:intentId/refund', authMiddleware(['admin', 'super_admin'])
       body: new URLSearchParams({
         payment_intent: intentId,
         amount: String(amountCents),
-        ...(reason ? { reason: 'fraudulent' } : {}),
+        ...(reason ? { reason } : {}),
       }).toString(),
     });
 

@@ -746,13 +746,27 @@ async function generateTOTP(secret: string, counter: number): Promise<string> {
   return String(code % 1_000_000).padStart(6, '0');
 }
 
-/** Verify a TOTP code against a secret with a ±1 step window (30s each). */
+/** Timing-safe string equality to prevent TOTP oracle timing attacks. */
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+
+/** Verify a TOTP code against a secret with a ±1 step window (30s each).
+ *  Always checks all three windows to avoid early-exit timing leaks. */
 async function verifyTOTP(secret: string, code: string): Promise<boolean> {
   const counter = Math.floor(Date.now() / 1000 / 30);
+  let found = false;
   for (const delta of [-1, 0, 1]) {
-    if (await generateTOTP(secret, counter + delta) === code) return true;
+    const candidate = await generateTOTP(secret, counter + delta);
+    if (timingSafeStringEqual(candidate, code)) found = true;
   }
-  return false;
+  return found;
 }
 
 // ── MFA Setup — generates secret, returns QR URL ───────────────────────────

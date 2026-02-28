@@ -123,8 +123,8 @@ safetyRoutes.delete('/contacts/:id', async (c) => {
   }
 
   await db
-    .prepare('DELETE FROM emergency_contacts WHERE id = ?')
-    .bind(contactId)
+    .prepare('DELETE FROM emergency_contacts WHERE id = ? AND user_id = ?')
+    .bind(contactId, user.id)
     .run();
 
   return c.json({ success: true });

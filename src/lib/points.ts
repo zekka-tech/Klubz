@@ -4,6 +4,25 @@ interface BalanceRow {
   balance: number | null;
 }
 
+/**
+ * Award points exactly once per (userId, reason, referenceId) triple.
+ * Idempotent — silently skips if the entry already exists.
+ */
+export async function awardPointsOnce(
+  db: D1Database,
+  userId: number,
+  delta: number,
+  reason: string,
+  referenceId: number,
+): Promise<void> {
+  const existing = await db
+    .prepare('SELECT id FROM points_ledger WHERE user_id = ? AND reason = ? AND reference_id = ? LIMIT 1')
+    .bind(userId, reason, referenceId)
+    .first<{ id: number }>();
+  if (existing) return;
+  await awardPoints(db, userId, delta, reason, referenceId);
+}
+
 export async function awardPoints(
   db: D1Database,
   userId: number,

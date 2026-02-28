@@ -1253,7 +1253,7 @@
 
         <!-- Carbon Impact Widget -->
         <div class="carbon-widget">
-          <div class="carbon-widget__value">25.1 <span class="carbon-widget__unit">kg CO2</span></div>
+          <div class="carbon-widget__value"><span id="home-carbon-saved-value">—</span> <span class="carbon-widget__unit">kg CO2</span></div>
           <div class="carbon-widget__label">saved this month through carpooling</div>
         </div>
 
@@ -2685,8 +2685,10 @@
           document.querySelectorAll('.cal-day-cell[data-date]').forEach(function(cell) {
             cell.addEventListener('click', function() {
               var date = cell.dataset.date;
-              var morning = cell.dataset.morning ? JSON.parse(cell.dataset.morning) : null;
-              var evening = cell.dataset.evening ? JSON.parse(cell.dataset.evening) : null;
+              var morning = null;
+              var evening = null;
+              try { morning = cell.dataset.morning ? JSON.parse(cell.dataset.morning) : null; } catch { morning = null; }
+              try { evening = cell.dataset.evening ? JSON.parse(cell.dataset.evening) : null; } catch { evening = null; }
               showDayDetail(date, morning, evening);
             }, { signal: signal });
           });
@@ -3622,43 +3624,10 @@
       }
     } catch {
       container.innerHTML = `
-        <div class="trip-card">
-          <div class="trip-card__header">
-            <div class="trip-card__driver">
-              <div class="trip-card__driver-avatar">JS</div>
-              <div class="trip-card__driver-info">
-                <h4>John Smith</h4>
-                <div class="trip-card__driver-rating">${Icons.star} 4.8</div>
-              </div>
-            </div>
-            <div class="trip-card__price">
-              <div class="trip-card__price-amount">${formatCurrency(45)}</div>
-              <div class="trip-card__price-label">per seat</div>
-            </div>
-          </div>
-          <div class="trip-card__route">
-            <div class="trip-card__route-line">
-              <div class="route-dot"></div>
-              <div class="route-line-segment"></div>
-              <div class="route-dot route-dot--end"></div>
-            </div>
-            <div class="trip-card__route-points">
-              <div class="trip-card__route-point">
-                <div class="trip-card__route-point-label">Pickup</div>
-                <div class="trip-card__route-point-name">123 Main St, Johannesburg</div>
-              </div>
-              <div class="trip-card__route-point">
-                <div class="trip-card__route-point-label">Dropoff</div>
-                <div class="trip-card__route-point-name">456 Office Park, Sandton</div>
-              </div>
-            </div>
-          </div>
-          <div class="trip-card__meta">
-            <div class="trip-card__meta-item">${Icons.clock} ${formatTime(new Date(Date.now() + 3600000))}</div>
-            <div class="trip-card__meta-item">${Icons.users} 3 seats</div>
-            <div class="trip-card__meta-item">${Icons.leaf} 2.1 kg</div>
-            <span class="chip chip--active">Scheduled</span>
-          </div>
+        <div class="empty-state">
+          <div class="empty-state__icon" style="color:var(--danger)">!</div>
+          <div class="empty-state__title">Unable to load trips</div>
+          <div class="empty-state__desc">Pull to refresh or try again later</div>
         </div>
       `;
     }
@@ -3674,6 +3643,7 @@
       const stats = data.stats || {};
       const totalTrips = stats.totalTrips ?? 0;
       const rating = stats.rating ? Number(stats.rating).toFixed(1) : '—';
+      const carbonSaved = stats.carbonSaved != null ? Number(stats.carbonSaved).toFixed(1) : null;
       grid.innerHTML = `
         <div class="stat-card">
           <div class="stat-card__value">${totalTrips}</div>
@@ -3685,6 +3655,10 @@
           <div class="stat-card__trend" style="color:var(--warning)">${rating !== '—' ? Icons.star : ''}</div>
         </div>
       `;
+      if (carbonSaved !== null) {
+        const homeCarbonEl = document.getElementById('home-carbon-saved-value');
+        if (homeCarbonEl) homeCarbonEl.textContent = carbonSaved;
+      }
     } catch {
       grid.innerHTML = '';
     }
@@ -3809,7 +3783,7 @@
         .filter((msg) => Number(msg.senderId) !== currentUserId && !msg.readAt)
         .map((msg) => msg.id);
       if (unreadIds.length) {
-        Promise.all(
+        await Promise.all(
           unreadIds.map((id) => API.put(`/trips/${tripId}/messages/${id}/read`, {}).catch(() => null)),
         );
       }
@@ -3918,7 +3892,7 @@
   }
 
   function clearWaitlistEntry(tripId) {
-    if (!tripId && tripId !== 0) return;
+    if (tripId == null) return;
     delete waitlistByTripId[String(tripId)];
   }
 

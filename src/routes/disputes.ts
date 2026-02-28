@@ -81,7 +81,10 @@ disputeRoutes.post('/', async (c) => {
       .bind(tripId, user.id, reason, evidenceText || null)
       .run();
 
-    const disputeId = Number(result.meta?.last_row_id ?? 0);
+    const disputeId = Number(result.meta?.last_row_id);
+    if (!Number.isFinite(disputeId) || disputeId === 0) {
+      throw new Error('Failed to create dispute record');
+    }
 
     eventBus.emit('system:alert', {
       type: 'dispute_filed',

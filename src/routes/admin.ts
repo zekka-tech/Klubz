@@ -563,8 +563,9 @@ adminRoutes.get('/logs', async (c) => {
   }
 
   const level = c.req.query('level') || 'all';
-  if (!/^[a-z_]{1,32}$/i.test(level)) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid level filter' } }, 400);
+  const ALLOWED_LOG_LEVELS = new Set(['all', 'error', 'warn', 'info', 'debug', 'fatal', 'trace']);
+  if (!ALLOWED_LOG_LEVELS.has(level)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid level filter. Must be one of: all, error, warn, info, debug, fatal, trace' } }, 400);
   }
 
   const db = getDB(c);

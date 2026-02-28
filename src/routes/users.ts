@@ -432,6 +432,11 @@ userRoutes.post('/trips', async (c) => {
 
   const db = getDB(c);
   try {
+    const originText = payload.pickupLocation.address || JSON.stringify(payload.pickupLocation);
+    const destinationText = payload.dropoffLocation.address || JSON.stringify(payload.dropoffLocation);
+    const originHash = await hashForLookup(originText);
+    const destinationHash = await hashForLookup(destinationText);
+
     const result = await db
       .prepare(
         `INSERT INTO trips (title, description, origin, destination, origin_hash, destination_hash, departure_time, available_seats, total_seats, price_per_seat, currency, status, vehicle_type, driver_id)
@@ -440,10 +445,10 @@ userRoutes.post('/trips', async (c) => {
       .bind(
         payload.title || 'Trip',
         payload.notes || null,
-        payload.pickupLocation.address || JSON.stringify(payload.pickupLocation),
-        payload.dropoffLocation.address || JSON.stringify(payload.dropoffLocation),
-        'hash_' + Date.now(),
-        'hash_' + (Date.now() + 1),
+        originText,
+        destinationText,
+        originHash,
+        destinationHash,
         payload.scheduledTime,
         availableSeats,
         totalSeats,

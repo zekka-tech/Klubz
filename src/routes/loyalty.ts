@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { AppEnv, AuthUser } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { getDBOptional } from '../lib/db';
-import { awardPoints } from '../lib/points';
+import { awardPointsOnce } from '../lib/points';
 import { logger } from '../lib/logger';
 
 export const loyaltyRoutes = new Hono<AppEnv>();
@@ -133,6 +133,7 @@ loyaltyRoutes.post('/referrals/redeem', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'You cannot redeem your own referral code' } }, 400);
   }
 
+  // Fast-path check: one referral redemption per user (reference_id = referrer's user id)
   const alreadyRedeemed = await db
     .prepare("SELECT id FROM points_ledger WHERE user_id = ? AND reason = 'referral_redeem' LIMIT 1")
     .bind(user.id)
@@ -143,8 +144,10 @@ loyaltyRoutes.post('/referrals/redeem', async (c) => {
   }
 
   try {
-    await awardPoints(db, user.id, 200, 'referral_redeem', referrer.user_id);
-    await awardPoints(db, referrer.user_id, 200, 'referral_success', user.id);
+    // Use awardPointsOnce to prevent double-awarding under concurrent requests.
+    // reference_id = referrer.user_id ensures idempotency per (user, referrer) pair.
+    await awardPointsOnce(db, user.id, 200, 'referral_redeem', referrer.user_id);
+    await awardPointsOnce(db, referrer.user_id, 200, 'referral_success', user.id);
 
     await db
       .prepare('UPDATE referral_codes SET uses_count = uses_count + 1 WHERE user_id = ?')
